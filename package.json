@@ -1,13 +1,16 @@
-FROM node:20-slim
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install --omit=dev
-
-COPY . .
-
-ENV NODE_ENV=production
-EXPOSE 3030
-
-CMD ["npm", "start"]
+{
+  "name": "tiktok-live-comment-watch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "tiktok-live-connector": "^2.1.1-beta1"
+  }
+}
