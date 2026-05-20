@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TikTok LIVE コメント計測</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="control-panel" aria-label="接続設定">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">
+            <span></span>
+          </div>
+          <div>
+            <p class="eyebrow">TikTok LIVE</p>
+            <h1>コメント計測</h1>
+          </div>
+        </div>
+
+        <form id="connectForm" class="connect-form">
+          <label for="username">TikTok ID</label>
+          <div class="input-row">
+            <input id="username" name="username" autocomplete="off" placeholder="@username" required>
+            <button type="submit">接続</button>
+          </div>
+          <div class="mode-row" role="group" aria-label="接続モード">
+            <label>
+              <input type="radio" name="mode" value="auto" checked>
+              実接続
+            </label>
+            <label>
+              <input type="radio" name="mode" value="demo">
+              デモ
+            </label>
+          </div>
+        </form>
+
+        <div class="session-actions">
+          <button id="stopBtn" type="button" disabled>停止</button>
+          <a id="exportLink" class="export-link disabled" aria-disabled="true">CSV</a>
+        </div>
+      </section>
+
+      <section class="dashboard" aria-live="polite">
+        <div class="status-strip">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusText">未接続</span>
+          <span id="modeText">待機中</span>
+        </div>
+
+        <div class="metrics">
+          <article>
+            <span>コメント数</span>
+            <strong id="commentCount">0</strong>
+          </article>
+          <article>
+            <span>計測時間</span>
+            <strong id="elapsedTime">00:00</strong>
+          </article>
+          <article>
+            <span>現在視聴</span>
+            <strong id="currentViewers">-</strong>
+          </article>
+          <article>
+            <span>推定滞在</span>
+            <strong id="watchTime">-</strong>
+          </article>
+        </div>
+
+        <div class="content-grid">
+          <section class="feed" aria-label="コメント一覧">
+            <div class="section-head">
+              <h2>コメント</h2>
+              <span id="liveLabel">リアルタイム</span>
+            </div>
+            <div id="commentList" class="comment-list">
+              <p class="empty">接続するとコメントがここに流れます。</p>
+            </div>
+          </section>
+
+          <section class="ranking" aria-label="ユーザー別コメント数">
+            <div class="section-head">
+              <h2>ユーザー別</h2>
+              <span>上位30件</span>
+            </div>
+            <div id="userList" class="user-list">
+              <p class="empty">まだ集計はありません。</p>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
