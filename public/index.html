@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TikTok LIVE Monitor</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="panel">
+        <h1>TikTok LIVE Monitor</h1>
+        <form id="connectForm" class="form">
+          <label for="username">TikTok ID</label>
+          <div class="row">
+            <input id="username" name="username" autocomplete="off" placeholder="@username" required>
+            <button type="submit">Connect</button>
+          </div>
+          <div class="modes">
+            <label><input type="radio" name="mode" value="auto" checked> Live</label>
+            <label><input type="radio" name="mode" value="demo"> Demo</label>
+          </div>
+        </form>
+        <div class="actions">
+          <button id="stopBtn" type="button" disabled>Stop</button>
+          <a id="exportLink" class="disabled" aria-disabled="true">CSV</a>
+        </div>
+      </section>
+      <section class="dashboard">
+        <div class="status"><span id="statusDot"></span><span id="statusText">Not connected</span><strong id="modeText">Idle</strong></div>
+        <div class="metrics">
+          <article><span>Comments</span><strong id="commentCount">0</strong></article>
+          <article><span>Time</span><strong id="elapsedTime">00:00</strong></article>
+          <article><span>Viewers</span><strong id="currentViewers">-</strong></article>
+          <article><span>Watch time</span><strong id="watchTime">-</strong></article>
+        </div>
+        <div class="grid">
+          <section><h2>Comments</h2><div id="commentList" class="list"><p class="empty">Comments will appear here.</p></div></section>
+          <section><h2>Top users</h2><div id="userList" class="list small"><p class="empty">No data yet.</p></div></section>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
