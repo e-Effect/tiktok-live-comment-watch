@@ -1,21 +1,13 @@
-# スマホから見られるクラウド公開手順
+FROM node:20-slim
 
-このアプリは Node.js サーバーとして動きます。
+WORKDIR /app
 
-おすすめは Render です。
+COPY package*.json ./
+RUN npm install --omit=dev
 
-## Renderで公開
+COPY . .
 
-1. GitHubにこのフォルダをアップロードします。
-2. Renderで New Web Service を作ります。
-3. GitHubのリポジトリを選びます。
-4. 設定は `render.yaml` が自動で読み込まれます。
-5. デプロイが終わると `https://...onrender.com` のURLが出ます。
+ENV NODE_ENV=production
+EXPOSE 3030
 
-そのURLをスマホで開けば使えます。
-
-## 注意
-
-- 無料プランでは、しばらくアクセスがないとサーバーが休止することがあります。
-- LIVEコメント取得はTikTokの非公式接続なので、TikTok側の仕様変更で失敗することがあります。
-- 本番運用で安定させるなら、有料の常時起動プランか、EulerStreamなどの正式な署名/APIサービス利用を検討してください。
+CMD ["npm", "start"]
