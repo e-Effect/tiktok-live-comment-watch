@@ -133,6 +133,16 @@ class LiveSession extends EventEmitter {
       this.markSeen(personFromEvent(data), Date.now());
     });
 
+    connection.on(events.FOLLOW || "follow", (data) => {
+      this.markFollowedToday(personFromEvent(data), Date.now());
+    });
+
+    connection.on(events.SOCIAL || "social", (data) => {
+      if (isFollowEvent(data)) {
+        this.markFollowedToday(personFromEvent(data), Date.now());
+      }
+    });
+
     connection.on(events.ROOM_USER || "roomUser", (data) => {
       const current = Number(data.viewerCount || data.userCount || 0);
       if (current > 0) {
@@ -167,6 +177,15 @@ class LiveSession extends EventEmitter {
     }
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
+  }
+
+  markFollowedToday(person, at) {
+    const user = this.getUserStat(person.userId, person.nickname, at);
+    user.followedToday = true;
+    user.followedAt = at;
+    user.lastSeenAt = Math.max(user.lastSeenAt, at);
+    this.userStats.set(user.userId, user);
+    this.broadcast("status", this.snapshot());
   }
 
   addComment(comment) {
@@ -239,7 +258,9 @@ class LiveSession extends EventEmitter {
       firstSeenAt: at,
       lastSeenAt: at,
       hasJoined: false,
-      watchSeconds: 0
+      watchSeconds: 0,
+      followedToday: false,
+      followedAt: null
     };
     current.nickname = nickname || current.nickname;
     current.firstSeenAt = Math.min(current.firstSeenAt, at);
@@ -251,17 +272,21 @@ class LiveSession extends EventEmitter {
     if (message) this.notice = message;
     this.updateEstimatedWatch();
     const users = [...this.userStats.values()];
-    const topUsers = users
+    const topUsers = [...users]
       .sort((a, b) => b.comments - a.comments || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
-    const topGifters = users
+    const topGifters = [...users]
       .filter((user) => user.gifts > 0 || user.diamonds > 0)
       .sort((a, b) => b.diamonds - a.diamonds || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
-    const topWatchers = users
+    const topWatchers = [...users]
       .filter((user) => user.watchSeconds > 0)
       .sort((a, b) => b.watchSeconds - a.watchSeconds || b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
+    const silentLongWatchers = [...users]
+      .filter((user) => user.watchSeconds >= 15 * 60 && user.comments === 0)
+      .sort((a, b) => b.watchSeconds - a.watchSeconds || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, 100);
     const topGifts = [...this.giftStats.values()]
       .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
       .slice(0, 30);
@@ -283,6 +308,7 @@ class LiveSession extends EventEmitter {
       topUsers,
       topGifters,
       topWatchers,
+      silentLongWatchers,
       topGifts,
       viewerStats: this.viewerStats
     };
@@ -320,7 +346,7 @@ class LiveSession extends EventEmitter {
   }
 
   toCsv() {
-    const rows = [["type", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds"]];
+    const rows = [["type", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds", "followed_today"]];
     for (const comment of [...this.comments].reverse()) {
       const user = this.userStats.get(comment.userId);
       rows.push([
@@ -331,7 +357,8 @@ class LiveSession extends EventEmitter {
         comment.text,
         "",
         "",
-        user?.watchSeconds || ""
+        user?.watchSeconds || "",
+        user?.followedToday ? "yes" : ""
       ]);
     }
     for (const gift of [...this.gifts].reverse()) {
@@ -344,7 +371,8 @@ class LiveSession extends EventEmitter {
         gift.giftName || gift.giftId,
         gift.repeatCount,
         gift.totalDiamonds,
-        user?.watchSeconds || ""
+        user?.watchSeconds || "",
+        user?.followedToday ? "yes" : ""
       ]);
     }
     return "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
@@ -392,6 +420,22 @@ function parseGiftEvent(data) {
     diamondCount,
     at: Date.now()
   };
+}
+
+function isFollowEvent(data) {
+  const text = [
+    data.displayType,
+    data.label,
+    data.type,
+    data.action,
+    data.event,
+    data.socialType,
+    data.socialAction,
+    data.common?.displayText?.defaultPattern,
+    data.common?.displayText?.key,
+    data.common?.method
+  ].filter(Boolean).join(" ").toLowerCase();
+  return /follow|フォロー/.test(text);
 }
 
 function cleanDisplayName(value) {

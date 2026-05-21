@@ -16,6 +16,7 @@ const userList = document.querySelector("#userList");
 const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
 const watcherList = document.querySelector("#watcherList");
+const silentList = document.querySelector("#silentList");
 
 let eventSource = null;
 let activeSession = null;
@@ -111,6 +112,7 @@ function renderSnapshot(snapshot) {
   renderMetrics(snapshot);
   renderComments(snapshot.comments || []);
   renderWatchers(snapshot.topWatchers || []);
+  renderSilentLongWatchers(snapshot.silentLongWatchers || []);
   renderUsers(snapshot.topUsers || []);
   renderGifters(snapshot.topGifters || []);
   renderGiftHistory(snapshot.gifts || []);
@@ -156,7 +158,21 @@ function renderWatchers(users) {
   watcherList.innerHTML = users.map((user, index) => `
     <div class="user-row">
       <span class="rank">${index + 1}</span>
-      <span class="name">${escapeHtml(user.nickname || user.userId)}</span>
+      <span class="name">${renderName(user)}</span>
+      <span class="count">${formatDuration(user.watchSeconds)}</span>
+    </div>
+  `).join("");
+}
+
+function renderSilentLongWatchers(users) {
+  if (!users.length) {
+    silentList.innerHTML = `<p class="empty">まだ対象者はいません。</p>`;
+    return;
+  }
+  silentList.innerHTML = users.map((user, index) => `
+    <div class="user-row">
+      <span class="rank">${index + 1}</span>
+      <span class="name">${renderName(user)}</span>
       <span class="count">${formatDuration(user.watchSeconds)}</span>
     </div>
   `).join("");
@@ -170,7 +186,7 @@ function renderUsers(users) {
   userList.innerHTML = users.map((user, index) => `
     <div class="user-row">
       <span class="rank">${index + 1}</span>
-      <span class="name">${escapeHtml(user.nickname || user.userId)}</span>
+      <span class="name">${renderName(user)}</span>
       <span class="count">${formatNumber(user.comments)}</span>
     </div>
   `).join("");
@@ -184,7 +200,7 @@ function renderGifters(users) {
   giftList.innerHTML = users.map((user, index) => `
     <div class="user-row gift-row">
       <span class="rank">${index + 1}</span>
-      <span class="name">${escapeHtml(user.nickname || user.userId)}</span>
+      <span class="name">${renderName(user)}</span>
       <span class="gift-score">
         <strong>${formatNumber(user.diamonds)}</strong>
         <small>${formatNumber(user.gifts)}個</small>
@@ -217,6 +233,11 @@ function setStatus(status, message, mode) {
   statusDot.className = `status-dot ${status === "live" ? "live" : ""}`;
   statusText.textContent = message || "待機中";
   modeText.textContent = mode;
+}
+
+function renderName(user) {
+  const name = escapeHtml(user.nickname || user.userId);
+  return user.followedToday ? `<span class="follow-mark" title="本日フォロー">✓</span>${name}` : name;
 }
 
 function modeLabel(snapshot) {
