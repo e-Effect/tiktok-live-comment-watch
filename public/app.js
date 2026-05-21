@@ -18,10 +18,13 @@ const giftHistory = document.querySelector("#giftHistory");
 const watcherList = document.querySelector("#watcherList");
 const silentList = document.querySelector("#silentList");
 
+const STORAGE_KEY = "tiktok-live-active-session";
+
 let eventSource = null;
 let activeSession = null;
 let latestSnapshot = null;
 let clockTimer = null;
+let reconnectTimer = null;
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -31,10 +34,20 @@ form.addEventListener("submit", async (event) => {
 stopBtn.addEventListener("click", async () => {
   if (!activeSession) return;
   await fetch(`/api/session/${activeSession}/stop`, { method: "POST" });
+  clearSavedSession();
 });
 
+window.addEventListener("pageshow", restoreSavedSession);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) reconnectActiveSession();
+});
+window.addEventListener("focus", reconnectActiveSession);
+window.addEventListener("online", reconnectActiveSession);
+
+restoreSavedSession();
+
 async function startSession() {
-  closeCurrent();
+  closeCurrent({ forget: false });
   setBusy(true);
   setStatus("connecting", "接続を準備しています。", "接続中");
 
@@ -49,56 +62,135 @@ async function startSession() {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "接続を開始できませんでした。");
 
-    activeSession = body.id;
-    exportLink.href = `/api/session/${activeSession}/export.csv`;
-    exportLink.classList.remove("disabled");
-    exportLink.removeAttribute("aria-disabled");
-    stopBtn.disabled = false;
-
-    eventSource = new EventSource(`/api/session/${activeSession}/events`);
-    eventSource.addEventListener("status", (event) => renderSnapshot(JSON.parse(event.data)));
-    eventSource.addEventListener("comment", (event) => {
-      const payload = JSON.parse(event.data);
-      renderSnapshot(payload.snapshot);
-    });
-    eventSource.addEventListener("gift", (event) => {
-      const payload = JSON.parse(event.data);
-      renderSnapshot(payload.snapshot);
-    });
-    eventSource.onerror = () => {
-      setStatus("stopped", "接続が中断されました。", "再接続待ち");
-    };
-
-    clockTimer = setInterval(async () => {
-      if (!latestSnapshot || latestSnapshot.stoppedAt || !activeSession) return;
-      latestSnapshot.elapsedSeconds = Math.floor((Date.now() - latestSnapshot.startedAt) / 1000);
-      renderMetrics(latestSnapshot);
-      try {
-        const snapshot = await (await fetch(`/api/session/${activeSession}/snapshot`)).json();
-        renderSnapshot(snapshot);
-      } catch {
-        renderMetrics(latestSnapshot);
-      }
-    }, 1000);
+    activateSession(body.id, username);
   } catch (error) {
-    closeCurrent();
+    closeCurrent({ forget: true });
     setStatus("stopped", error.message, "未接続");
   } finally {
     setBusy(false);
   }
 }
 
-function closeCurrent() {
+async function restoreSavedSession() {
+  const saved = readSavedSession();
+  if (!saved?.id || activeSession === saved.id) return;
+
+  try {
+    const response = await fetch(`/api/session/${saved.id}/snapshot`, { cache: "no-store" });
+    if (!response.ok) {
+      clearSavedSession();
+      return;
+    }
+    activateSession(saved.id, saved.username || "");
+    renderSnapshot(await response.json());
+  } catch {
+    setStatus("connecting", "保存済みの計測へ復帰待ちです。", "復帰待ち");
+  }
+}
+
+function activateSession(sessionId, username) {
+  activeSession = sessionId;
+  if (username) usernameInput.value = username;
+  saveActiveSession(sessionId, usernameInput.value.trim().replace(/^@/, ""));
+  exportLink.href = `/api/session/${activeSession}/export.csv`;
+  exportLink.classList.remove("disabled");
+  exportLink.removeAttribute("aria-disabled");
+  stopBtn.disabled = false;
+  openEventStream();
+  startSnapshotClock();
+}
+
+function openEventStream() {
+  if (!activeSession) return;
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`/api/session/${activeSession}/events`);
+  eventSource.addEventListener("status", (event) => renderSnapshot(JSON.parse(event.data)));
+  eventSource.addEventListener("comment", (event) => {
+    const payload = JSON.parse(event.data);
+    renderSnapshot(payload.snapshot);
+  });
+  eventSource.addEventListener("gift", (event) => {
+    const payload = JSON.parse(event.data);
+    renderSnapshot(payload.snapshot);
+  });
+  eventSource.onerror = () => {
+    if (!activeSession) return;
+    setStatus("connecting", "表示だけ再接続中です。集計はサーバー側で継続します。", "再接続中");
+    scheduleReconnect();
+  };
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    reconnectActiveSession();
+  }, 5000);
+}
+
+async function reconnectActiveSession() {
+  if (!activeSession) {
+    await restoreSavedSession();
+    return;
+  }
+  try {
+    const response = await fetch(`/api/session/${activeSession}/snapshot`, { cache: "no-store" });
+    if (!response.ok) throw new Error("セッション切れ");
+    renderSnapshot(await response.json());
+    if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+      openEventStream();
+    }
+  } catch {
+    setStatus("connecting", "復帰待ちです。サーバーが起動中の場合は少し待ってください。", "復帰待ち");
+  }
+}
+
+function startSnapshotClock() {
+  if (clockTimer) clearInterval(clockTimer);
+  clockTimer = setInterval(async () => {
+    if (!latestSnapshot || latestSnapshot.stoppedAt || !activeSession) return;
+    latestSnapshot.elapsedSeconds = Math.floor((Date.now() - latestSnapshot.startedAt) / 1000);
+    renderMetrics(latestSnapshot);
+    if (document.hidden) return;
+    try {
+      const snapshot = await (await fetch(`/api/session/${activeSession}/snapshot`, { cache: "no-store" })).json();
+      renderSnapshot(snapshot);
+    } catch {
+      renderMetrics(latestSnapshot);
+    }
+  }, 1000);
+}
+
+function closeCurrent({ forget } = { forget: false }) {
   if (eventSource) eventSource.close();
   eventSource = null;
   activeSession = null;
   latestSnapshot = null;
   if (clockTimer) clearInterval(clockTimer);
+  if (reconnectTimer) clearTimeout(reconnectTimer);
   clockTimer = null;
+  reconnectTimer = null;
   exportLink.removeAttribute("href");
   exportLink.classList.add("disabled");
   exportLink.setAttribute("aria-disabled", "true");
   stopBtn.disabled = true;
+  if (forget) clearSavedSession();
+}
+
+function saveActiveSession(id, username) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ id, username, savedAt: Date.now() }));
+}
+
+function readSavedSession() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function clearSavedSession() {
+  localStorage.removeItem(STORAGE_KEY);
 }
 
 function setBusy(isBusy) {
@@ -120,6 +212,7 @@ function renderSnapshot(snapshot) {
   if (snapshot.stoppedAt || snapshot.status === "ended") {
     if (eventSource) eventSource.close();
     stopBtn.disabled = true;
+    clearSavedSession();
   }
 }
 
@@ -151,43 +244,27 @@ function renderComments(comments) {
 }
 
 function renderWatchers(users) {
-  if (!users.length) {
-    watcherList.innerHTML = `<p class="empty">まだ滞在時間はありません。</p>`;
-    return;
-  }
-  watcherList.innerHTML = users.map((user, index) => `
-    <div class="user-row">
-      <span class="rank">${index + 1}</span>
-      <span class="name">${renderName(user)}</span>
-      <span class="count">${formatDuration(user.watchSeconds)}</span>
-    </div>
-  `).join("");
+  renderRankList(watcherList, users, "まだ滞在時間はありません。", (user) => formatDuration(user.watchSeconds));
 }
 
 function renderSilentLongWatchers(users) {
-  if (!users.length) {
-    silentList.innerHTML = `<p class="empty">まだ対象者はいません。</p>`;
-    return;
-  }
-  silentList.innerHTML = users.map((user, index) => `
-    <div class="user-row">
-      <span class="rank">${index + 1}</span>
-      <span class="name">${renderName(user)}</span>
-      <span class="count">${formatDuration(user.watchSeconds)}</span>
-    </div>
-  `).join("");
+  renderRankList(silentList, users, "まだ対象者はいません。", (user) => formatDuration(user.watchSeconds));
 }
 
 function renderUsers(users) {
+  renderRankList(userList, users, "まだ集計はありません。", (user) => formatNumber(user.comments));
+}
+
+function renderRankList(target, users, emptyText, valueRenderer) {
   if (!users.length) {
-    userList.innerHTML = `<p class="empty">まだ集計はありません。</p>`;
+    target.innerHTML = `<p class="empty">${emptyText}</p>`;
     return;
   }
-  userList.innerHTML = users.map((user, index) => `
+  target.innerHTML = users.map((user, index) => `
     <div class="user-row">
       <span class="rank">${index + 1}</span>
       <span class="name">${renderName(user)}</span>
-      <span class="count">${formatNumber(user.comments)}</span>
+      <span class="count">${valueRenderer(user)}</span>
     </div>
   `).join("");
 }

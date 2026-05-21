@@ -13,7 +13,7 @@ const PORT = Number(globalThis.__TIKTOK_LIVE_PORT__ || globalThis.process?.env?.
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
-const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 6);
+const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -48,6 +48,7 @@ class LiveSession extends EventEmitter {
     };
     this.notice = "";
     this.connection = null;
+    this.lastAccessAt = Date.now();
   }
 
   async start() {
@@ -269,6 +270,7 @@ class LiveSession extends EventEmitter {
   }
 
   snapshot(message = "") {
+    this.touch();
     if (message) this.notice = message;
     this.updateEstimatedWatch();
     const users = [...this.userStats.values()];
@@ -326,6 +328,10 @@ class LiveSession extends EventEmitter {
 
   broadcast(type, payload) {
     this.emit("event", { type, payload });
+  }
+
+  touch() {
+    this.lastAccessAt = Date.now();
   }
 
   fail(message) {
@@ -571,6 +577,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && action === "events") {
+      session.touch();
       response.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-store",
@@ -584,11 +591,13 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && action === "snapshot") {
+      session.touch();
       sendJson(response, 200, session.snapshot());
       return;
     }
 
     if (request.method === "GET" && action === "export.csv") {
+      session.touch();
       response.writeHead(200, {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="${session.username}-live.csv"`
@@ -620,8 +629,7 @@ server.listen(PORT, () => {
 setInterval(() => {
   const now = Date.now();
   for (const [id, session] of sessions) {
-    if ((session.stoppedAt || session.startedAt) + SESSION_TTL_MS < now) {
-      session.stop("古い計測を自動停止しました。");
+    if (session.stoppedAt && session.stoppedAt + SESSION_TTL_MS < now) {
       sessions.delete(id);
     }
   }
