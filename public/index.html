@@ -16,10 +16,6 @@
             <input id="username" name="username" autocomplete="off" placeholder="@username" required>
             <button type="submit">接続</button>
           </div>
-          <div class="modes" role="group" aria-label="接続モード">
-            <label><input type="radio" name="mode" value="auto" checked> 実接続</label>
-            <label><input type="radio" name="mode" value="demo"> デモ</label>
-          </div>
         </form>
         <div class="actions">
           <button id="stopBtn" type="button" disabled>停止</button>
@@ -48,6 +44,13 @@
             <h2>コメント</h2>
             <div id="commentList" class="list">
               <p class="empty">接続するとコメントがここに流れます。</p>
+            </div>
+          </section>
+
+          <section>
+            <h2>滞在時間ランキング</h2>
+            <div id="watcherList" class="list small">
+              <p class="empty">まだ滞在時間はありません。</p>
             </div>
           </section>
 

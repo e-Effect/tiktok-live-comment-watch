@@ -24,11 +24,10 @@ const MIME_TYPES = {
 };
 
 class LiveSession extends EventEmitter {
-  constructor(username, requestedMode) {
+  constructor(username) {
     super();
     this.id = randomUUID();
     this.username = username;
-    this.requestedMode = requestedMode;
     this.mode = "connecting";
     this.status = "connecting";
     this.startedAt = Date.now();
@@ -39,6 +38,7 @@ class LiveSession extends EventEmitter {
     this.comments = [];
     this.gifts = [];
     this.userStats = new Map();
+    this.displayNameIndex = new Map();
     this.giftStats = new Map();
     this.viewerStats = {
       current: 0,
@@ -47,20 +47,13 @@ class LiveSession extends EventEmitter {
       estimatedWatchSeconds: 0
     };
     this.notice = "";
-    this.joinedAt = new Map();
     this.connection = null;
-    this.demoTimer = null;
   }
 
   async start() {
-    if (this.requestedMode === "demo") {
-      this.startDemo("デモモードで開始しました。");
-      return;
-    }
-
     const connector = await loadTikTokConnector();
     if (!connector) {
-      this.startDemo("tiktok-live-connector が未導入のため、デモモードで開始しました。");
+      this.fail("tiktok-live-connector が未導入のため、実接続を開始できません。");
       return;
     }
 
@@ -72,9 +65,7 @@ class LiveSession extends EventEmitter {
       this.status = "live";
       this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
     } catch (error) {
-      this.mode = "demo";
-      this.status = "demo";
-      this.startDemo(`実接続失敗: ${diagnoseConnectError(error)} デモモードへ切り替えました。`);
+      this.fail(`実接続失敗: ${diagnoseConnectError(error)}`);
     }
   }
 
@@ -120,12 +111,12 @@ class LiveSession extends EventEmitter {
 
   attachLiveHandlers(connection, events = {}) {
     connection.on(events.CHAT || "chat", (data) => {
-      const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || "unknown";
-      const uniqueId = data.user?.uniqueId || data.uniqueId || nickname;
+      const person = personFromEvent(data);
+      this.markSeen(person, Date.now());
       this.addComment({
         id: data.msgId || randomUUID(),
-        userId: uniqueId,
-        nickname,
+        userId: person.userId,
+        nickname: person.nickname,
         text: data.comment || "",
         at: Date.now()
       });
@@ -133,12 +124,13 @@ class LiveSession extends EventEmitter {
 
     connection.on(events.GIFT || "gift", (data) => {
       if (data.giftType === 1 && data.repeatEnd === false) return;
-      this.addGift(parseGiftEvent(data));
+      const gift = parseGiftEvent(data);
+      this.markSeen({ userId: gift.userId, nickname: gift.nickname }, gift.at);
+      this.addGift(gift);
     });
 
     connection.on(events.MEMBER || "member", (data) => {
-      const userId = data.user?.uniqueId || data.uniqueId || data.nickname || randomUUID();
-      this.markJoin(userId);
+      this.markSeen(personFromEvent(data), Date.now());
     });
 
     connection.on(events.ROOM_USER || "roomUser", (data) => {
@@ -167,61 +159,14 @@ class LiveSession extends EventEmitter {
     });
   }
 
-  startDemo(message) {
-    this.mode = "demo";
-    this.status = "demo";
-    this.notice = message;
-    this.broadcast("status", this.snapshot(message));
-
-    const names = [
-      ["mika_live", "盛り上がってきた"],
-      ["sora88", "今の説明わかりやすい"],
-      ["yuto", "初見です"],
-      ["nana", "もう一回見たい"],
-      ["kei_stream", "コメント拾ってくれてありがとう"],
-      ["riko", "この時間帯いいですね"]
-    ];
-    const giftSamples = [
-      { giftId: "5655", giftName: "Rose", diamondCount: 1 },
-      { giftId: "5487", giftName: "Finger Heart", diamondCount: 5 },
-      { giftId: "6104", giftName: "Perfume", diamondCount: 20 },
-      { giftId: "8913", giftName: "TikTok Universe", diamondCount: 34999 }
-    ];
-
-    this.demoTimer = setInterval(() => {
-      const sample = names[Math.floor(Math.random() * names.length)];
-      const userId = sample[0];
-      if (Math.random() > 0.55) this.markJoin(userId);
-      this.viewerStats.current = 12 + Math.floor(Math.random() * 18);
-      this.viewerStats.peak = Math.max(this.viewerStats.peak, this.viewerStats.current);
-      this.addComment({
-        id: randomUUID(),
-        userId,
-        nickname: sample[0],
-        text: sample[1],
-        at: Date.now()
-      });
-      if (Math.random() > 0.65) {
-        const gift = giftSamples[Math.floor(Math.random() * giftSamples.length)];
-        this.addGift({
-          id: randomUUID(),
-          userId,
-          nickname: sample[0],
-          giftId: gift.giftId,
-          giftName: gift.giftName,
-          repeatCount: 1 + Math.floor(Math.random() * 5),
-          diamondCount: gift.diamondCount,
-          at: Date.now()
-        });
-      }
-    }, 1600);
-  }
-
-  markJoin(userId) {
-    if (!this.joinedAt.has(userId)) {
-      this.joinedAt.set(userId, Date.now());
+  markSeen(person, at) {
+    const user = this.getUserStat(person.userId, person.nickname, at);
+    if (!user.hasJoined) {
+      user.hasJoined = true;
       this.viewerStats.knownJoins += 1;
     }
+    user.lastSeenAt = Math.max(user.lastSeenAt, at);
+    this.userStats.set(user.userId, user);
   }
 
   addComment(comment) {
@@ -232,7 +177,7 @@ class LiveSession extends EventEmitter {
     const current = this.getUserStat(comment.userId, comment.nickname, comment.at);
     current.comments += 1;
     current.lastSeenAt = comment.at;
-    this.userStats.set(comment.userId, current);
+    this.userStats.set(current.userId, current);
     this.broadcast("comment", { comment, snapshot: this.snapshot() });
   }
 
@@ -256,19 +201,19 @@ class LiveSession extends EventEmitter {
     user.gifts += repeatCount;
     user.diamonds += totalDiamonds;
     user.lastSeenAt = gift.at;
-    this.userStats.set(gift.userId, user);
+    this.userStats.set(user.userId, user);
 
-    const giftKey = `${gift.userId}:${gift.giftId || gift.giftName}`;
+    const giftKey = `${user.userId}:${gift.giftId || gift.giftName}`;
     const stat = this.giftStats.get(giftKey) || {
-      userId: gift.userId,
-      nickname: gift.nickname,
+      userId: user.userId,
+      nickname: user.nickname,
       giftId: gift.giftId,
       giftName: gift.giftName,
       count: 0,
       diamonds: 0,
       lastGiftAt: gift.at
     };
-    stat.nickname = gift.nickname || stat.nickname;
+    stat.nickname = user.nickname || stat.nickname;
     stat.giftName = gift.giftName || stat.giftName;
     stat.count += repeatCount;
     stat.diamonds += totalDiamonds;
@@ -278,27 +223,44 @@ class LiveSession extends EventEmitter {
     this.broadcast("gift", { gift: normalizedGift, snapshot: this.snapshot() });
   }
 
-  getUserStat(userId, nickname, at) {
-    return this.userStats.get(userId) || {
+  getUserStat(rawUserId, rawNickname, at) {
+    const nickname = cleanDisplayName(rawNickname || rawUserId || "unknown");
+    const displayKey = displayNameKey(nickname);
+    const existingId = this.displayNameIndex.get(displayKey);
+    const userId = existingId || cleanUserId(rawUserId || nickname);
+    this.displayNameIndex.set(displayKey, userId);
+
+    const current = this.userStats.get(userId) || {
       userId,
       nickname,
       comments: 0,
       gifts: 0,
       diamonds: 0,
       firstSeenAt: at,
-      lastSeenAt: at
+      lastSeenAt: at,
+      hasJoined: false,
+      watchSeconds: 0
     };
+    current.nickname = nickname || current.nickname;
+    current.firstSeenAt = Math.min(current.firstSeenAt, at);
+    current.lastSeenAt = Math.max(current.lastSeenAt, at);
+    return current;
   }
 
   snapshot(message = "") {
     if (message) this.notice = message;
     this.updateEstimatedWatch();
-    const topUsers = [...this.userStats.values()]
+    const users = [...this.userStats.values()];
+    const topUsers = users
       .sort((a, b) => b.comments - a.comments || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
-    const topGifters = [...this.userStats.values()]
+    const topGifters = users
       .filter((user) => user.gifts > 0 || user.diamonds > 0)
       .sort((a, b) => b.diamonds - a.diamonds || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, 30);
+    const topWatchers = users
+      .filter((user) => user.watchSeconds > 0)
+      .sort((a, b) => b.watchSeconds - a.watchSeconds || b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
     const topGifts = [...this.giftStats.values()]
       .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
@@ -320,27 +282,37 @@ class LiveSession extends EventEmitter {
       gifts: this.gifts,
       topUsers,
       topGifters,
+      topWatchers,
       topGifts,
       viewerStats: this.viewerStats
     };
   }
 
   updateEstimatedWatch() {
-    if (this.joinedAt.size === 0) return;
     const now = this.stoppedAt || Date.now();
-    this.viewerStats.estimatedWatchSeconds = [...this.joinedAt.values()]
-      .reduce((total, joined) => total + Math.max(0, now - joined) / 1000, 0);
+    let total = 0;
+    for (const user of this.userStats.values()) {
+      user.watchSeconds = Math.floor(Math.max(0, now - user.firstSeenAt) / 1000);
+      total += user.watchSeconds;
+    }
+    this.viewerStats.estimatedWatchSeconds = total;
   }
 
   broadcast(type, payload) {
     this.emit("event", { type, payload });
   }
 
+  fail(message) {
+    this.mode = "error";
+    this.status = "stopped";
+    this.stoppedAt = Date.now();
+    this.broadcast("status", this.snapshot(message));
+  }
+
   stop(message = "停止しました。") {
     if (this.stoppedAt) return;
     this.stoppedAt = Date.now();
     this.status = this.status === "ended" ? "ended" : "stopped";
-    if (this.demoTimer) clearInterval(this.demoTimer);
     if (this.connection?.disconnect) {
       Promise.resolve(this.connection.disconnect()).catch(() => {});
     }
@@ -348,8 +320,9 @@ class LiveSession extends EventEmitter {
   }
 
   toCsv() {
-    const rows = [["type", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds"]];
+    const rows = [["type", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds"]];
     for (const comment of [...this.comments].reverse()) {
+      const user = this.userStats.get(comment.userId);
       rows.push([
         "comment",
         new Date(comment.at).toISOString(),
@@ -357,10 +330,12 @@ class LiveSession extends EventEmitter {
         comment.nickname,
         comment.text,
         "",
-        ""
+        "",
+        user?.watchSeconds || ""
       ]);
     }
     for (const gift of [...this.gifts].reverse()) {
+      const user = this.userStats.get(gift.userId);
       rows.push([
         "gift",
         new Date(gift.at).toISOString(),
@@ -368,7 +343,8 @@ class LiveSession extends EventEmitter {
         gift.nickname,
         gift.giftName || gift.giftId,
         gift.repeatCount,
-        gift.totalDiamonds
+        gift.totalDiamonds,
+        user?.watchSeconds || ""
       ]);
     }
     return "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
@@ -385,9 +361,17 @@ async function loadTikTokConnector() {
   }
 }
 
-function parseGiftEvent(data) {
+function personFromEvent(data) {
   const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || "unknown";
-  const uniqueId = data.user?.uniqueId || data.uniqueId || nickname;
+  const userId = data.user?.uniqueId || data.uniqueId || data.user?.userId || nickname;
+  return {
+    userId: cleanUserId(userId),
+    nickname: cleanDisplayName(nickname)
+  };
+}
+
+function parseGiftEvent(data) {
+  const person = personFromEvent(data);
   const extended = data.extendedGiftInfo || data.giftDetails || data.gift || {};
   const diamondCount = Number(
     data.diamondCount ||
@@ -400,14 +384,26 @@ function parseGiftEvent(data) {
   );
   return {
     id: data.msgId || randomUUID(),
-    userId: uniqueId,
-    nickname,
+    userId: person.userId,
+    nickname: person.nickname,
     giftId: String(data.giftId || extended.id || ""),
     giftName: data.giftName || extended.name || data.giftId || "ギフト",
     repeatCount: Number(data.repeatCount || data.repeat_count || 1),
     diamondCount,
     at: Date.now()
   };
+}
+
+function cleanDisplayName(value) {
+  return String(value || "unknown").trim().replace(/^@/, "") || "unknown";
+}
+
+function cleanUserId(value) {
+  return cleanDisplayName(value).toLowerCase();
+}
+
+function displayNameKey(value) {
+  return cleanDisplayName(value).toLowerCase();
 }
 
 function csvCell(value) {
@@ -498,12 +494,11 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readBody(request);
       const username = normalizeTikTokUsername(body.username);
-      const mode = body.mode === "demo" ? "demo" : "auto";
       if (!isValidUsername(username)) {
         sendJson(response, 400, { error: "TikTok IDは2から32文字の英数字、_、.で入力してください。" });
         return;
       }
-      const session = new LiveSession(username, mode);
+      const session = new LiveSession(username);
       sessions.set(session.id, session);
       sendJson(response, 201, { id: session.id });
       session.start();

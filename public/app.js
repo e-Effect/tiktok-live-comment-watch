@@ -15,6 +15,7 @@ const commentList = document.querySelector("#commentList");
 const userList = document.querySelector("#userList");
 const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
+const watcherList = document.querySelector("#watcherList");
 
 let eventSource = null;
 let activeSession = null;
@@ -37,13 +38,12 @@ async function startSession() {
   setStatus("connecting", "接続を準備しています。", "接続中");
 
   const username = usernameInput.value.trim().replace(/^@/, "");
-  const mode = new FormData(form).get("mode");
 
   try {
     const response = await fetch("/api/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, mode })
+      body: JSON.stringify({ username })
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "接続を開始できませんでした。");
@@ -68,9 +68,14 @@ async function startSession() {
       setStatus("stopped", "接続が中断されました。", "再接続待ち");
     };
 
-    clockTimer = setInterval(() => {
-      if (latestSnapshot && !latestSnapshot.stoppedAt) {
-        latestSnapshot.elapsedSeconds = Math.floor((Date.now() - latestSnapshot.startedAt) / 1000);
+    clockTimer = setInterval(async () => {
+      if (!latestSnapshot || latestSnapshot.stoppedAt || !activeSession) return;
+      latestSnapshot.elapsedSeconds = Math.floor((Date.now() - latestSnapshot.startedAt) / 1000);
+      renderMetrics(latestSnapshot);
+      try {
+        const snapshot = await (await fetch(`/api/session/${activeSession}/snapshot`)).json();
+        renderSnapshot(snapshot);
+      } catch {
         renderMetrics(latestSnapshot);
       }
     }, 1000);
@@ -105,6 +110,7 @@ function renderSnapshot(snapshot) {
   setStatus(snapshot.status, snapshot.message || statusMessage(snapshot), modeLabel(snapshot));
   renderMetrics(snapshot);
   renderComments(snapshot.comments || []);
+  renderWatchers(snapshot.topWatchers || []);
   renderUsers(snapshot.topUsers || []);
   renderGifters(snapshot.topGifters || []);
   renderGiftHistory(snapshot.gifts || []);
@@ -139,6 +145,20 @@ function renderComments(comments) {
       </header>
       <p>${escapeHtml(comment.text)}</p>
     </article>
+  `).join("");
+}
+
+function renderWatchers(users) {
+  if (!users.length) {
+    watcherList.innerHTML = `<p class="empty">まだ滞在時間はありません。</p>`;
+    return;
+  }
+  watcherList.innerHTML = users.map((user, index) => `
+    <div class="user-row">
+      <span class="rank">${index + 1}</span>
+      <span class="name">${escapeHtml(user.nickname || user.userId)}</span>
+      <span class="count">${formatDuration(user.watchSeconds)}</span>
+    </div>
   `).join("");
 }
 
@@ -194,20 +214,19 @@ function renderGiftHistory(gifts) {
 }
 
 function setStatus(status, message, mode) {
-  statusDot.className = `status-dot ${status === "live" ? "live" : status === "demo" ? "demo" : ""}`;
+  statusDot.className = `status-dot ${status === "live" ? "live" : ""}`;
   statusText.textContent = message || "待機中";
   modeText.textContent = mode;
 }
 
 function modeLabel(snapshot) {
   if (snapshot.mode === "live") return "実接続";
-  if (snapshot.mode === "demo") return "デモ";
+  if (snapshot.mode === "error") return "接続失敗";
   return "接続中";
 }
 
 function statusMessage(snapshot) {
   if (snapshot.status === "live") return `${snapshot.username} のLIVEを計測中です。`;
-  if (snapshot.status === "demo") return `${snapshot.username} をデモ計測中です。`;
   if (snapshot.status === "ended") return "LIVEが終了しました。";
   if (snapshot.status === "stopped") return "停止しました。";
   return "接続中です。";
