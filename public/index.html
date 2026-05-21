@@ -1,1 +1,59 @@
-<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>&#x54;ik&#x54;ok &#x4c;&#x49;&#x56;&#x45; &#x30b3;&#x30e1;&#x30f3;&#x30c8;&#x8a08;&#x6e2c;</title><link rel="stylesheet" href="/styles.css"></head><body><main class="app"><section class="panel"><h1>&#x54;ik&#x54;ok &#x4c;&#x49;&#x56;&#x45; &#x30b3;&#x30e1;&#x30f3;&#x30c8;&#x8a08;&#x6e2c;</h1><form id="connect&#x46;orm" class="form"><label for="username">&#x54;ik&#x54;ok &#x49;&#x44;</body><div class="row"><input id="username" name="username" autocomplete="off" placeholder="@username" required><button type="submit">&#x63a5;&#x7d9a;<div class="modes" role="group" aria-label="&#x63a5;&#x7d9a;&#x30e2;&#x30fc;&#x30c9;"><label><input type="radio" name="mode" value="auto" checked> &#x5b9f;&#x63a5;&#x7d9a;</label><label><input type="radio" name="mode" value="demo"> &#x30c7;&#x30e2;</label><div class="actions"><button id="stop&#x42;tn" type="button" disabled>&#x505c;&#x6b62;<a id="export&#x4c;ink" class="disabled" aria-disabled="true">&#x43;&#x53;&#x56;&#x51fa;&#x529b;<section class="dashboard" aria-live="polite"><div class="status"><span id="status&#x44;ot"><span id="status&#x54;ext">&#x672a;&#x63a5;&#x7d9a;<strong id="mode&#x54;ext">&#x5f85;&#x6a5f;&#x4e2d;<div class="metrics"><article><span>&#x30b3;&#x30e1;&#x30f3;&#x30c8;&#x6570;</span><strong id="comment&#x43;ount">0</article><article><span>&#x8a08;&#x6e2c;&#x6642;&#x9593;</span><strong id="elapsed&#x54;ime">00:00</article><article><span>&#x73fe;&#x5728;&#x8996;&#x8074;</span><strong id="current&#x56;iewers">-</article><article><span>&#x63a8;&#x5b9a;&#x6ede;&#x5728;</span><strong id="watch&#x54;ime">-</article><div class="grid"><section><h2>&#x30b3;&#x30e1;&#x30f3;&#x30c8;</h2><div id="comment&#x4c;ist" class="list"><p class="empty">&#x63a5;&#x7d9a;&#x3059;&#x308b;&#x3068;&#x30b3;&#x30e1;&#x30f3;&#x30c8;&#x304c;&#x3053;&#x3053;&#x306b;&#x6d41;&#x308c;&#x307e;&#x3059;&#x3002;</section><section><h2>&#x30e6;&#x30fc;&#x30b6;&#x30fc;&#x5225;&#x30b3;&#x30e1;&#x30f3;&#x30c8;&#x6570;</h2><div id="user&#x4c;ist" class="list small"><p class="empty">&#x307e;&#x3060;&#x96c6;&#x8a08;&#x306f;&#x3042;&#x308a;&#x307e;&#x305b;&#x3093;&#x3002;</section><script src="/app.js" type="module">
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TikTok LIVE コメント計測</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <section class="panel">
+        <h1>TikTok LIVE コメント計測</h1>
+        <form id="connectForm" class="form">
+          <label for="username">TikTok ID</label>
+          <div class="row">
+            <input id="username" name="username" autocomplete="off" placeholder="@username" required>
+            <button type="submit">接続</button>
+          </div>
+          <div class="modes" role="group" aria-label="接続モード">
+            <label><input type="radio" name="mode" value="auto" checked> 実接続</label>
+            <label><input type="radio" name="mode" value="demo"> デモ</label>
+          </div>
+        </form>
+        <div class="actions">
+          <button id="stopBtn" type="button" disabled>停止</button>
+          <a id="exportLink" class="disabled" aria-disabled="true">CSV出力</a>
+        </div>
+      </section>
+      <section class="dashboard" aria-live="polite">
+        <div class="status">
+          <span id="statusDot"></span>
+          <span id="statusText">未接続</span>
+          <strong id="modeText">待機中</strong>
+        </div>
+        <div class="metrics">
+          <article><span>コメント数</span><strong id="commentCount">0</strong></article>
+          <article><span>計測時間</span><strong id="elapsedTime">00:00</strong></article>
+          <article><span>現在視聴</span><strong id="currentViewers">-</strong></article>
+          <article><span>推定滞在</span><strong id="watchTime">-</strong></article>
+        </div>
+        <div class="grid">
+          <section>
+            <h2>コメント</h2>
+            <div id="commentList" class="list">
+              <p class="empty">接続するとコメントがここに流れます。</p>
+            </div>
+          </section>
+          <section>
+            <h2>ユーザー別コメント数</h2>
+            <div id="userList" class="list small">
+              <p class="empty">まだ集計はありません。</p>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
