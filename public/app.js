@@ -17,8 +17,14 @@ const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
 const watcherList = document.querySelector("#watcherList");
 const silentList = document.querySelector("#silentList");
+const recentIds = document.querySelector("#recentIds");
+const recentIdList = document.querySelector("#recentIdList");
+const panelToggles = [...document.querySelectorAll("[data-panel-toggle]")];
 
 const STORAGE_KEY = "tiktok-live-active-session";
+const RECENT_IDS_KEY = "tiktok-live-recent-ids";
+const PANEL_PREFS_KEY = "tiktok-live-panel-prefs";
+const MAX_RECENT_IDS = 8;
 
 let eventSource = null;
 let activeSession = null;
@@ -44,6 +50,8 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", reconnectActiveSession);
 window.addEventListener("online", reconnectActiveSession);
 
+setupPanelToggles();
+renderRecentIds();
 restoreSavedSession();
 
 async function startSession() {
@@ -63,6 +71,7 @@ async function startSession() {
     if (!response.ok) throw new Error(body.error || "接続を開始できませんでした。");
 
     activateSession(body.id, username);
+    rememberRecentId(username);
   } catch (error) {
     closeCurrent({ forget: true });
     setStatus("stopped", error.message, "未接続");
@@ -191,6 +200,79 @@ function readSavedSession() {
 
 function clearSavedSession() {
   localStorage.removeItem(STORAGE_KEY);
+}
+
+function rememberRecentId(username) {
+  const cleaned = username.trim().replace(/^@/, "");
+  if (!cleaned) return;
+  const ids = readRecentIds().filter((id) => id.toLowerCase() !== cleaned.toLowerCase());
+  ids.unshift(cleaned);
+  localStorage.setItem(RECENT_IDS_KEY, JSON.stringify(ids.slice(0, MAX_RECENT_IDS)));
+  renderRecentIds();
+}
+
+function readRecentIds() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECENT_IDS_KEY) || "[]");
+    return Array.isArray(value) ? value.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderRecentIds() {
+  const ids = readRecentIds();
+  recentIds.innerHTML = ids.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
+  if (!ids.length) {
+    recentIdList.innerHTML = "";
+    return;
+  }
+  recentIdList.innerHTML = ids.map((id) => `
+    <button type="button" data-recent-id="${escapeHtml(id)}">@${escapeHtml(id)}</button>
+  `).join("");
+  recentIdList.querySelectorAll("[data-recent-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      usernameInput.value = button.dataset.recentId;
+      usernameInput.focus();
+    });
+  });
+}
+
+function setupPanelToggles() {
+  const prefs = readPanelPrefs();
+  panelToggles.forEach((toggle) => {
+    const panel = toggle.dataset.panelToggle;
+    if (Object.hasOwn(prefs, panel)) {
+      toggle.checked = Boolean(prefs[panel]);
+    }
+    toggle.addEventListener("change", () => {
+      const next = readPanelPrefs();
+      next[panel] = toggle.checked;
+      localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(next));
+      applyPanelPrefs();
+    });
+  });
+  applyPanelPrefs();
+}
+
+function readPanelPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(PANEL_PREFS_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function applyPanelPrefs() {
+  const prefs = readPanelPrefs();
+  panelToggles.forEach((toggle) => {
+    const panelName = toggle.dataset.panelToggle;
+    const visible = Object.hasOwn(prefs, panelName) ? Boolean(prefs[panelName]) : toggle.checked;
+    toggle.checked = visible;
+    document.querySelectorAll(`[data-panel="${panelName}"]`).forEach((panel) => {
+      panel.hidden = !visible;
+    });
+  });
 }
 
 function setBusy(isBusy) {

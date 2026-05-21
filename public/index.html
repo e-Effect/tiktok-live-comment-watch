@@ -13,14 +13,26 @@
         <form id="connectForm" class="form">
           <label for="username">TikTok ID</label>
           <div class="row">
-            <input id="username" name="username" autocomplete="off" placeholder="@username" required>
+            <input id="username" name="username" list="recentIds" autocomplete="off" placeholder="@username" required>
+            <datalist id="recentIds"></datalist>
             <button type="submit">接続</button>
           </div>
+          <div id="recentIdList" class="recent-list" aria-label="最近使ったID"></div>
         </form>
         <div class="actions">
           <button id="stopBtn" type="button" disabled>停止</button>
           <a id="exportLink" class="disabled" aria-disabled="true">CSV出力</a>
         </div>
+
+        <section class="view-settings" aria-label="表示項目">
+          <h2>表示項目</h2>
+          <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
+          <label><input type="checkbox" data-panel-toggle="watchers" checked> 滞在時間ランキング</label>
+          <label><input type="checkbox" data-panel-toggle="silent" checked> 15分以上・コメントなし</label>
+          <label><input type="checkbox" data-panel-toggle="gifts" checked> ギフトランキング</label>
+          <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
+          <label><input type="checkbox" data-panel-toggle="giftHistory" checked> ギフト履歴</label>
+        </section>
       </section>
 
       <section class="dashboard" aria-live="polite">
@@ -40,42 +52,42 @@
         </div>
 
         <div class="grid">
-          <section>
+          <section data-panel="comments">
             <h2>コメント</h2>
             <div id="commentList" class="list">
               <p class="empty">接続するとコメントがここに流れます。</p>
             </div>
           </section>
 
-          <section>
+          <section data-panel="watchers">
             <h2>滞在時間ランキング</h2>
             <div id="watcherList" class="list small">
               <p class="empty">まだ滞在時間はありません。</p>
             </div>
           </section>
 
-          <section>
+          <section data-panel="silent">
             <h2>15分以上・コメントなし</h2>
             <div id="silentList" class="list small">
               <p class="empty">まだ対象者はいません。</p>
             </div>
           </section>
 
-          <section>
+          <section data-panel="gifts">
             <h2>ギフトランキング</h2>
             <div id="giftList" class="list small">
               <p class="empty">まだギフトはありません。</p>
             </div>
           </section>
 
-          <section>
+          <section data-panel="users">
             <h2>ユーザー別コメント数</h2>
             <div id="userList" class="list small">
               <p class="empty">まだ集計はありません。</p>
             </div>
           </section>
 
-          <section>
+          <section data-panel="giftHistory">
             <h2>ギフト履歴</h2>
             <div id="giftHistory" class="list small">
               <p class="empty">ギフトが届くとここに表示されます。</p>
