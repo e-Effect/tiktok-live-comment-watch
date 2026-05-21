@@ -330,7 +330,17 @@ function renderWatchers(users) {
 }
 
 function renderSilentLongWatchers(users) {
-  renderRankList(silentList, users, "まだ対象者はいません。", (user) => formatDuration(user.watchSeconds));
+  if (!users.length) {
+    silentList.innerHTML = `<p class="empty">まだ対象者はいません。</p>`;
+    return;
+  }
+  silentList.innerHTML = users.map((user, index) => `
+    <div class="user-row silent-row ${silentLevelClass(user.watchSeconds)}">
+      <span class="rank">${index + 1}</span>
+      <span class="name">${renderName(user)}</span>
+      <span class="count">${formatDuration(user.watchSeconds)}</span>
+    </div>
+  `).join("");
 }
 
 function renderUsers(users) {
@@ -386,6 +396,13 @@ function renderGiftHistory(gifts) {
       </p>
     </article>
   `).join("");
+}
+
+function silentLevelClass(seconds) {
+  if (seconds >= 90 * 60) return "silent-red";
+  if (seconds >= 60 * 60) return "silent-green";
+  if (seconds >= 30 * 60) return "silent-yellow";
+  return "";
 }
 
 function setStatus(status, message, mode) {
