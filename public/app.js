@@ -6,12 +6,15 @@ const statusDot = document.querySelector("#statusDot");
 const statusText = document.querySelector("#statusText");
 const modeText = document.querySelector("#modeText");
 const commentCount = document.querySelector("#commentCount");
+const giftCount = document.querySelector("#giftCount");
+const giftDiamonds = document.querySelector("#giftDiamonds");
 const elapsedTime = document.querySelector("#elapsedTime");
 const currentViewers = document.querySelector("#currentViewers");
 const watchTime = document.querySelector("#watchTime");
 const commentList = document.querySelector("#commentList");
 const userList = document.querySelector("#userList");
-const liveLabel = document.querySelector("#liveLabel");
+const giftList = document.querySelector("#giftList");
+const giftHistory = document.querySelector("#giftHistory");
 
 let eventSource = null;
 let activeSession = null;
@@ -55,7 +58,10 @@ async function startSession() {
     eventSource.addEventListener("status", (event) => renderSnapshot(JSON.parse(event.data)));
     eventSource.addEventListener("comment", (event) => {
       const payload = JSON.parse(event.data);
-      latestSnapshot = payload.snapshot;
+      renderSnapshot(payload.snapshot);
+    });
+    eventSource.addEventListener("gift", (event) => {
+      const payload = JSON.parse(event.data);
       renderSnapshot(payload.snapshot);
     });
     eventSource.onerror = () => {
@@ -100,6 +106,8 @@ function renderSnapshot(snapshot) {
   renderMetrics(snapshot);
   renderComments(snapshot.comments || []);
   renderUsers(snapshot.topUsers || []);
+  renderGifters(snapshot.topGifters || []);
+  renderGiftHistory(snapshot.gifts || []);
 
   if (snapshot.stoppedAt || snapshot.status === "ended") {
     if (eventSource) eventSource.close();
@@ -109,6 +117,8 @@ function renderSnapshot(snapshot) {
 
 function renderMetrics(snapshot) {
   commentCount.textContent = formatNumber(snapshot.commentCount);
+  giftCount.textContent = formatNumber(snapshot.giftCount);
+  giftDiamonds.textContent = formatNumber(snapshot.giftDiamondTotal);
   elapsedTime.textContent = formatDuration(snapshot.elapsedSeconds);
   currentViewers.textContent = snapshot.viewerStats?.current ? formatNumber(snapshot.viewerStats.current) : "-";
   watchTime.textContent = snapshot.viewerStats?.estimatedWatchSeconds
@@ -143,6 +153,43 @@ function renderUsers(users) {
       <span class="name">${escapeHtml(user.nickname || user.userId)}</span>
       <span class="count">${formatNumber(user.comments)}</span>
     </div>
+  `).join("");
+}
+
+function renderGifters(users) {
+  if (!users.length) {
+    giftList.innerHTML = `<p class="empty">まだギフトはありません。</p>`;
+    return;
+  }
+  giftList.innerHTML = users.map((user, index) => `
+    <div class="user-row gift-row">
+      <span class="rank">${index + 1}</span>
+      <span class="name">${escapeHtml(user.nickname || user.userId)}</span>
+      <span class="gift-score">
+        <strong>${formatNumber(user.diamonds)}</strong>
+        <small>${formatNumber(user.gifts)}個</small>
+      </span>
+    </div>
+  `).join("");
+}
+
+function renderGiftHistory(gifts) {
+  if (!gifts.length) {
+    giftHistory.innerHTML = `<p class="empty">ギフトが届くとここに表示されます。</p>`;
+    return;
+  }
+  giftHistory.innerHTML = gifts.map((gift) => `
+    <article class="comment gift-card">
+      <header>
+        <span class="name">${escapeHtml(gift.nickname || gift.userId)}</span>
+        <span class="time">${formatClock(gift.at)}</span>
+      </header>
+      <p>
+        ${escapeHtml(gift.giftName || "ギフト")}
+        <strong>x${formatNumber(gift.repeatCount)}</strong>
+        <span>${formatNumber(gift.totalDiamonds)} ダイヤ</span>
+      </p>
+    </article>
   `).join("");
 }
 

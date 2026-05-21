@@ -26,18 +26,23 @@
           <a id="exportLink" class="disabled" aria-disabled="true">CSV出力</a>
         </div>
       </section>
+
       <section class="dashboard" aria-live="polite">
         <div class="status">
           <span id="statusDot"></span>
           <span id="statusText">未接続</span>
           <strong id="modeText">待機中</strong>
         </div>
+
         <div class="metrics">
           <article><span>コメント数</span><strong id="commentCount">0</strong></article>
+          <article><span>ギフト数</span><strong id="giftCount">0</strong></article>
+          <article><span>推定ダイヤ</span><strong id="giftDiamonds">0</strong></article>
           <article><span>計測時間</span><strong id="elapsedTime">00:00</strong></article>
           <article><span>現在視聴</span><strong id="currentViewers">-</strong></article>
           <article><span>推定滞在</span><strong id="watchTime">-</strong></article>
         </div>
+
         <div class="grid">
           <section>
             <h2>コメント</h2>
@@ -45,10 +50,25 @@
               <p class="empty">接続するとコメントがここに流れます。</p>
             </div>
           </section>
+
+          <section>
+            <h2>ギフトランキング</h2>
+            <div id="giftList" class="list small">
+              <p class="empty">まだギフトはありません。</p>
+            </div>
+          </section>
+
           <section>
             <h2>ユーザー別コメント数</h2>
             <div id="userList" class="list small">
               <p class="empty">まだ集計はありません。</p>
+            </div>
+          </section>
+
+          <section>
+            <h2>ギフト履歴</h2>
+            <div id="giftHistory" class="list small">
+              <p class="empty">ギフトが届くとここに表示されます。</p>
             </div>
           </section>
         </div>

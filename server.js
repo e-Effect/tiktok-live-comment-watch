@@ -34,8 +34,12 @@ class LiveSession extends EventEmitter {
     this.startedAt = Date.now();
     this.stoppedAt = null;
     this.commentCount = 0;
+    this.giftCount = 0;
+    this.giftDiamondTotal = 0;
     this.comments = [];
+    this.gifts = [];
     this.userStats = new Map();
+    this.giftStats = new Map();
     this.viewerStats = {
       current: 0,
       peak: 0,
@@ -66,7 +70,7 @@ class LiveSession extends EventEmitter {
       this.broadcast("status", this.snapshot("TikTok LIVEへ接続中です。"));
       const state = await this.connectLiveWithRetries(connector);
       this.status = "live";
-      this.broadcast("status", this.snapshot(`LIVE接続を開始しました。roomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
+      this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
     } catch (error) {
       this.mode = "demo";
       this.status = "demo";
@@ -85,7 +89,7 @@ class LiveSession extends EventEmitter {
     for (let index = 0; index < attempts.length; index += 1) {
       const options = {
         ...attempts[index],
-        enableExtendedGiftInfo: false,
+        enableExtendedGiftInfo: true,
         enableRequestPolling: true,
         requestPollingIntervalMs: 1000,
         connectWithUniqueId: false,
@@ -125,6 +129,11 @@ class LiveSession extends EventEmitter {
         text: data.comment || "",
         at: Date.now()
       });
+    });
+
+    connection.on(events.GIFT || "gift", (data) => {
+      if (data.giftType === 1 && data.repeatEnd === false) return;
+      this.addGift(parseGiftEvent(data));
     });
 
     connection.on(events.MEMBER || "member", (data) => {
@@ -172,6 +181,12 @@ class LiveSession extends EventEmitter {
       ["kei_stream", "コメント拾ってくれてありがとう"],
       ["riko", "この時間帯いいですね"]
     ];
+    const giftSamples = [
+      { giftId: "5655", giftName: "Rose", diamondCount: 1 },
+      { giftId: "5487", giftName: "Finger Heart", diamondCount: 5 },
+      { giftId: "6104", giftName: "Perfume", diamondCount: 20 },
+      { giftId: "8913", giftName: "TikTok Universe", diamondCount: 34999 }
+    ];
 
     this.demoTimer = setInterval(() => {
       const sample = names[Math.floor(Math.random() * names.length)];
@@ -186,6 +201,19 @@ class LiveSession extends EventEmitter {
         text: sample[1],
         at: Date.now()
       });
+      if (Math.random() > 0.65) {
+        const gift = giftSamples[Math.floor(Math.random() * giftSamples.length)];
+        this.addGift({
+          id: randomUUID(),
+          userId,
+          nickname: sample[0],
+          giftId: gift.giftId,
+          giftName: gift.giftName,
+          repeatCount: 1 + Math.floor(Math.random() * 5),
+          diamondCount: gift.diamondCount,
+          at: Date.now()
+        });
+      }
     }, 1600);
   }
 
@@ -201,25 +229,79 @@ class LiveSession extends EventEmitter {
     this.comments.unshift(comment);
     this.comments = this.comments.slice(0, 200);
 
-    const current = this.userStats.get(comment.userId) || {
-      userId: comment.userId,
-      nickname: comment.nickname,
-      comments: 0,
-      firstSeenAt: comment.at,
-      lastSeenAt: comment.at
-    };
-    current.nickname = comment.nickname || current.nickname;
+    const current = this.getUserStat(comment.userId, comment.nickname, comment.at);
     current.comments += 1;
     current.lastSeenAt = comment.at;
     this.userStats.set(comment.userId, current);
     this.broadcast("comment", { comment, snapshot: this.snapshot() });
   }
 
+  addGift(gift) {
+    const repeatCount = Math.max(1, Number(gift.repeatCount || 1));
+    const diamondCount = Math.max(0, Number(gift.diamondCount || 0));
+    const totalDiamonds = repeatCount * diamondCount;
+    const normalizedGift = {
+      ...gift,
+      repeatCount,
+      diamondCount,
+      totalDiamonds
+    };
+
+    this.giftCount += repeatCount;
+    this.giftDiamondTotal += totalDiamonds;
+    this.gifts.unshift(normalizedGift);
+    this.gifts = this.gifts.slice(0, 200);
+
+    const user = this.getUserStat(gift.userId, gift.nickname, gift.at);
+    user.gifts += repeatCount;
+    user.diamonds += totalDiamonds;
+    user.lastSeenAt = gift.at;
+    this.userStats.set(gift.userId, user);
+
+    const giftKey = `${gift.userId}:${gift.giftId || gift.giftName}`;
+    const stat = this.giftStats.get(giftKey) || {
+      userId: gift.userId,
+      nickname: gift.nickname,
+      giftId: gift.giftId,
+      giftName: gift.giftName,
+      count: 0,
+      diamonds: 0,
+      lastGiftAt: gift.at
+    };
+    stat.nickname = gift.nickname || stat.nickname;
+    stat.giftName = gift.giftName || stat.giftName;
+    stat.count += repeatCount;
+    stat.diamonds += totalDiamonds;
+    stat.lastGiftAt = gift.at;
+    this.giftStats.set(giftKey, stat);
+
+    this.broadcast("gift", { gift: normalizedGift, snapshot: this.snapshot() });
+  }
+
+  getUserStat(userId, nickname, at) {
+    return this.userStats.get(userId) || {
+      userId,
+      nickname,
+      comments: 0,
+      gifts: 0,
+      diamonds: 0,
+      firstSeenAt: at,
+      lastSeenAt: at
+    };
+  }
+
   snapshot(message = "") {
     if (message) this.notice = message;
     this.updateEstimatedWatch();
     const topUsers = [...this.userStats.values()]
-      .sort((a, b) => b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
+      .sort((a, b) => b.comments - a.comments || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, 30);
+    const topGifters = [...this.userStats.values()]
+      .filter((user) => user.gifts > 0 || user.diamonds > 0)
+      .sort((a, b) => b.diamonds - a.diamonds || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, 30);
+    const topGifts = [...this.giftStats.values()]
+      .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
       .slice(0, 30);
 
     return {
@@ -232,8 +314,13 @@ class LiveSession extends EventEmitter {
       stoppedAt: this.stoppedAt,
       elapsedSeconds: Math.floor(((this.stoppedAt || Date.now()) - this.startedAt) / 1000),
       commentCount: this.commentCount,
+      giftCount: this.giftCount,
+      giftDiamondTotal: this.giftDiamondTotal,
       comments: this.comments,
+      gifts: this.gifts,
       topUsers,
+      topGifters,
+      topGifts,
       viewerStats: this.viewerStats
     };
   }
@@ -261,13 +348,27 @@ class LiveSession extends EventEmitter {
   }
 
   toCsv() {
-    const rows = [["time", "user_id", "nickname", "comment"]];
+    const rows = [["type", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds"]];
     for (const comment of [...this.comments].reverse()) {
       rows.push([
+        "comment",
         new Date(comment.at).toISOString(),
         comment.userId,
         comment.nickname,
-        comment.text
+        comment.text,
+        "",
+        ""
+      ]);
+    }
+    for (const gift of [...this.gifts].reverse()) {
+      rows.push([
+        "gift",
+        new Date(gift.at).toISOString(),
+        gift.userId,
+        gift.nickname,
+        gift.giftName || gift.giftId,
+        gift.repeatCount,
+        gift.totalDiamonds
       ]);
     }
     return "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
@@ -282,6 +383,31 @@ async function loadTikTokConnector() {
   } catch {
     return null;
   }
+}
+
+function parseGiftEvent(data) {
+  const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || "unknown";
+  const uniqueId = data.user?.uniqueId || data.uniqueId || nickname;
+  const extended = data.extendedGiftInfo || data.giftDetails || data.gift || {};
+  const diamondCount = Number(
+    data.diamondCount ||
+    data.diamond_count ||
+    data.repeatDiamondCount ||
+    extended.diamond_count ||
+    extended.diamondCount ||
+    extended.cost ||
+    0
+  );
+  return {
+    id: data.msgId || randomUUID(),
+    userId: uniqueId,
+    nickname,
+    giftId: String(data.giftId || extended.id || ""),
+    giftName: data.giftName || extended.name || data.giftId || "ギフト",
+    repeatCount: Number(data.repeatCount || data.repeat_count || 1),
+    diamondCount,
+    at: Date.now()
+  };
 }
 
 function csvCell(value) {
@@ -308,13 +434,13 @@ function diagnoseConnectError(error) {
   const text = raw || "不明なエラー";
 
   if (/not live|offline|room.*not|user.*not|invalid/i.test(text)) {
-    return `${shortError(text)} アカウント名かLIVE状態の判定で失敗しています。`;
+    return `${shortError(text)} アカウント名またはLIVE状態の判定で失敗しています。`;
   }
   if (/captcha|verify|blocked|403|401|signature|sign/i.test(text)) {
-    return `${shortError(text)} TikTok側の検証または署名処理で止まっています。`;
+    return `${shortError(text)} TikTok側の検証または制限で止まっています。`;
   }
   if (/timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network/i.test(text)) {
-    return `${shortError(text)} ネットワークまたは外部署名サービスへの接続で止まっています。`;
+    return `${shortError(text)} ネットワークまたは外部接続で止まっています。`;
   }
   return shortError(text);
 }
@@ -426,7 +552,7 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && action === "export.csv") {
       response.writeHead(200, {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${session.username}-comments.csv"`
+        "Content-Disposition": `attachment; filename="${session.username}-live.csv"`
       });
       response.end(session.toCsv());
       return;
