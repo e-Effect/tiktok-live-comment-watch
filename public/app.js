@@ -6,6 +6,7 @@ const statusDot = document.querySelector("#statusDot");
 const statusText = document.querySelector("#statusText");
 const modeText = document.querySelector("#modeText");
 const commentCount = document.querySelector("#commentCount");
+const initialCount = document.querySelector("#initialCount");
 const giftCount = document.querySelector("#giftCount");
 const giftDiamonds = document.querySelector("#giftDiamonds");
 const elapsedTime = document.querySelector("#elapsedTime");
@@ -300,6 +301,7 @@ function renderSnapshot(snapshot) {
 
 function renderMetrics(snapshot) {
   commentCount.textContent = formatNumber(snapshot.commentCount);
+  initialCount.textContent = formatNumber(snapshot.initialEventCount);
   giftCount.textContent = formatNumber(snapshot.giftCount);
   giftDiamonds.textContent = formatNumber(snapshot.giftDiamondTotal);
   elapsedTime.textContent = formatDuration(snapshot.elapsedSeconds);
@@ -320,7 +322,7 @@ function renderComments(comments) {
         <span class="name">${escapeHtml(comment.nickname || comment.userId)}</span>
         <span class="time">${formatClock(comment.at)}</span>
       </header>
-      <p>${escapeHtml(comment.text)}</p>
+      <p>${eventSourceBadge(comment)}${escapeHtml(comment.text)}</p>
     </article>
   `).join("");
 }
@@ -391,6 +393,7 @@ function renderGiftHistory(gifts) {
       </header>
       <p>
         ${escapeHtml(gift.giftName || "ギフト")}
+        ${eventSourceBadge(gift)}
         <strong>x${formatNumber(gift.repeatCount)}</strong>
         <span>${formatNumber(gift.totalDiamonds)} ダイヤ</span>
       </p>
@@ -403,6 +406,10 @@ function silentLevelClass(seconds) {
   if (seconds >= 60 * 60) return "silent-green";
   if (seconds >= 30 * 60) return "silent-yellow";
   return "";
+}
+
+function eventSourceBadge(item) {
+  return item.source === "initial" ? `<span class="source-badge">遡り</span>` : "";
 }
 
 function setStatus(status, message, mode) {

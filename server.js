@@ -33,7 +33,9 @@ class LiveSession extends EventEmitter {
     this.startedAt = Date.now();
     this.stoppedAt = null;
     this.commentCount = 0;
+    this.initialCommentCount = 0;
     this.giftCount = 0;
+    this.initialGiftCount = 0;
     this.giftDiamondTotal = 0;
     this.comments = [];
     this.gifts = [];
@@ -49,6 +51,8 @@ class LiveSession extends EventEmitter {
     this.notice = "";
     this.connection = null;
     this.lastAccessAt = Date.now();
+    this.initialDataUntil = 0;
+    this.isConnectingWithInitialData = false;
   }
 
   async start() {
@@ -94,11 +98,23 @@ class LiveSession extends EventEmitter {
       const connection = new connector.Connection(this.username, options);
       this.attachLiveHandlers(connection, connector.events);
       this.connection = connection;
+      this.isConnectingWithInitialData = Boolean(attempts[index].processInitialData);
+      this.initialDataUntil = this.isConnectingWithInitialData ? Date.now() + 15000 : 0;
       this.broadcast("status", this.snapshot(`TikTok LIVEへ接続中です。試行 ${index + 1}/${attempts.length}`));
 
       try {
-        return await connection.connect();
+        const state = await connection.connect();
+        if (this.isConnectingWithInitialData) {
+          this.initialDataUntil = Date.now() + 3000;
+          setTimeout(() => {
+            this.isConnectingWithInitialData = false;
+            this.initialDataUntil = 0;
+          }, 3000).unref?.();
+        }
+        return state;
       } catch (error) {
+        this.isConnectingWithInitialData = false;
+        this.initialDataUntil = 0;
         lastError = error;
         await Promise.resolve(connection.disconnect?.()).catch(() => {});
         if (index < attempts.length - 1) {
@@ -119,13 +135,15 @@ class LiveSession extends EventEmitter {
         userId: person.userId,
         nickname: person.nickname,
         text: data.comment || "",
-        at: Date.now()
+        at: Date.now(),
+        source: this.currentEventSource()
       });
     });
 
     connection.on(events.GIFT || "gift", (data) => {
       if (data.giftType === 1 && data.repeatEnd === false) return;
       const gift = parseGiftEvent(data);
+      gift.source = this.currentEventSource();
       this.markSeen({ userId: gift.userId, nickname: gift.nickname }, gift.at);
       this.addGift(gift);
     });
@@ -191,6 +209,7 @@ class LiveSession extends EventEmitter {
 
   addComment(comment) {
     this.commentCount += 1;
+    if (comment.source === "initial") this.initialCommentCount += 1;
     this.comments.unshift(comment);
     this.comments = this.comments.slice(0, 200);
 
@@ -213,6 +232,7 @@ class LiveSession extends EventEmitter {
     };
 
     this.giftCount += repeatCount;
+    if (gift.source === "initial") this.initialGiftCount += repeatCount;
     this.giftDiamondTotal += totalDiamonds;
     this.gifts.unshift(normalizedGift);
     this.gifts = this.gifts.slice(0, 200);
@@ -303,7 +323,10 @@ class LiveSession extends EventEmitter {
       stoppedAt: this.stoppedAt,
       elapsedSeconds: Math.floor(((this.stoppedAt || Date.now()) - this.startedAt) / 1000),
       commentCount: this.commentCount,
+      initialCommentCount: this.initialCommentCount,
       giftCount: this.giftCount,
+      initialGiftCount: this.initialGiftCount,
+      initialEventCount: this.initialCommentCount + this.initialGiftCount,
       giftDiamondTotal: this.giftDiamondTotal,
       comments: this.comments,
       gifts: this.gifts,
@@ -330,6 +353,10 @@ class LiveSession extends EventEmitter {
     this.emit("event", { type, payload });
   }
 
+  currentEventSource() {
+    return this.isConnectingWithInitialData || Date.now() < this.initialDataUntil ? "initial" : "live";
+  }
+
   touch() {
     this.lastAccessAt = Date.now();
   }
@@ -352,11 +379,12 @@ class LiveSession extends EventEmitter {
   }
 
   toCsv() {
-    const rows = [["type", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds", "followed_today"]];
+    const rows = [["type", "source", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds", "followed_today"]];
     for (const comment of [...this.comments].reverse()) {
       const user = this.userStats.get(comment.userId);
       rows.push([
         "comment",
+        comment.source || "live",
         new Date(comment.at).toISOString(),
         comment.userId,
         comment.nickname,
@@ -371,6 +399,7 @@ class LiveSession extends EventEmitter {
       const user = this.userStats.get(gift.userId);
       rows.push([
         "gift",
+        gift.source || "live",
         new Date(gift.at).toISOString(),
         gift.userId,
         gift.nickname,
