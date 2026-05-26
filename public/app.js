@@ -32,6 +32,7 @@ let activeSession = null;
 let latestSnapshot = null;
 let clockTimer = null;
 let reconnectTimer = null;
+const pendingProfileLookups = new Set();
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -53,6 +54,7 @@ window.addEventListener("online", reconnectActiveSession);
 
 setupPanelToggles();
 renderRecentIds();
+refreshMissingRecentProfiles();
 restoreSavedSession();
 
 async function startSession() {
@@ -60,7 +62,7 @@ async function startSession() {
   setBusy(true);
   setStatus("connecting", "接続を準備しています。", "接続中");
 
-  const username = usernameInput.value.trim().replace(/^@/, "");
+  const username = cleanUsername(usernameInput.value);
 
   try {
     const response = await fetch("/api/session", {
@@ -73,6 +75,7 @@ async function startSession() {
 
     activateSession(body.id, username);
     rememberRecentId(username);
+    refreshRecentProfile(username);
   } catch (error) {
     closeCurrent({ forget: true });
     setStatus("stopped", error.message, "未接続");
@@ -91,8 +94,9 @@ async function restoreSavedSession() {
       clearSavedSession();
       return;
     }
-    activateSession(saved.id, saved.username || "");
-    renderSnapshot(await response.json());
+    const snapshot = await response.json();
+    activateSession(saved.id, saved.username || snapshot.username || "");
+    renderSnapshot(snapshot);
   } catch {
     setStatus("connecting", "保存済みの計測へ復帰待ちです。", "復帰待ち");
   }
@@ -101,7 +105,7 @@ async function restoreSavedSession() {
 function activateSession(sessionId, username) {
   activeSession = sessionId;
   if (username) usernameInput.value = username;
-  saveActiveSession(sessionId, usernameInput.value.trim().replace(/^@/, ""));
+  saveActiveSession(sessionId, cleanUsername(usernameInput.value));
   exportLink.href = `/api/session/${activeSession}/export.csv`;
   exportLink.classList.remove("disabled");
   exportLink.removeAttribute("aria-disabled");
@@ -203,33 +207,89 @@ function clearSavedSession() {
   localStorage.removeItem(STORAGE_KEY);
 }
 
-function rememberRecentId(username) {
-  const cleaned = username.trim().replace(/^@/, "");
+function rememberRecentId(username, displayName = "", options = {}) {
+  const cleaned = cleanUsername(username);
   if (!cleaned) return;
-  const ids = readRecentIds().filter((id) => id.toLowerCase() !== cleaned.toLowerCase());
-  ids.unshift(cleaned);
-  localStorage.setItem(RECENT_IDS_KEY, JSON.stringify(ids.slice(0, MAX_RECENT_IDS)));
+
+  const moveToTop = options.moveToTop !== false;
+  const display = cleanRecentDisplayName(displayName, cleaned);
+  const entries = readRecentIds();
+  const existingIndex = entries.findIndex((entry) => entry.id.toLowerCase() === cleaned.toLowerCase());
+  const existing = existingIndex >= 0 ? entries[existingIndex] : null;
+  const nextDisplayName = display || existing?.displayName || "";
+  const nextEntry = {
+    id: cleaned,
+    displayName: nextDisplayName,
+    updatedAt: !existing || nextDisplayName !== existing.displayName ? Date.now() : existing.updatedAt
+  };
+
+  let next = entries.filter((entry) => entry.id.toLowerCase() !== cleaned.toLowerCase());
+  if (moveToTop) {
+    next.unshift(nextEntry);
+  } else if (existingIndex >= 0) {
+    next.splice(existingIndex, 0, nextEntry);
+  } else {
+    next.unshift(nextEntry);
+  }
+  next = next.slice(0, MAX_RECENT_IDS);
+
+  if (JSON.stringify(entries) === JSON.stringify(next)) return;
+  writeRecentIds(next);
+  renderRecentIds();
+}
+
+function removeRecentId(username) {
+  const cleaned = cleanUsername(username);
+  const next = readRecentIds().filter((entry) => entry.id.toLowerCase() !== cleaned.toLowerCase());
+  writeRecentIds(next);
   renderRecentIds();
 }
 
 function readRecentIds() {
   try {
     const value = JSON.parse(localStorage.getItem(RECENT_IDS_KEY) || "[]");
-    return Array.isArray(value) ? value.filter(Boolean) : [];
+    if (!Array.isArray(value)) return [];
+    return value.map(normalizeRecentEntry).filter(Boolean).slice(0, MAX_RECENT_IDS);
   } catch {
     return [];
   }
 }
 
+function writeRecentIds(entries) {
+  localStorage.setItem(RECENT_IDS_KEY, JSON.stringify(entries.slice(0, MAX_RECENT_IDS)));
+}
+
+function normalizeRecentEntry(entry) {
+  if (typeof entry === "string") {
+    const id = cleanUsername(entry);
+    return id ? { id, displayName: "", updatedAt: 0 } : null;
+  }
+  const id = cleanUsername(entry?.id || entry?.username);
+  if (!id) return null;
+  return {
+    id,
+    displayName: cleanRecentDisplayName(entry.displayName || entry.name || "", id),
+    updatedAt: Number(entry.updatedAt || 0)
+  };
+}
+
 function renderRecentIds() {
-  const ids = readRecentIds();
-  recentIds.innerHTML = ids.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
-  if (!ids.length) {
+  const entries = readRecentIds();
+  recentIds.innerHTML = entries.map((entry) => `
+    <option value="${escapeHtml(entry.id)}" label="${escapeHtml(entry.displayName || `@${entry.id}`)}"></option>
+  `).join("");
+  if (!entries.length) {
     recentIdList.innerHTML = "";
     return;
   }
-  recentIdList.innerHTML = ids.map((id) => `
-    <button type="button" data-recent-id="${escapeHtml(id)}">@${escapeHtml(id)}</button>
+  recentIdList.innerHTML = entries.map((entry) => `
+    <div class="recent-item">
+      <button type="button" class="recent-main" data-recent-id="${escapeHtml(entry.id)}">
+        ${entry.displayName ? `<span class="recent-name">${escapeHtml(entry.displayName)}</span>` : ""}
+        <span class="recent-id">@${escapeHtml(entry.id)}</span>
+      </button>
+      <button type="button" class="recent-remove" data-remove-recent="${escapeHtml(entry.id)}" aria-label="${escapeHtml(entry.id)}を履歴から削除" title="履歴から削除">×</button>
+    </div>
   `).join("");
   recentIdList.querySelectorAll("[data-recent-id]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -237,6 +297,43 @@ function renderRecentIds() {
       usernameInput.focus();
     });
   });
+  recentIdList.querySelectorAll("[data-remove-recent]").forEach((button) => {
+    button.addEventListener("click", () => removeRecentId(button.dataset.removeRecent));
+  });
+}
+
+function refreshMissingRecentProfiles() {
+  readRecentIds()
+    .filter((entry) => !entry.displayName)
+    .slice(0, MAX_RECENT_IDS)
+    .forEach((entry) => refreshRecentProfile(entry.id));
+}
+
+async function refreshRecentProfile(username) {
+  const cleaned = cleanUsername(username);
+  if (!cleaned || pendingProfileLookups.has(cleaned.toLowerCase())) return;
+  pendingProfileLookups.add(cleaned.toLowerCase());
+  try {
+    const response = await fetch(`/api/profile/${encodeURIComponent(cleaned)}`, { cache: "no-store" });
+    const body = await response.json();
+    if (body?.displayName) {
+      rememberRecentId(body.username || cleaned, body.displayName, { moveToTop: false });
+    }
+  } catch {
+    // 表示名の取得に失敗しても、ID履歴はそのまま使えるようにします。
+  } finally {
+    pendingProfileLookups.delete(cleaned.toLowerCase());
+  }
+}
+
+function cleanUsername(value) {
+  return String(value || "").trim().replace(/^@/, "");
+}
+
+function cleanRecentDisplayName(value, username) {
+  const text = String(value || "").trim().replace(/^@/, "");
+  if (!text || text.toLowerCase() === cleanUsername(username).toLowerCase()) return "";
+  return text;
 }
 
 function setupPanelToggles() {
@@ -283,6 +380,9 @@ function setBusy(isBusy) {
 
 function renderSnapshot(snapshot) {
   latestSnapshot = snapshot;
+  if (snapshot.username) {
+    rememberRecentId(snapshot.username, snapshot.displayName, { moveToTop: false });
+  }
   setStatus(snapshot.status, snapshot.message || statusMessage(snapshot), modeLabel(snapshot));
   renderMetrics(snapshot);
   renderComments(snapshot.comments || []);

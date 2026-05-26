@@ -49,6 +49,7 @@ class LiveSession extends EventEmitter {
       estimatedWatchSeconds: 0
     };
     this.notice = "";
+    this.displayName = username;
     this.connection = null;
     this.lastAccessAt = Date.now();
     this.initialDataUntil = 0;
@@ -67,6 +68,7 @@ class LiveSession extends EventEmitter {
       this.status = "connecting";
       this.broadcast("status", this.snapshot("TikTok LIVEへ接続中です。"));
       const state = await this.connectLiveWithRetries(connector);
+      this.displayName = displayNameFromRoomInfo(state?.roomInfo || this.connection?.roomInfo, this.username);
       this.status = "live";
       this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
     } catch (error) {
@@ -316,6 +318,7 @@ class LiveSession extends EventEmitter {
     return {
       id: this.id,
       username: this.username,
+      displayName: this.displayName,
       mode: this.mode,
       status: this.status,
       message: message || this.notice,
@@ -424,6 +427,99 @@ async function loadTikTokConnector() {
   }
 }
 
+async function fetchStreamerProfile(username) {
+  const connector = await loadTikTokConnector();
+  if (!connector) {
+    throw new Error("tiktok-live-connector が未導入のため、名前を取得できません。");
+  }
+
+  const connection = new connector.Connection(username, {
+    processInitialData: false,
+    fetchRoomInfoOnConnect: false,
+    enableExtendedGiftInfo: false,
+    enableRequestPolling: false,
+    connectWithUniqueId: false,
+    logFetchFallbackErrors: true,
+    webClientOptions: { timeout: 10000 },
+    websocketOptions: { timeout: 10000 },
+    wsClientOptions: { timeout: 10000 }
+  });
+
+  let roomInfo = null;
+  const errors = [];
+  try {
+    if (typeof connection.webClient?.fetchRoomInfoFromHtml === "function") {
+      try {
+        roomInfo = await connection.webClient.fetchRoomInfoFromHtml({ uniqueId: username });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (!roomInfo && typeof connection.webClient?.fetchRoomInfoFromApiLive === "function") {
+      try {
+        roomInfo = await connection.webClient.fetchRoomInfoFromApiLive({ uniqueId: username });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (!roomInfo && typeof connection.fetchRoomInfo === "function") {
+      try {
+        roomInfo = await connection.fetchRoomInfo();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  } finally {
+    await Promise.resolve(connection.disconnect?.()).catch(() => {});
+  }
+  if (!roomInfo) {
+    throw errors[0] || new Error("表示名を取得できませんでした。");
+  }
+
+  const displayName = displayNameFromRoomInfo(roomInfo, username);
+  return {
+    username,
+    displayName,
+    ok: displayNameKey(displayName) !== displayNameKey(username),
+    fetchedAt: Date.now()
+  };
+}
+
+function displayNameFromRoomInfo(roomInfo, fallback) {
+  const candidates = [
+    roomInfo?.user?.nickname,
+    roomInfo?.owner?.nickname,
+    roomInfo?.ownerUser?.nickname,
+    roomInfo?.streamer?.nickname,
+    roomInfo?.data?.user?.nickname,
+    roomInfo?.data?.owner?.nickname,
+    roomInfo?.data?.ownerUser?.nickname,
+    roomInfo?.data?.streamer?.nickname,
+    roomInfo?.data?.userInfo?.user?.nickname,
+    roomInfo?.data?.userInfo?.nickname,
+    roomInfo?.data?.liveRoomUserInfo?.user?.nickname,
+    roomInfo?.data?.liveRoomUserInfo?.owner?.nickname,
+    roomInfo?.liveRoomUserInfo?.user?.nickname,
+    roomInfo?.liveRoomUserInfo?.owner?.nickname
+  ];
+  const direct = candidates.find((value) => isUsableDisplayName(value));
+  if (direct) return cleanDisplayName(direct);
+
+  const nested = findNestedDisplayName(roomInfo);
+  return nested ? cleanDisplayName(nested) : cleanDisplayName(fallback);
+}
+
+function findNestedDisplayName(value, depth = 0, seen = new Set()) {
+  if (!value || typeof value !== "object" || depth > 4 || seen.has(value)) return "";
+  seen.add(value);
+  if (isUsableDisplayName(value.nickname)) return value.nickname;
+  for (const child of Object.values(value)) {
+    const nested = findNestedDisplayName(child, depth + 1, seen);
+    if (nested) return nested;
+  }
+  return "";
+}
+
 function personFromEvent(data) {
   const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || "unknown";
   const userId = data.user?.uniqueId || data.uniqueId || data.user?.userId || nickname;
@@ -475,6 +571,11 @@ function isFollowEvent(data) {
 
 function cleanDisplayName(value) {
   return String(value || "unknown").trim().replace(/^@/, "") || "unknown";
+}
+
+function isUsableDisplayName(value) {
+  const text = String(value || "").trim();
+  return Boolean(text && text !== "unknown" && !/^\d+$/.test(text));
 }
 
 function cleanUserId(value) {
@@ -593,6 +694,26 @@ const server = createServer(async (request, response) => {
       sessions: sessions.size,
       uptimeSeconds: Math.floor(getUptimeSeconds())
     });
+    return;
+  }
+
+  const profileMatch = url.pathname.match(/^\/api\/profile\/([^/]+)$/);
+  if (request.method === "GET" && profileMatch) {
+    try {
+      const username = normalizeTikTokUsername(decodeURIComponent(profileMatch[1]));
+      if (!isValidUsername(username)) {
+        sendJson(response, 400, { error: "TikTok IDは2から32文字の英数字、_、.で入力してください。" });
+        return;
+      }
+      sendJson(response, 200, await fetchStreamerProfile(username));
+    } catch (error) {
+      sendJson(response, 502, {
+        username: normalizeTikTokUsername(decodeURIComponent(profileMatch[1] || "")),
+        displayName: normalizeTikTokUsername(decodeURIComponent(profileMatch[1] || "")),
+        ok: false,
+        error: diagnoseConnectError(error)
+      });
+    }
     return;
   }
 
