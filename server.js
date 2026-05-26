@@ -14,6 +14,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
+let connectionPauseUntil = 0;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -49,6 +50,7 @@ class LiveSession extends EventEmitter {
       estimatedWatchSeconds: 0
     };
     this.notice = "";
+    this.errorCode = "";
     this.displayName = username;
     this.connection = null;
     this.lastAccessAt = Date.now();
@@ -72,7 +74,7 @@ class LiveSession extends EventEmitter {
       this.status = "live";
       this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
     } catch (error) {
-      this.fail(`実接続失敗: ${diagnoseConnectError(error)}`);
+      this.fail(`実接続失敗: ${diagnoseConnectError(error)}`, isRateLimitError(error) ? "rate_limited" : "");
     }
   }
 
@@ -119,6 +121,9 @@ class LiveSession extends EventEmitter {
         this.initialDataUntil = 0;
         lastError = error;
         await Promise.resolve(connection.disconnect?.()).catch(() => {});
+        if (isRateLimitError(error)) {
+          break;
+        }
         if (index < attempts.length - 1) {
           await delay(1200 + index * 1000);
         }
@@ -321,6 +326,7 @@ class LiveSession extends EventEmitter {
       displayName: this.displayName,
       mode: this.mode,
       status: this.status,
+      errorCode: this.errorCode,
       message: message || this.notice,
       startedAt: this.startedAt,
       stoppedAt: this.stoppedAt,
@@ -364,9 +370,13 @@ class LiveSession extends EventEmitter {
     this.lastAccessAt = Date.now();
   }
 
-  fail(message) {
+  fail(message, errorCode = "") {
     this.mode = "error";
     this.status = "stopped";
+    this.errorCode = errorCode;
+    if (errorCode === "rate_limited") {
+      connectionPauseUntil = Math.max(connectionPauseUntil, nextConnectionWindow(Date.now()));
+    }
     this.stoppedAt = Date.now();
     this.broadcast("status", this.snapshot(message));
   }
@@ -595,6 +605,22 @@ function shortError(error) {
   return String(error?.message || error || "不明なエラー").slice(0, 180);
 }
 
+function isRateLimitError(error) {
+  const text = [
+    error?.message,
+    error?.info,
+    error?.exception?.message,
+    error?.cause?.message,
+    typeof error === "string" ? error : ""
+  ].filter(Boolean).join(" ");
+  return /rate.?limit|too many connections|rate_limit_account_day/i.test(text);
+}
+
+function nextConnectionWindow(nowMs) {
+  const now = new Date(nowMs);
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 30).getTime();
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -609,6 +635,9 @@ function diagnoseConnectError(error) {
   ].filter(Boolean).join(" / ");
   const text = raw || "不明なエラー";
 
+  if (isRateLimitError(error) || /rate.?limit|too many connections|rate_limit_account_day/i.test(text)) {
+    return `${shortError(text)} TikTok側の接続回数制限です。今日は新しい接続を増やさず、時間を空けてください。`;
+  }
   if (/not live|offline|room.*not|user.*not|invalid/i.test(text)) {
     return `${shortError(text)} アカウント名またはLIVE状態の判定で失敗しています。`;
   }
@@ -676,6 +705,14 @@ const server = createServer(async (request, response) => {
       const username = normalizeTikTokUsername(body.username);
       if (!isValidUsername(username)) {
         sendJson(response, 400, { error: "TikTok IDは2から32文字の英数字、_、.で入力してください。" });
+        return;
+      }
+      if (connectionPauseUntil > Date.now()) {
+        sendJson(response, 429, {
+          error: `TikTok側の接続回数制限中です。${new Date(connectionPauseUntil).toLocaleTimeString("ja-JP")}頃まで新しい接続を止めています。`,
+          errorCode: "rate_limited",
+          retryAt: connectionPauseUntil
+        });
         return;
       }
       const session = new LiveSession(username);

@@ -27,7 +27,9 @@ const LEGACY_STORAGE_KEY = "tiktok-live-active-session";
 const SESSIONS_KEY = "tiktok-live-active-sessions";
 const RECENT_IDS_KEY = "tiktok-live-recent-ids";
 const PANEL_PREFS_KEY = "tiktok-live-panel-prefs";
+const RATE_LIMIT_KEY = "tiktok-live-rate-limit-until";
 const MAX_RECENT_IDS = 8;
+const MAX_ACTIVE_SESSIONS = 3;
 
 const sessions = new Map();
 const eventSources = new Map();
@@ -72,9 +74,20 @@ async function startSession() {
   setStatus("connecting", "接続を準備しています。", "追加中");
 
   const username = cleanUsername(usernameInput.value);
+  const cooldown = readRateLimitCooldown();
+  if (cooldown.active) {
+    setStatus("stopped", `TikTok側の接続制限中です。${formatClock(cooldown.until)}頃まで新しい接続を止めます。`, "制限中");
+    setBusy(false);
+    return;
+  }
   const existing = findSessionByUsername(username);
   if (existing) {
     selectSession(existing.id);
+    setBusy(false);
+    return;
+  }
+  if (activeSessionCount() >= MAX_ACTIVE_SESSIONS) {
+    setStatus("stopped", `同時監視は最大${MAX_ACTIVE_SESSIONS}件までに制限しています。不要な配信を停止してから追加してください。`, "追加停止");
     setBusy(false);
     return;
   }
@@ -86,7 +99,12 @@ async function startSession() {
       body: JSON.stringify({ username })
     });
     const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "接続を開始できませんでした。");
+    if (!response.ok) {
+      if (body.errorCode === "rate_limited" || isRateLimitMessage(body.error)) {
+        setRateLimitCooldown(body.error, body.retryAt);
+      }
+      throw new Error(body.error || "接続を開始できませんでした。");
+    }
 
     activateSession(body.id, username, { select: true });
     rememberRecentId(username);
@@ -176,6 +194,7 @@ function scheduleReconnect() {
 }
 
 async function reconnectActiveSessions() {
+  if (readRateLimitCooldown().active) return;
   if (!sessions.size) {
     await restoreSavedSessions();
     return;
@@ -185,8 +204,11 @@ async function reconnectActiveSessions() {
     try {
       const response = await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" });
       if (!response.ok) throw new Error("セッション切れ");
-      renderSnapshot(await response.json());
-      if (!eventSources.has(sessionId)) openEventStream(sessionId);
+      const snapshot = await response.json();
+      renderSnapshot(snapshot);
+      if (shouldKeepSessionConnected(snapshot) && !eventSources.has(sessionId)) {
+        openEventStream(sessionId);
+      }
     } catch {
       if (selectedSessionId === sessionId) {
         setStatus("connecting", "復帰待ちです。サーバーが起動中の場合は少し待ってください。", "復帰待ち");
@@ -247,6 +269,37 @@ function selectSession(sessionId, options = {}) {
 function findSessionByUsername(username) {
   const cleaned = cleanUsername(username).toLowerCase();
   return [...sessions.values()].find((session) => session.username.toLowerCase() === cleaned);
+}
+
+function activeSessionCount() {
+  return [...sessions.values()].filter((session) => shouldKeepSessionConnected(session.snapshot)).length;
+}
+
+function shouldKeepSessionConnected(snapshot) {
+  return !snapshot || (!snapshot.stoppedAt && snapshot.status !== "ended" && snapshot.errorCode !== "rate_limited");
+}
+
+function isRateLimitMessage(message) {
+  return /rate.?limit|too many connections|rate_limit_account_day|接続回数制限/i.test(String(message || ""));
+}
+
+function readRateLimitCooldown() {
+  const until = Number(localStorage.getItem(RATE_LIMIT_KEY) || 0);
+  return { active: until > Date.now(), until };
+}
+
+function setRateLimitCooldown(message = "", retryAt = 0) {
+  const given = Number(retryAt || 0);
+  if (given > Date.now()) {
+    localStorage.setItem(RATE_LIMIT_KEY, String(given));
+    return given;
+  }
+  const now = new Date();
+  const until = /account_day/i.test(String(message))
+    ? new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 30).getTime()
+    : Date.now() + 30 * 60 * 1000;
+  localStorage.setItem(RATE_LIMIT_KEY, String(until));
+  return until;
 }
 
 function saveActiveSessions() {
@@ -464,6 +517,9 @@ function setBusy(isBusy) {
 
 function renderSnapshot(snapshot) {
   if (!snapshot?.id) return;
+  if (snapshot.errorCode === "rate_limited" || isRateLimitMessage(snapshot.message)) {
+    setRateLimitCooldown(snapshot.message);
+  }
   const session = sessions.get(snapshot.id) || {
     id: snapshot.id,
     username: snapshot.username || "",
@@ -477,7 +533,7 @@ function renderSnapshot(snapshot) {
   if (snapshot.username) {
     rememberRecentId(snapshot.username, snapshot.displayName, { moveToTop: false });
   }
-  if (snapshot.stoppedAt || snapshot.status === "ended") {
+  if (!shouldKeepSessionConnected(snapshot)) {
     const source = eventSources.get(snapshot.id);
     if (source) source.close();
     eventSources.delete(snapshot.id);
@@ -502,7 +558,11 @@ function renderSelectedSession() {
     renderGiftHistory([]);
     return;
   }
-  setStatus(snapshot.status, snapshot.message || statusMessage(snapshot), modeLabel(snapshot));
+  const cooldown = readRateLimitCooldown();
+  const message = snapshot.errorCode === "rate_limited" && cooldown.active
+    ? `${snapshot.message || statusMessage(snapshot)} 新規追加は${formatClock(cooldown.until)}頃まで止めています。`
+    : snapshot.message || statusMessage(snapshot);
+  setStatus(snapshot.status, message, modeLabel(snapshot));
   renderMetrics(snapshot);
   renderComments(snapshot.comments || []);
   renderWatchers(snapshot.topWatchers || []);
@@ -515,7 +575,7 @@ function renderSelectedSession() {
 function updateSelectedControls() {
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   const snapshot = selected?.snapshot;
-  const canStop = Boolean(selected && !snapshot?.stoppedAt && snapshot?.status !== "ended");
+  const canStop = Boolean(selected && shouldKeepSessionConnected(snapshot));
   stopBtn.disabled = !canStop;
   if (selected) {
     exportLink.href = `/api/session/${selected.id}/export.csv`;
@@ -694,6 +754,7 @@ function renderName(user) {
 }
 
 function modeLabel(snapshot) {
+  if (snapshot?.errorCode === "rate_limited") return "制限中";
   if (snapshot?.status === "ended") return "終了";
   if (snapshot?.mode === "live") return "実接続";
   if (snapshot?.mode === "error") return "接続失敗";
