@@ -20,19 +20,23 @@ const watcherList = document.querySelector("#watcherList");
 const silentList = document.querySelector("#silentList");
 const recentIds = document.querySelector("#recentIds");
 const recentIdList = document.querySelector("#recentIdList");
+const sessionList = document.querySelector("#sessionList");
 const panelToggles = [...document.querySelectorAll("[data-panel-toggle]")];
 
-const STORAGE_KEY = "tiktok-live-active-session";
+const LEGACY_STORAGE_KEY = "tiktok-live-active-session";
+const SESSIONS_KEY = "tiktok-live-active-sessions";
 const RECENT_IDS_KEY = "tiktok-live-recent-ids";
 const PANEL_PREFS_KEY = "tiktok-live-panel-prefs";
 const MAX_RECENT_IDS = 8;
 
-let eventSource = null;
-let activeSession = null;
-let latestSnapshot = null;
+const sessions = new Map();
+const eventSources = new Map();
+const pendingProfileLookups = new Set();
+
+let selectedSessionId = null;
 let clockTimer = null;
 let reconnectTimer = null;
-const pendingProfileLookups = new Set();
+let snapshotFetchTick = 0;
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -40,29 +44,40 @@ form.addEventListener("submit", async (event) => {
 });
 
 stopBtn.addEventListener("click", async () => {
-  if (!activeSession) return;
-  await fetch(`/api/session/${activeSession}/stop`, { method: "POST" });
-  clearSavedSession();
+  if (!selectedSessionId) return;
+  const sessionId = selectedSessionId;
+  try {
+    await fetch(`/api/session/${sessionId}/stop`, { method: "POST" });
+  } finally {
+    closeSession(sessionId, { forget: true });
+  }
 });
 
-window.addEventListener("pageshow", restoreSavedSession);
+window.addEventListener("pageshow", restoreSavedSessions);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) reconnectActiveSession();
+  if (!document.hidden) reconnectActiveSessions();
 });
-window.addEventListener("focus", reconnectActiveSession);
-window.addEventListener("online", reconnectActiveSession);
+window.addEventListener("focus", reconnectActiveSessions);
+window.addEventListener("online", reconnectActiveSessions);
 
 setupPanelToggles();
 renderRecentIds();
 refreshMissingRecentProfiles();
-restoreSavedSession();
+restoreSavedSessions();
+renderSessionCards();
+renderSelectedSession();
 
 async function startSession() {
-  closeCurrent({ forget: false });
   setBusy(true);
-  setStatus("connecting", "接続を準備しています。", "接続中");
+  setStatus("connecting", "接続を準備しています。", "追加中");
 
   const username = cleanUsername(usernameInput.value);
+  const existing = findSessionByUsername(username);
+  if (existing) {
+    selectSession(existing.id);
+    setBusy(false);
+    return;
+  }
 
   try {
     const response = await fetch("/api/session", {
@@ -73,63 +88,81 @@ async function startSession() {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "接続を開始できませんでした。");
 
-    activateSession(body.id, username);
+    activateSession(body.id, username, { select: true });
     rememberRecentId(username);
     refreshRecentProfile(username);
   } catch (error) {
-    closeCurrent({ forget: true });
     setStatus("stopped", error.message, "未接続");
   } finally {
     setBusy(false);
   }
 }
 
-async function restoreSavedSession() {
-  const saved = readSavedSession();
-  if (!saved?.id || activeSession === saved.id) return;
+async function restoreSavedSessions() {
+  const savedSessions = readSavedSessions();
+  if (!savedSessions.length) return;
 
-  try {
-    const response = await fetch(`/api/session/${saved.id}/snapshot`, { cache: "no-store" });
-    if (!response.ok) {
-      clearSavedSession();
-      return;
+  for (const saved of savedSessions) {
+    if (!saved?.id || sessions.has(saved.id)) continue;
+    try {
+      const response = await fetch(`/api/session/${saved.id}/snapshot`, { cache: "no-store" });
+      if (!response.ok) continue;
+      const snapshot = await response.json();
+      activateSession(saved.id, saved.username || snapshot.username || "", {
+        select: saved.id === selectedSessionId || !selectedSessionId
+      });
+      renderSnapshot(snapshot);
+    } catch {
+      if (!selectedSessionId) {
+        setStatus("connecting", "保存済みの計測へ復帰待ちです。", "復帰待ち");
+      }
     }
-    const snapshot = await response.json();
-    activateSession(saved.id, saved.username || snapshot.username || "");
-    renderSnapshot(snapshot);
-  } catch {
-    setStatus("connecting", "保存済みの計測へ復帰待ちです。", "復帰待ち");
   }
+  saveActiveSessions();
+  renderSelectedSession();
 }
 
-function activateSession(sessionId, username) {
-  activeSession = sessionId;
-  if (username) usernameInput.value = username;
-  saveActiveSession(sessionId, cleanUsername(usernameInput.value));
-  exportLink.href = `/api/session/${activeSession}/export.csv`;
-  exportLink.classList.remove("disabled");
-  exportLink.removeAttribute("aria-disabled");
-  stopBtn.disabled = false;
-  openEventStream();
+function activateSession(sessionId, username, options = {}) {
+  const existing = sessions.get(sessionId) || {};
+  const session = {
+    id: sessionId,
+    username: cleanUsername(username || existing.username || ""),
+    snapshot: existing.snapshot || null,
+    createdAt: existing.createdAt || Date.now()
+  };
+  sessions.set(sessionId, session);
+  if (options.select !== false) {
+    selectSession(sessionId, { save: false });
+  }
+  openEventStream(sessionId);
   startSnapshotClock();
+  saveActiveSessions();
+  renderSessionCards();
+  updateSelectedControls();
 }
 
-function openEventStream() {
-  if (!activeSession) return;
-  if (eventSource) eventSource.close();
-  eventSource = new EventSource(`/api/session/${activeSession}/events`);
-  eventSource.addEventListener("status", (event) => renderSnapshot(JSON.parse(event.data)));
-  eventSource.addEventListener("comment", (event) => {
+function openEventStream(sessionId) {
+  if (!sessionId || eventSources.has(sessionId)) return;
+
+  const source = new EventSource(`/api/session/${sessionId}/events`);
+  eventSources.set(sessionId, source);
+  source.addEventListener("status", (event) => renderSnapshot(JSON.parse(event.data)));
+  source.addEventListener("comment", (event) => {
     const payload = JSON.parse(event.data);
     renderSnapshot(payload.snapshot);
   });
-  eventSource.addEventListener("gift", (event) => {
+  source.addEventListener("gift", (event) => {
     const payload = JSON.parse(event.data);
     renderSnapshot(payload.snapshot);
   });
-  eventSource.onerror = () => {
-    if (!activeSession) return;
-    setStatus("connecting", "表示だけ再接続中です。集計はサーバー側で継続します。", "再接続中");
+  source.onerror = () => {
+    source.close();
+    eventSources.delete(sessionId);
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    if (selectedSessionId === sessionId) {
+      setStatus("connecting", "表示だけ再接続中です。集計はサーバー側で継続します。", "再接続中");
+    }
     scheduleReconnect();
   };
 }
@@ -138,73 +171,124 @@ function scheduleReconnect() {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    reconnectActiveSession();
+    reconnectActiveSessions();
   }, 5000);
 }
 
-async function reconnectActiveSession() {
-  if (!activeSession) {
-    await restoreSavedSession();
+async function reconnectActiveSessions() {
+  if (!sessions.size) {
+    await restoreSavedSessions();
     return;
   }
-  try {
-    const response = await fetch(`/api/session/${activeSession}/snapshot`, { cache: "no-store" });
-    if (!response.ok) throw new Error("セッション切れ");
-    renderSnapshot(await response.json());
-    if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
-      openEventStream();
+
+  await Promise.all([...sessions.keys()].map(async (sessionId) => {
+    try {
+      const response = await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" });
+      if (!response.ok) throw new Error("セッション切れ");
+      renderSnapshot(await response.json());
+      if (!eventSources.has(sessionId)) openEventStream(sessionId);
+    } catch {
+      if (selectedSessionId === sessionId) {
+        setStatus("connecting", "復帰待ちです。サーバーが起動中の場合は少し待ってください。", "復帰待ち");
+      }
     }
-  } catch {
-    setStatus("connecting", "復帰待ちです。サーバーが起動中の場合は少し待ってください。", "復帰待ち");
-  }
+  }));
 }
 
 function startSnapshotClock() {
-  if (clockTimer) clearInterval(clockTimer);
+  if (clockTimer) return;
   clockTimer = setInterval(async () => {
-    if (!latestSnapshot || latestSnapshot.stoppedAt || !activeSession) return;
-    latestSnapshot.elapsedSeconds = Math.floor((Date.now() - latestSnapshot.startedAt) / 1000);
-    renderMetrics(latestSnapshot);
-    if (document.hidden) return;
-    try {
-      const snapshot = await (await fetch(`/api/session/${activeSession}/snapshot`, { cache: "no-store" })).json();
-      renderSnapshot(snapshot);
-    } catch {
-      renderMetrics(latestSnapshot);
+    if (!sessions.size) return;
+    snapshotFetchTick += 1;
+    for (const session of sessions.values()) {
+      if (!session.snapshot || session.snapshot.stoppedAt) continue;
+      session.snapshot.elapsedSeconds = Math.floor((Date.now() - session.snapshot.startedAt) / 1000);
     }
+    renderSessionCards();
+    renderSelectedSession();
+    if (document.hidden || snapshotFetchTick % 5 !== 0) return;
+    await Promise.all([...sessions.keys()].map(async (sessionId) => {
+      try {
+        const snapshot = await (await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" })).json();
+        renderSnapshot(snapshot);
+      } catch {
+        renderSessionCards();
+      }
+    }));
   }, 1000);
 }
 
-function closeCurrent({ forget } = { forget: false }) {
-  if (eventSource) eventSource.close();
-  eventSource = null;
-  activeSession = null;
-  latestSnapshot = null;
-  if (clockTimer) clearInterval(clockTimer);
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  clockTimer = null;
-  reconnectTimer = null;
-  exportLink.removeAttribute("href");
-  exportLink.classList.add("disabled");
-  exportLink.setAttribute("aria-disabled", "true");
-  stopBtn.disabled = true;
-  if (forget) clearSavedSession();
+function closeSession(sessionId, { forget } = { forget: false }) {
+  const source = eventSources.get(sessionId);
+  if (source) source.close();
+  eventSources.delete(sessionId);
+  sessions.delete(sessionId);
+
+  if (selectedSessionId === sessionId) {
+    selectedSessionId = sessions.keys().next().value || null;
+  }
+  if (!sessions.size && clockTimer) {
+    clearInterval(clockTimer);
+    clockTimer = null;
+  }
+  if (forget) saveActiveSessions();
+  renderSessionCards();
+  renderSelectedSession();
 }
 
-function saveActiveSession(id, username) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ id, username, savedAt: Date.now() }));
+function selectSession(sessionId, options = {}) {
+  if (!sessions.has(sessionId)) return;
+  selectedSessionId = sessionId;
+  if (options.save !== false) saveActiveSessions();
+  renderSessionCards();
+  renderSelectedSession();
 }
 
-function readSavedSession() {
+function findSessionByUsername(username) {
+  const cleaned = cleanUsername(username).toLowerCase();
+  return [...sessions.values()].find((session) => session.username.toLowerCase() === cleaned);
+}
+
+function saveActiveSessions() {
+  const items = [...sessions.values()].map((session) => ({
+    id: session.id,
+    username: session.username || session.snapshot?.username || "",
+    selected: session.id === selectedSessionId,
+    savedAt: Date.now()
+  }));
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(items));
+  if (selectedSessionId) {
+    const selected = sessions.get(selectedSessionId);
+    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({
+      id: selectedSessionId,
+      username: selected?.username || "",
+      savedAt: Date.now()
+    }));
+  } else {
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  }
+}
+
+function readSavedSessions() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    const value = JSON.parse(localStorage.getItem(SESSIONS_KEY) || "[]");
+    if (Array.isArray(value) && value.length) {
+      const selected = value.find((item) => item.selected);
+      if (selected) selectedSessionId = selected.id;
+      return value.filter((item) => item?.id);
+    }
+  } catch {}
+
+  try {
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || "null");
+    return legacy?.id ? [legacy] : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
 function clearSavedSession() {
-  localStorage.removeItem(STORAGE_KEY);
+  saveActiveSessions();
 }
 
 function rememberRecentId(username, displayName = "", options = {}) {
@@ -379,9 +463,44 @@ function setBusy(isBusy) {
 }
 
 function renderSnapshot(snapshot) {
-  latestSnapshot = snapshot;
+  if (!snapshot?.id) return;
+  const session = sessions.get(snapshot.id) || {
+    id: snapshot.id,
+    username: snapshot.username || "",
+    createdAt: Date.now()
+  };
+  session.username = snapshot.username || session.username;
+  session.snapshot = snapshot;
+  sessions.set(snapshot.id, session);
+
+  if (!selectedSessionId) selectedSessionId = snapshot.id;
   if (snapshot.username) {
     rememberRecentId(snapshot.username, snapshot.displayName, { moveToTop: false });
+  }
+  if (snapshot.stoppedAt || snapshot.status === "ended") {
+    const source = eventSources.get(snapshot.id);
+    if (source) source.close();
+    eventSources.delete(snapshot.id);
+  }
+  saveActiveSessions();
+  renderSessionCards();
+  if (selectedSessionId === snapshot.id) renderSelectedSession();
+}
+
+function renderSelectedSession() {
+  const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
+  const snapshot = selected?.snapshot;
+  updateSelectedControls();
+  if (!snapshot) {
+    setStatus("stopped", sessions.size ? "配信を選択してください。" : "未接続", sessions.size ? "選択待ち" : "待機中");
+    renderMetrics(emptySnapshot());
+    renderComments([]);
+    renderWatchers([]);
+    renderSilentLongWatchers([]);
+    renderUsers([]);
+    renderGifters([]);
+    renderGiftHistory([]);
+    return;
   }
   setStatus(snapshot.status, snapshot.message || statusMessage(snapshot), modeLabel(snapshot));
   renderMetrics(snapshot);
@@ -391,12 +510,63 @@ function renderSnapshot(snapshot) {
   renderUsers(snapshot.topUsers || []);
   renderGifters(snapshot.topGifters || []);
   renderGiftHistory(snapshot.gifts || []);
+}
 
-  if (snapshot.stoppedAt || snapshot.status === "ended") {
-    if (eventSource) eventSource.close();
-    stopBtn.disabled = true;
-    clearSavedSession();
+function updateSelectedControls() {
+  const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
+  const snapshot = selected?.snapshot;
+  const canStop = Boolean(selected && !snapshot?.stoppedAt && snapshot?.status !== "ended");
+  stopBtn.disabled = !canStop;
+  if (selected) {
+    exportLink.href = `/api/session/${selected.id}/export.csv`;
+    exportLink.classList.remove("disabled");
+    exportLink.removeAttribute("aria-disabled");
+  } else {
+    exportLink.removeAttribute("href");
+    exportLink.classList.add("disabled");
+    exportLink.setAttribute("aria-disabled", "true");
   }
+}
+
+function renderSessionCards() {
+  const items = [...sessions.values()]
+    .sort((a, b) => (b.snapshot?.startedAt || b.createdAt) - (a.snapshot?.startedAt || a.createdAt));
+  if (!items.length) {
+    sessionList.innerHTML = `<p class="empty compact">まだ監視中の配信はありません。</p>`;
+    return;
+  }
+  sessionList.innerHTML = items.map((session) => {
+    const snapshot = session.snapshot;
+    const name = snapshot?.displayName && snapshot.displayName.toLowerCase() !== session.username.toLowerCase()
+      ? snapshot.displayName
+      : `@${session.username}`;
+    const isSelected = session.id === selectedSessionId;
+    return `
+      <button type="button" class="session-card ${isSelected ? "selected" : ""}" data-session-id="${escapeHtml(session.id)}">
+        <span class="session-title">${escapeHtml(name)}</span>
+        <span class="session-id">@${escapeHtml(session.username || snapshot?.username || "")}</span>
+        <span class="session-stats">
+          <strong>${formatNumber(snapshot?.commentCount || 0)}</strong> コメント
+          <strong>${formatNumber(snapshot?.giftCount || 0)}</strong> ギフト
+        </span>
+        <span class="session-state">${escapeHtml(modeLabel(snapshot || { mode: "connecting" }))}</span>
+      </button>
+    `;
+  }).join("");
+  sessionList.querySelectorAll("[data-session-id]").forEach((button) => {
+    button.addEventListener("click", () => selectSession(button.dataset.sessionId));
+  });
+}
+
+function emptySnapshot() {
+  return {
+    commentCount: 0,
+    initialEventCount: 0,
+    giftCount: 0,
+    giftDiamondTotal: 0,
+    elapsedSeconds: 0,
+    viewerStats: {}
+  };
 }
 
 function renderMetrics(snapshot) {
@@ -524,8 +694,9 @@ function renderName(user) {
 }
 
 function modeLabel(snapshot) {
-  if (snapshot.mode === "live") return "実接続";
-  if (snapshot.mode === "error") return "接続失敗";
+  if (snapshot?.status === "ended") return "終了";
+  if (snapshot?.mode === "live") return "実接続";
+  if (snapshot?.mode === "error") return "接続失敗";
   return "接続中";
 }
 

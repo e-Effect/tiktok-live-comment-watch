@@ -15,12 +15,20 @@
           <div class="row">
             <input id="username" name="username" list="recentIds" autocomplete="off" placeholder="@username" required>
             <datalist id="recentIds"></datalist>
-            <button type="submit">接続</button>
+            <button type="submit">追加</button>
           </div>
           <div id="recentIdList" class="recent-list" aria-label="最近使ったID"></div>
         </form>
+
+        <section class="monitor-section" aria-label="監視中の配信">
+          <h2>監視中の配信</h2>
+          <div id="sessionList" class="session-list">
+            <p class="empty compact">まだ監視中の配信はありません。</p>
+          </div>
+        </section>
+
         <div class="actions">
-          <button id="stopBtn" type="button" disabled>停止</button>
+          <button id="stopBtn" type="button" disabled>選択中を停止</button>
           <a id="exportLink" class="disabled" aria-disabled="true">CSV出力</a>
         </div>
 
