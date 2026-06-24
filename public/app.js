@@ -5,6 +5,10 @@ const exportLink = document.querySelector("#exportLink");
 const statusDot = document.querySelector("#statusDot");
 const statusText = document.querySelector("#statusText");
 const modeText = document.querySelector("#modeText");
+const serverState = document.querySelector("#serverState");
+const tikTokState = document.querySelector("#tikTokState");
+const lastEventTime = document.querySelector("#lastEventTime");
+const cooldownTime = document.querySelector("#cooldownTime");
 const commentCount = document.querySelector("#commentCount");
 const initialCount = document.querySelector("#initialCount");
 const giftCount = document.querySelector("#giftCount");
@@ -18,16 +22,24 @@ const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
 const watcherList = document.querySelector("#watcherList");
 const silentList = document.querySelector("#silentList");
+const reportList = document.querySelector("#reportList");
 const recentIds = document.querySelector("#recentIds");
 const recentIdList = document.querySelector("#recentIdList");
 const sessionList = document.querySelector("#sessionList");
 const panelToggles = [...document.querySelectorAll("[data-panel-toggle]")];
+const fixedAccountLabel = document.querySelector("#fixedAccountLabel");
+const pinAccountBtn = document.querySelector("#pinAccountBtn");
+const startFixedBtn = document.querySelector("#startFixedBtn");
+const clearFixedBtn = document.querySelector("#clearFixedBtn");
+const singleModeToggle = document.querySelector("#singleModeToggle");
 
 const LEGACY_STORAGE_KEY = "tiktok-live-active-session";
 const SESSIONS_KEY = "tiktok-live-active-sessions";
 const RECENT_IDS_KEY = "tiktok-live-recent-ids";
 const PANEL_PREFS_KEY = "tiktok-live-panel-prefs";
 const RATE_LIMIT_KEY = "tiktok-live-rate-limit-until";
+const FIXED_ACCOUNT_KEY = "tiktok-live-fixed-account";
+const SINGLE_MODE_KEY = "tiktok-live-single-mode";
 const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
 
@@ -63,11 +75,14 @@ window.addEventListener("focus", reconnectActiveSessions);
 window.addEventListener("online", reconnectActiveSessions);
 
 setupPanelToggles();
+setupFixedAccountTools();
 renderRecentIds();
 refreshMissingRecentProfiles();
 restoreSavedSessions();
 renderSessionCards();
 renderSelectedSession();
+refreshServerState();
+setInterval(refreshServerState, 30000);
 
 async function startSession() {
   setBusy(true);
@@ -86,8 +101,9 @@ async function startSession() {
     setBusy(false);
     return;
   }
-  if (activeSessionCount() >= MAX_ACTIVE_SESSIONS) {
-    setStatus("stopped", `同時監視は最大${MAX_ACTIVE_SESSIONS}件までに制限しています。不要な配信を停止してから追加してください。`, "追加停止");
+  const maxSessions = isSingleMode() ? 1 : MAX_ACTIVE_SESSIONS;
+  if (activeSessionCount() >= maxSessions) {
+    setStatus("stopped", `同時監視は最大${maxSessions}件までです。不要な配信を停止してから追加してください。`, "追加停止");
     setBusy(false);
     return;
   }
@@ -473,6 +489,59 @@ function cleanRecentDisplayName(value, username) {
   return text;
 }
 
+function setupFixedAccountTools() {
+  if (singleModeToggle) {
+    singleModeToggle.checked = isSingleMode();
+    singleModeToggle.addEventListener("change", () => {
+      localStorage.setItem(SINGLE_MODE_KEY, singleModeToggle.checked ? "1" : "0");
+      applySingleMode();
+      renderSelectedSession();
+    });
+  }
+  pinAccountBtn?.addEventListener("click", () => {
+    const username = cleanUsername(usernameInput.value || sessions.get(selectedSessionId)?.username || "");
+    if (!username) {
+      setStatus("stopped", "固定するTikTok IDを入力してください。", "固定未設定");
+      return;
+    }
+    localStorage.setItem(FIXED_ACCOUNT_KEY, username);
+    updateFixedAccountUi();
+  });
+  startFixedBtn?.addEventListener("click", async () => {
+    const fixed = readFixedAccount();
+    if (!fixed) {
+      setStatus("stopped", "先に固定アカウントを設定してください。", "固定未設定");
+      return;
+    }
+    usernameInput.value = fixed;
+    await startSession();
+  });
+  clearFixedBtn?.addEventListener("click", () => {
+    localStorage.removeItem(FIXED_ACCOUNT_KEY);
+    updateFixedAccountUi();
+  });
+  updateFixedAccountUi();
+  applySingleMode();
+}
+
+function readFixedAccount() {
+  return cleanUsername(localStorage.getItem(FIXED_ACCOUNT_KEY) || "");
+}
+
+function updateFixedAccountUi() {
+  const fixed = readFixedAccount();
+  if (fixedAccountLabel) fixedAccountLabel.textContent = fixed ? `@${fixed}` : "未設定";
+  if (startFixedBtn) startFixedBtn.disabled = !fixed;
+}
+
+function isSingleMode() {
+  return localStorage.getItem(SINGLE_MODE_KEY) === "1";
+}
+
+function applySingleMode() {
+  document.body.classList.toggle("single-mode", isSingleMode());
+}
+
 function setupPanelToggles() {
   const prefs = readPanelPrefs();
   panelToggles.forEach((toggle) => {
@@ -549,7 +618,9 @@ function renderSelectedSession() {
   updateSelectedControls();
   if (!snapshot) {
     setStatus("stopped", sessions.size ? "配信を選択してください。" : "未接続", sessions.size ? "選択待ち" : "待機中");
+    renderConnectionDetails(null);
     renderMetrics(emptySnapshot());
+    renderReport(null);
     renderComments([]);
     renderWatchers([]);
     renderSilentLongWatchers([]);
@@ -563,7 +634,9 @@ function renderSelectedSession() {
     ? `${snapshot.message || statusMessage(snapshot)} 新規追加は${formatClock(cooldown.until)}頃まで止めています。`
     : snapshot.message || statusMessage(snapshot);
   setStatus(snapshot.status, message, modeLabel(snapshot));
+  renderConnectionDetails(snapshot);
   renderMetrics(snapshot);
+  renderReport(snapshot);
   renderComments(snapshot.comments || []);
   renderWatchers(snapshot.topWatchers || []);
   renderSilentLongWatchers(snapshot.silentLongWatchers || []);
@@ -627,6 +700,66 @@ function emptySnapshot() {
     elapsedSeconds: 0,
     viewerStats: {}
   };
+}
+
+function renderConnectionDetails(snapshot) {
+  const cooldown = readRateLimitCooldown();
+  if (tikTokState) {
+    if (!snapshot) {
+      tikTokState.textContent = "TikTok未接続";
+    } else if (snapshot.errorCode === "rate_limited") {
+      tikTokState.textContent = "TikTok制限中";
+    } else if (snapshot.status === "live") {
+      tikTokState.textContent = "TikTok接続中";
+    } else if (snapshot.status === "ended") {
+      tikTokState.textContent = "TikTok終了";
+    } else {
+      tikTokState.textContent = "TikTok切断/待機";
+    }
+  }
+  if (lastEventTime) {
+    lastEventTime.textContent = snapshot?.lastEventAt
+      ? `最終イベント ${formatRelativeTime(snapshot.lastEventAt)}`
+      : "最終イベント -";
+  }
+  if (cooldownTime) {
+    cooldownTime.textContent = cooldown.active
+      ? `制限解除まで ${formatCountdown(cooldown.until - Date.now())}`
+      : "制限なし";
+  }
+}
+
+async function refreshServerState() {
+  if (!serverState) return;
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    const body = await response.json();
+    if (!response.ok || !body.ok) throw new Error("health");
+    serverState.textContent = `サーバー稼働中 ${formatDuration(body.uptimeSeconds)}・${formatNumber(body.sessions)}接続`;
+  } catch {
+    serverState.textContent = "サーバー確認不可";
+  }
+}
+
+function renderReport(snapshot) {
+  if (!reportList) return;
+  if (!snapshot) {
+    reportList.innerHTML = `<p class="empty">接続すると集計レポートがここに出ます。</p>`;
+    return;
+  }
+  const topCommenter = snapshot.topUsers?.[0];
+  const topGifter = snapshot.topGifters?.[0];
+  const topWatcher = snapshot.topWatchers?.[0];
+  const silentCount = Number(snapshot.silentLongWatchers?.length || 0);
+  const followedCount = Number(snapshot.followedTodayCount || 0);
+  reportList.innerHTML = `
+    <article><span>コメント最多</span><strong>${escapeHtml(topCommenter?.nickname || topCommenter?.userId || "-")}</strong><small>${formatNumber(topCommenter?.comments || 0)}件</small></article>
+    <article><span>ギフト最多</span><strong>${escapeHtml(topGifter?.nickname || topGifter?.userId || "-")}</strong><small>${formatNumber(topGifter?.diamonds || 0)}ダイヤ</small></article>
+    <article><span>最長滞在</span><strong>${escapeHtml(topWatcher?.nickname || topWatcher?.userId || "-")}</strong><small>${formatDuration(topWatcher?.watchSeconds || 0)}</small></article>
+    <article><span>15分以上無言</span><strong>${formatNumber(silentCount)}</strong><small>人</small></article>
+    <article><span>本日フォロー</span><strong>${formatNumber(followedCount)}</strong><small>人</small></article>
+    <article><span>計測時間</span><strong>${formatDuration(snapshot.elapsedSeconds)}</strong><small>${escapeHtml(snapshot.displayName || snapshot.username || "")}</small></article>
+  `;
 }
 
 function renderMetrics(snapshot) {
@@ -779,6 +912,23 @@ function formatDuration(totalSeconds) {
   const s = seconds % 60;
   if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatCountdown(ms) {
+  const seconds = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}時間${m}分`;
+  if (m > 0) return `${m}分`;
+  return `${seconds}秒`;
+}
+
+function formatRelativeTime(timestamp) {
+  const diff = Date.now() - Number(timestamp || 0);
+  if (!timestamp || diff < 0) return "-";
+  if (diff < 60000) return `${Math.floor(diff / 1000)}秒前`;
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}分前`;
+  return formatClock(timestamp);
 }
 
 function formatClock(timestamp) {

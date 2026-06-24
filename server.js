@@ -52,6 +52,8 @@ class LiveSession extends EventEmitter {
     this.notice = "";
     this.errorCode = "";
     this.displayName = username;
+    this.connectedAt = null;
+    this.lastEventAt = null;
     this.connection = null;
     this.lastAccessAt = Date.now();
     this.initialDataUntil = 0;
@@ -72,6 +74,8 @@ class LiveSession extends EventEmitter {
       const state = await this.connectLiveWithRetries(connector);
       this.displayName = displayNameFromRoomInfo(state?.roomInfo || this.connection?.roomInfo, this.username);
       this.status = "live";
+      this.connectedAt = Date.now();
+      this.lastEventAt = this.connectedAt;
       this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
     } catch (error) {
       this.fail(`実接続失敗: ${diagnoseConnectError(error)}`, isRateLimitError(error) ? "rate_limited" : "");
@@ -196,6 +200,7 @@ class LiveSession extends EventEmitter {
   }
 
   markSeen(person, at) {
+    this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at);
     if (!user.hasJoined) {
       user.hasJoined = true;
@@ -206,6 +211,7 @@ class LiveSession extends EventEmitter {
   }
 
   markFollowedToday(person, at) {
+    this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at);
     user.followedToday = true;
     user.followedAt = at;
@@ -215,6 +221,7 @@ class LiveSession extends EventEmitter {
   }
 
   addComment(comment) {
+    this.lastEventAt = Math.max(this.lastEventAt || 0, comment.at);
     this.commentCount += 1;
     if (comment.source === "initial") this.initialCommentCount += 1;
     this.comments.unshift(comment);
@@ -228,6 +235,7 @@ class LiveSession extends EventEmitter {
   }
 
   addGift(gift) {
+    this.lastEventAt = Math.max(this.lastEventAt || 0, gift.at);
     const repeatCount = Math.max(1, Number(gift.repeatCount || 1));
     const diamondCount = Math.max(0, Number(gift.diamondCount || 0));
     const totalDiamonds = repeatCount * diamondCount;
@@ -319,6 +327,7 @@ class LiveSession extends EventEmitter {
     const topGifts = [...this.giftStats.values()]
       .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
       .slice(0, 30);
+    const followedTodayCount = users.filter((user) => user.followedToday).length;
 
     return {
       id: this.id,
@@ -329,6 +338,8 @@ class LiveSession extends EventEmitter {
       errorCode: this.errorCode,
       message: message || this.notice,
       startedAt: this.startedAt,
+      connectedAt: this.connectedAt,
+      lastEventAt: this.lastEventAt,
       stoppedAt: this.stoppedAt,
       elapsedSeconds: Math.floor(((this.stoppedAt || Date.now()) - this.startedAt) / 1000),
       commentCount: this.commentCount,
@@ -344,6 +355,7 @@ class LiveSession extends EventEmitter {
       topWatchers,
       silentLongWatchers,
       topGifts,
+      followedTodayCount,
       viewerStats: this.viewerStats
     };
   }

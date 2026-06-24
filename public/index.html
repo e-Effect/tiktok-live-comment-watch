@@ -27,6 +27,16 @@
           </div>
         </section>
 
+        <section class="fixed-account" aria-label="固定アカウント">
+          <h2>固定アカウント</h2>
+          <p id="fixedAccountLabel" class="fixed-account-label">未設定</p>
+          <div class="fixed-actions">
+            <button id="pinAccountBtn" type="button">このIDを固定</button>
+            <button id="startFixedBtn" type="button">固定IDで開始</button>
+            <button id="clearFixedBtn" type="button">解除</button>
+          </div>
+        </section>
+
         <div class="actions">
           <button id="stopBtn" type="button" disabled>選択中を停止</button>
           <a id="exportLink" class="disabled" aria-disabled="true">CSV出力</a>
@@ -34,6 +44,8 @@
 
         <section class="view-settings" aria-label="表示項目">
           <h2>表示項目</h2>
+          <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
+          <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
           <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
           <label><input type="checkbox" data-panel-toggle="watchers" checked> 滞在時間ランキング</label>
           <label><input type="checkbox" data-panel-toggle="silent" checked> 15分以上・コメントなし</label>
@@ -49,6 +61,12 @@
           <span id="statusText">未接続</span>
           <strong id="modeText">待機中</strong>
         </div>
+        <div class="status-details" aria-label="接続状態">
+          <span id="serverState">サーバー確認中</span>
+          <span id="tikTokState">TikTok未接続</span>
+          <span id="lastEventTime">最終イベント -</span>
+          <span id="cooldownTime">制限なし</span>
+        </div>
 
         <div class="metrics">
           <article><span>コメント数</span><strong id="commentCount">0</strong></article>
@@ -61,6 +79,13 @@
         </div>
 
         <div class="grid">
+          <section data-panel="report" class="report-board">
+            <h2>集計レポート</h2>
+            <div id="reportList" class="report-list">
+              <p class="empty">接続すると集計レポートがここに出ます。</p>
+            </div>
+          </section>
+
           <section data-panel="comments">
             <h2>コメント</h2>
             <div id="commentList" class="list">
