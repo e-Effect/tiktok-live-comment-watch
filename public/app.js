@@ -756,7 +756,7 @@ function renderReport(snapshot) {
     <article><span>コメント最多</span><strong>${escapeHtml(topCommenter?.nickname || topCommenter?.userId || "-")}</strong><small>${formatNumber(topCommenter?.comments || 0)}件</small></article>
     <article><span>ギフト最多</span><strong>${escapeHtml(topGifter?.nickname || topGifter?.userId || "-")}</strong><small>${formatNumber(topGifter?.diamonds || 0)}ダイヤ</small></article>
     <article><span>最長滞在</span><strong>${escapeHtml(topWatcher?.nickname || topWatcher?.userId || "-")}</strong><small>${formatDuration(topWatcher?.watchSeconds || 0)}</small></article>
-    <article><span>15分以上無言</span><strong>${formatNumber(silentCount)}</strong><small>人</small></article>
+    <article><span>現視聴15分無言</span><strong>${formatNumber(silentCount)}</strong><small>人</small></article>
     <article><span>本日フォロー</span><strong>${formatNumber(followedCount)}</strong><small>人</small></article>
     <article><span>計測時間</span><strong>${formatDuration(snapshot.elapsedSeconds)}</strong><small>${escapeHtml(snapshot.displayName || snapshot.username || "")}</small></article>
   `;
@@ -796,7 +796,7 @@ function renderWatchers(users) {
 
 function renderSilentLongWatchers(users) {
   if (!users.length) {
-    silentList.innerHTML = `<p class="empty">まだ対象者はいません。</p>`;
+    silentList.innerHTML = `<p class="empty">視聴者ランキングにいる対象者はいません。</p>`;
     return;
   }
   silentList.innerHTML = users.map((user, index) => `

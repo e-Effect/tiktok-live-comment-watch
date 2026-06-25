@@ -47,8 +47,12 @@ class LiveSession extends EventEmitter {
       current: 0,
       peak: 0,
       knownJoins: 0,
-      estimatedWatchSeconds: 0
+      estimatedWatchSeconds: 0,
+      currentRanked: 0,
+      rankUpdatedAt: null
     };
+    this.currentViewerIds = new Set();
+    this.currentViewerRankUpdatedAt = null;
     this.notice = "";
     this.errorCode = "";
     this.displayName = username;
@@ -174,10 +178,19 @@ class LiveSession extends EventEmitter {
     });
 
     connection.on(events.ROOM_USER || "roomUser", (data) => {
+      const now = Date.now();
       const current = Number(data.viewerCount || data.userCount || 0);
+      let shouldBroadcast = false;
       if (current > 0) {
         this.viewerStats.current = current;
         this.viewerStats.peak = Math.max(this.viewerStats.peak, current);
+        shouldBroadcast = true;
+      }
+      const rankedCount = this.updateCurrentViewerRank(data, now);
+      if (rankedCount !== null) {
+        shouldBroadcast = true;
+      }
+      if (shouldBroadcast) {
         this.broadcast("status", this.snapshot());
       }
     });
@@ -296,12 +309,47 @@ class LiveSession extends EventEmitter {
       hasJoined: false,
       watchSeconds: 0,
       followedToday: false,
-      followedAt: null
+      followedAt: null,
+      isCurrentlyRanked: false,
+      currentViewerRank: null,
+      currentViewerRankedAt: null
     };
     current.nickname = nickname || current.nickname;
     current.firstSeenAt = Math.min(current.firstSeenAt, at);
     current.lastSeenAt = Math.max(current.lastSeenAt, at);
     return current;
+  }
+
+  updateCurrentViewerRank(data, at) {
+    const { hasPayload, entries } = rankedViewerEntries(data);
+    if (!hasPayload) return null;
+
+    for (const user of this.userStats.values()) {
+      user.isCurrentlyRanked = false;
+      user.currentViewerRank = null;
+    }
+    this.currentViewerIds.clear();
+
+    entries.forEach((entry, index) => {
+      const person = personFromRankedViewer(entry);
+      if (!person) return;
+      const user = this.getUserStat(person.userId, person.nickname, at);
+      if (!user.hasJoined) {
+        user.hasJoined = true;
+        this.viewerStats.knownJoins += 1;
+      }
+      user.lastSeenAt = Math.max(user.lastSeenAt, at);
+      user.isCurrentlyRanked = true;
+      user.currentViewerRank = rankedViewerPosition(entry, index);
+      user.currentViewerRankedAt = at;
+      this.currentViewerIds.add(user.userId);
+      this.userStats.set(user.userId, user);
+    });
+
+    this.currentViewerRankUpdatedAt = at;
+    this.viewerStats.currentRanked = this.currentViewerIds.size;
+    this.viewerStats.rankUpdatedAt = at;
+    return this.currentViewerIds.size;
   }
 
   snapshot(message = "") {
@@ -321,8 +369,12 @@ class LiveSession extends EventEmitter {
       .sort((a, b) => b.watchSeconds - a.watchSeconds || b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
     const silentLongWatchers = [...users]
-      .filter((user) => user.watchSeconds >= 15 * 60 && user.comments === 0)
-      .sort((a, b) => b.watchSeconds - a.watchSeconds || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
+      .filter((user) => user.isCurrentlyRanked && user.watchSeconds >= 15 * 60 && user.comments === 0)
+      .sort((a, b) => b.watchSeconds - a.watchSeconds || a.currentViewerRank - b.currentViewerRank || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, 100);
+    const currentViewerRanking = [...users]
+      .filter((user) => user.isCurrentlyRanked)
+      .sort((a, b) => a.currentViewerRank - b.currentViewerRank || b.watchSeconds - a.watchSeconds || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 100);
     const topGifts = [...this.giftStats.values()]
       .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
@@ -354,6 +406,7 @@ class LiveSession extends EventEmitter {
       topGifters,
       topWatchers,
       silentLongWatchers,
+      currentViewerRanking,
       topGifts,
       followedTodayCount,
       viewerStats: this.viewerStats
@@ -540,6 +593,60 @@ function findNestedDisplayName(value, depth = 0, seen = new Set()) {
     if (nested) return nested;
   }
   return "";
+}
+
+function rankedViewerEntries(data) {
+  const candidates = [
+    data?.topViewers,
+    data?.ranksList,
+    data?.rankList,
+    data?.rankings,
+    data?.seatsList,
+    data?.users,
+    data?.data?.topViewers,
+    data?.data?.ranksList,
+    data?.message?.topViewers,
+    data?.message?.ranksList
+  ];
+  const entries = candidates.find((value) => Array.isArray(value));
+  return {
+    hasPayload: Boolean(entries),
+    entries: entries || []
+  };
+}
+
+function personFromRankedViewer(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const rawUser = entry.user || entry.userInfo || entry.viewer || entry.author || entry.data?.user || entry;
+  const nickname = firstText(
+    rawUser.nickname,
+    rawUser.displayName,
+    rawUser.uniqueId,
+    entry.nickname,
+    entry.uniqueId
+  );
+  const userId = firstText(
+    rawUser.uniqueId,
+    rawUser.userId,
+    rawUser.id,
+    entry.uniqueId,
+    entry.userId,
+    nickname
+  );
+  if (!userId || cleanDisplayName(userId) === "unknown") return null;
+  return {
+    userId: cleanUserId(userId),
+    nickname: cleanDisplayName(nickname || userId)
+  };
+}
+
+function rankedViewerPosition(entry, index) {
+  const rank = Number(entry.rank || entry.rankIndex || entry.position || 0);
+  return Number.isFinite(rank) && rank > 0 ? rank : index + 1;
+}
+
+function firstText(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim());
 }
 
 function personFromEvent(data) {
