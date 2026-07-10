@@ -754,8 +754,10 @@ function applyUserSignals(user, signals, at) {
   if (!signals) return;
   const heartMe = signals.heartMe;
   if (heartMe?.status) {
-    const keepNewToday = user.heartMeStatus === "new_today" && (heartMe.status === "active" || heartMe.status === "none");
-    if (!keepNewToday) {
+    const currentStatus = user.heartMeStatus || "unknown";
+    const keepNewToday = currentStatus === "new_today" && (heartMe.status === "active" || heartMe.status === "none");
+    const keepKnownState = heartMe.status === "none" && !["unknown", "none"].includes(currentStatus);
+    if (!keepNewToday && !keepKnownState) {
       user.heartMeStatus = heartMe.status;
     }
     user.heartMeStatusRaw = heartMe.rawStatus ?? user.heartMeStatusRaw;
@@ -811,9 +813,6 @@ function heartMeStateFromUser(rawUser) {
   }
   if (level > 0) {
     return { status: "active", rawStatus, level, source: "fan_badge_level" };
-  }
-  if (Array.isArray(rawUser.userBadges) || Array.isArray(rawUser.badges) || rawUser.teamMemberLevel !== undefined) {
-    return { status: "none", rawStatus, level: 0, source: "fan_badge_absent" };
   }
   return null;
 }
@@ -913,14 +912,37 @@ function personFromEvent(data) {
 }
 
 function isHeartMeGift(data, extended = {}) {
-  const names = [
+  const fields = [
     data.giftName,
+    data.giftNameKey,
+    data.describe,
+    data.description,
     data.gift?.name,
+    data.gift?.giftNameKey,
+    data.gift?.describe,
+    data.gift?.description,
     data.giftDetails?.name,
+    data.giftDetails?.giftNameKey,
+    data.giftDetails?.describe,
+    data.giftDetails?.description,
     data.extendedGiftInfo?.name,
-    extended.name
-  ].filter(Boolean).join(" ").toLowerCase();
-  return /ハート\s*ミー|heart\s*me|heartme/.test(names);
+    data.extendedGiftInfo?.giftNameKey,
+    data.extendedGiftInfo?.describe,
+    data.extendedGiftInfo?.description,
+    extended.name,
+    extended.giftNameKey,
+    extended.describe,
+    extended.description
+  ];
+  const text = normalizeGiftText(fields.filter(Boolean).join(" "));
+  return text.includes("heartme") || text.includes("ハートミー") || (text.includes("ハート") && text.includes("ミー"));
+}
+
+function normalizeGiftText(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s_\-・･.]/g, "");
 }
 
 function parseGiftEvent(data) {
