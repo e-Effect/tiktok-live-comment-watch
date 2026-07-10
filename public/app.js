@@ -1156,7 +1156,7 @@ function heartMeMark(user) {
   const level = Number(user.heartMeLevel || 0);
   const className = String(status).replaceAll("_", "-");
   const titleMap = {
-    new_today: "本日の配信で初めてハートミー",
+    new_today: "この配信でハートミー送信済み",
     active: "ハートミー有効",
     inactive: "ハートミー凍結/休止",
     none: "ハートミー未加入",

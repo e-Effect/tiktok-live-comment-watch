@@ -293,13 +293,8 @@ class LiveSession extends EventEmitter {
       user.heartMeGiftCount = Number(user.heartMeGiftCount || 0) + repeatCount;
       user.heartMeToday = true;
       user.lastHeartMeAt = gift.at;
-      if (gift.previousHeartMeStatus === "none") {
-        user.heartMeStatus = "new_today";
-        user.heartMeStatusSource = "heart_me_gift_new";
-      } else {
-        user.heartMeStatus = "active";
-        user.heartMeStatusSource = "heart_me_gift";
-      }
+      user.heartMeStatus = "new_today";
+      user.heartMeStatusSource = gift.previousHeartMeStatus === "none" ? "heart_me_gift_new" : "heart_me_gift_today";
       user.heartMeStatusAt = gift.at;
       user.heartMeLevel = Math.max(1, Number(user.heartMeLevel || 0));
     }
@@ -755,7 +750,7 @@ function applyUserSignals(user, signals, at) {
   const heartMe = signals.heartMe;
   if (heartMe?.status) {
     const currentStatus = user.heartMeStatus || "unknown";
-    const keepNewToday = currentStatus === "new_today" && (heartMe.status === "active" || heartMe.status === "none");
+    const keepNewToday = user.heartMeToday || currentStatus === "new_today";
     const keepKnownState = heartMe.status === "none" && !["unknown", "none"].includes(currentStatus);
     if (!keepNewToday && !keepKnownState) {
       user.heartMeStatus = heartMe.status;
@@ -795,18 +790,40 @@ function heartMeStateFromUser(rawUser) {
   const badgeLevel = teamMemberLevelFromUser(rawUser);
   const level = firstPositiveNumber(
     fansData?.level,
+    fansData?.badge?.level,
+    fansData?.badge?.badgeLevel,
     fansInfo?.fansLevel,
+    fansInfo?.level,
     rawUser.teamMemberLevel,
     badgeLevel
   );
-  const rawStatus = firstDefined(fansData?.userFansClubStatus, rawUser.userFansClubStatus);
-  const statusNumber = Number(rawStatus);
-  const isSleeping = booleanValue(fansInfo?.isSleeping);
+  const rawStatus = firstDefined(
+    fansData?.userFansClubStatus,
+    fansData?.user_fans_club_status,
+    fansData?.fansClubStatus,
+    fansData?.status,
+    fansClub?.userFansClubStatus,
+    fansClub?.user_fans_club_status,
+    fansInfo?.userFansClubStatus,
+    fansInfo?.user_fans_club_status,
+    rawUser.userFansClubStatus,
+    rawUser.user_fans_club_status,
+    rawUser.fansClubStatus
+  );
+  const status = fanClubStatusFromRaw(rawStatus);
+  const isSleeping = firstBoolean(
+    fansInfo?.isSleeping,
+    fansInfo?.is_sleeping,
+    fansData?.isSleeping,
+    fansData?.is_sleeping,
+    rawUser.isFansClubSleeping,
+    rawUser.is_fans_club_sleeping
+  );
 
-  if (Number.isFinite(statusNumber)) {
-    if (statusNumber === 1) return { status: "active", rawStatus, level, source: "fans_club_status" };
-    if (statusNumber === 2) return { status: "inactive", rawStatus, level, source: "fans_club_status" };
-    if (statusNumber === 0) return { status: "none", rawStatus, level: 0, source: "fans_club_status" };
+  if (status) {
+    if (status === "active") return { status, rawStatus, level, source: "fans_club_status" };
+    if (status === "inactive") return { status, rawStatus, level, source: "fans_club_status" };
+    if (status === "none") return { status, rawStatus, level: 0, source: "fans_club_status" };
   }
   if (isSleeping === true) {
     return { status: "inactive", rawStatus: "sleeping", level, source: "fans_club_info" };
@@ -862,9 +879,34 @@ function firstPositiveNumber(...values) {
   return 0;
 }
 
+function fanClubStatusFromRaw(value) {
+  const statusNumber = Number(value);
+  if (Number.isFinite(statusNumber)) {
+    if (statusNumber === 1) return "active";
+    if (statusNumber === 2) return "inactive";
+    if (statusNumber === 0) return "none";
+  }
+  const text = String(value || "").normalize("NFKC").toLowerCase();
+  if (!text) return "";
+  if (text.includes("inactive") || text.includes("sleep") || text.includes("frozen") || text.includes("freeze") || text.includes("expired") || text.includes("paused")) {
+    return "inactive";
+  }
+  if (text.includes("active") || text.includes("valid")) return "active";
+  if (text.includes("notjoined") || text.includes("not_joined") || text.includes("none") || text.includes("not joined")) return "none";
+  return "";
+}
+
 function booleanValue(value) {
   if (value === true || value === "true" || value === 1 || value === "1") return true;
   if (value === false || value === "false" || value === 0 || value === "0") return false;
+  return null;
+}
+
+function firstBoolean(...values) {
+  for (const value of values) {
+    const result = booleanValue(value);
+    if (result !== null) return result;
+  }
   return null;
 }
 
