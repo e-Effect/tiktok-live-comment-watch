@@ -985,7 +985,16 @@ function renderReport(snapshot) {
   const silentCount = Number(snapshot.silentLongWatchers?.length || 0);
   const followedCount = Number(snapshot.followedTodayCount || 0);
   const shareCount = Number(snapshot.shareCount || snapshot.shares?.length || 0);
+  const heartMeStats = snapshot.heartMeStats || {};
+  const followStats = snapshot.followStats || {};
+  const heartMeActiveCount = Number(heartMeStats.active || 0) + Number(heartMeStats.new_today || 0);
+  const followHostCount = Number(followStats.following || 0);
+  const statusCards = `
+    <article><span>ハート有効</span><strong>${formatNumber(heartMeActiveCount)}</strong><small>人</small></article>
+    <article><span>フォロー中</span><strong>${formatNumber(followHostCount)}</strong><small>人</small></article>
+  `;
   reportList.innerHTML = `
+    ${statusCards}
     <article><span>コメント最多</span><strong>${escapeHtml(topCommenter?.nickname || topCommenter?.userId || "-")}</strong><small>${formatNumber(topCommenter?.comments || 0)}件</small></article>
     <article><span>ギフト最多</span><strong>${escapeHtml(topGifter?.nickname || topGifter?.userId || "-")}</strong><small>${formatNumber(topGifter?.diamonds || 0)}ダイヤ</small></article>
     <article><span>最長滞在</span><strong>${escapeHtml(topWatcher?.nickname || topWatcher?.userId || "-")}</strong><small>${formatDuration(topWatcher?.watchSeconds || 0)}</small></article>
@@ -1016,7 +1025,7 @@ function renderComments(comments) {
   commentList.innerHTML = comments.map((comment) => `
     <article class="comment">
       <header>
-        <span class="name">${escapeHtml(comment.nickname || comment.userId)}</span>
+        <span class="name">${renderDecoratedName(comment)}</span>
         <span class="time">${formatClock(comment.at)}</span>
       </header>
       <p>${eventSourceBadge(comment)}${escapeHtml(comment.text)}</p>
@@ -1036,7 +1045,7 @@ function renderSilentLongWatchers(users) {
   silentList.innerHTML = users.map((user, index) => `
     <div class="user-row silent-row ${silentLevelClass(user.watchSeconds)}">
       <span class="rank">${index + 1}</span>
-      <span class="name">${renderName(user)}</span>
+      <span class="name">${renderDecoratedName(user)}</span>
       <span class="count">${formatDuration(user.watchSeconds)}</span>
     </div>
   `).join("");
@@ -1054,7 +1063,7 @@ function renderRankList(target, users, emptyText, valueRenderer) {
   target.innerHTML = users.map((user, index) => `
     <div class="user-row">
       <span class="rank">${index + 1}</span>
-      <span class="name">${renderName(user)}</span>
+      <span class="name">${renderDecoratedName(user)}</span>
       <span class="count">${valueRenderer(user)}</span>
     </div>
   `).join("");
@@ -1068,7 +1077,7 @@ function renderGifters(users) {
   giftList.innerHTML = users.map((user, index) => `
     <div class="user-row gift-row">
       <span class="rank">${index + 1}</span>
-      <span class="name">${renderName(user)}</span>
+      <span class="name">${renderDecoratedName(user)}</span>
       <span class="gift-score">
         <strong>${formatNumber(user.diamonds)}</strong>
         <small>${formatNumber(user.gifts)}個</small>
@@ -1085,7 +1094,7 @@ function renderGiftHistory(gifts) {
   giftHistory.innerHTML = gifts.map((gift) => `
     <article class="comment gift-card">
       <header>
-        <span class="name">${escapeHtml(gift.nickname || gift.userId)}</span>
+        <span class="name">${renderDecoratedName(gift)}</span>
         <span class="time">${formatClock(gift.at)}</span>
       </header>
       <p>
@@ -1107,7 +1116,7 @@ function renderShareHistory(shares) {
   shareHistory.innerHTML = shares.map((share) => `
     <article class="comment share-card">
       <header>
-        <span class="name">${escapeHtml(share.nickname || share.userId)}</span>
+        <span class="name">${renderDecoratedName(share)}</span>
         <span class="time">${formatClock(share.at)}</span>
       </header>
       <p>${eventSourceBadge(share)}シェア</p>
@@ -1135,6 +1144,41 @@ function setStatus(status, message, mode) {
 function renderName(user) {
   const name = escapeHtml(user.nickname || user.userId);
   return user.followedToday ? `<span class="follow-mark" title="本日フォロー">✓</span>${name}` : name;
+}
+
+function renderDecoratedName(user) {
+  const name = escapeHtml(user.nickname || user.userId);
+  return `${heartMeMark(user)}${followStatusMark(user)}${todayFollowMark(user)}${name}`;
+}
+
+function heartMeMark(user) {
+  const status = user.heartMeStatus || "unknown";
+  const level = Number(user.heartMeLevel || 0);
+  const className = String(status).replaceAll("_", "-");
+  const titleMap = {
+    new_today: "本日の配信で初めてハートミー",
+    active: "ハートミー有効",
+    inactive: "ハートミー凍結/休止",
+    none: "ハートミー未加入",
+    unknown: "ハートミー未確認"
+  };
+  const title = `${titleMap[status] || titleMap.unknown}${level > 0 ? ` Lv.${level}` : ""}`;
+  const symbol = status === "none" || status === "unknown" ? "♡" : "♥";
+  return `<span class="heart-mark heart-${className}" title="${escapeHtml(title)}">${symbol}</span>`;
+}
+
+function followStatusMark(user) {
+  if (user.isFollowingHost === true) {
+    return `<span class="follow-status-mark following" title="配信主をフォロー中">F</span>`;
+  }
+  if (user.isFollowingHost === false) {
+    return `<span class="follow-status-mark not-following" title="配信主を未フォロー">F</span>`;
+  }
+  return "";
+}
+
+function todayFollowMark(user) {
+  return user.followedToday ? `<span class="follow-mark" title="本日フォロー">✓</span>` : "";
 }
 
 function modeLabel(snapshot) {

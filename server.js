@@ -160,7 +160,8 @@ class LiveSession extends EventEmitter {
         nickname: person.nickname,
         text: data.comment || "",
         at: Date.now(),
-        source: this.currentEventSource()
+        source: this.currentEventSource(),
+        signals: person.signals
       });
     });
 
@@ -168,7 +169,9 @@ class LiveSession extends EventEmitter {
       if (data.giftType === 1 && data.repeatEnd === false) return;
       const gift = parseGiftEvent(data);
       gift.source = this.currentEventSource();
-      this.markSeen({ userId: gift.userId, nickname: gift.nickname }, gift.at);
+      const previousUser = this.userStats.get(gift.userId);
+      gift.previousHeartMeStatus = previousUser?.heartMeStatus || null;
+      this.markSeen({ userId: gift.userId, nickname: gift.nickname, signals: gift.signals }, gift.at);
       this.addGift(gift);
     });
 
@@ -228,7 +231,7 @@ class LiveSession extends EventEmitter {
 
   markSeen(person, at) {
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
-    const user = this.getUserStat(person.userId, person.nickname, at);
+    const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     if (!user.hasJoined) {
       user.hasJoined = true;
       this.viewerStats.knownJoins += 1;
@@ -239,9 +242,12 @@ class LiveSession extends EventEmitter {
 
   markFollowedToday(person, at) {
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
-    const user = this.getUserStat(person.userId, person.nickname, at);
+    const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     user.followedToday = true;
     user.followedAt = at;
+    user.isFollowingHost = true;
+    user.followStatus = "following";
+    user.followStatusSource = "follow_event";
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
     this.broadcast("status", this.snapshot());
@@ -254,7 +260,7 @@ class LiveSession extends EventEmitter {
     this.comments.unshift(comment);
     this.comments = this.comments.slice(0, 200);
 
-    const current = this.getUserStat(comment.userId, comment.nickname, comment.at);
+    const current = this.getUserStat(comment.userId, comment.nickname, comment.at, comment.signals);
     current.comments += 1;
     current.lastSeenAt = comment.at;
     this.userStats.set(current.userId, current);
@@ -279,10 +285,24 @@ class LiveSession extends EventEmitter {
     this.gifts.unshift(normalizedGift);
     this.gifts = this.gifts.slice(0, 200);
 
-    const user = this.getUserStat(gift.userId, gift.nickname, gift.at);
+    const user = this.getUserStat(gift.userId, gift.nickname, gift.at, gift.signals);
     user.gifts += repeatCount;
     user.diamonds += totalDiamonds;
     user.lastSeenAt = gift.at;
+    if (normalizedGift.isHeartMe) {
+      user.heartMeGiftCount = Number(user.heartMeGiftCount || 0) + repeatCount;
+      user.heartMeToday = true;
+      user.lastHeartMeAt = gift.at;
+      if (gift.previousHeartMeStatus === "none") {
+        user.heartMeStatus = "new_today";
+        user.heartMeStatusSource = "heart_me_gift_new";
+      } else {
+        user.heartMeStatus = "active";
+        user.heartMeStatusSource = "heart_me_gift";
+      }
+      user.heartMeStatusAt = gift.at;
+      user.heartMeLevel = Math.max(1, Number(user.heartMeLevel || 0));
+    }
     this.userStats.set(user.userId, user);
 
     const giftKey = `${user.userId}:${gift.giftId || gift.giftName}`;
@@ -311,14 +331,14 @@ class LiveSession extends EventEmitter {
     this.shares.unshift(share);
     this.shares = this.shares.slice(0, 200);
 
-    const user = this.getUserStat(share.userId, share.nickname, share.at);
+    const user = this.getUserStat(share.userId, share.nickname, share.at, share.signals);
     user.shares = Number(user.shares || 0) + 1;
     user.lastSeenAt = share.at;
     this.userStats.set(user.userId, user);
     this.broadcast("share", { share, snapshot: this.snapshot() });
   }
 
-  getUserStat(rawUserId, rawNickname, at) {
+  getUserStat(rawUserId, rawNickname, at, signals = null) {
     const nickname = cleanDisplayName(rawNickname || rawUserId || "unknown");
     const displayKey = displayNameKey(nickname);
     const existingId = this.displayNameIndex.get(displayKey);
@@ -338,6 +358,18 @@ class LiveSession extends EventEmitter {
       watchSeconds: 0,
       followedToday: false,
       followedAt: null,
+      isFollowingHost: null,
+      followStatus: "unknown",
+      followStatusRaw: null,
+      followStatusSource: "",
+      heartMeStatus: "unknown",
+      heartMeStatusRaw: null,
+      heartMeStatusSource: "",
+      heartMeStatusAt: null,
+      heartMeLevel: 0,
+      heartMeToday: false,
+      heartMeGiftCount: 0,
+      lastHeartMeAt: null,
       isCurrentlyRanked: false,
       currentViewerRank: null,
       currentViewerRankedAt: null
@@ -345,6 +377,7 @@ class LiveSession extends EventEmitter {
     current.nickname = nickname || current.nickname;
     current.firstSeenAt = Math.min(current.firstSeenAt, at);
     current.lastSeenAt = Math.max(current.lastSeenAt, at);
+    applyUserSignals(current, signals, at);
     return current;
   }
 
@@ -361,7 +394,7 @@ class LiveSession extends EventEmitter {
     entries.forEach((entry, index) => {
       const person = personFromRankedViewer(entry);
       if (!person) return;
-      const user = this.getUserStat(person.userId, person.nickname, at);
+      const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
       if (!user.hasJoined) {
         user.hasJoined = true;
         this.viewerStats.knownJoins += 1;
@@ -408,6 +441,8 @@ class LiveSession extends EventEmitter {
       .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
       .slice(0, 30);
     const followedTodayCount = users.filter((user) => user.followedToday).length;
+    const heartMeStats = summarizeHeartMe(users);
+    const followStats = summarizeFollowStatus(users);
 
     return {
       id: this.id,
@@ -429,9 +464,9 @@ class LiveSession extends EventEmitter {
       initialEventCount: this.initialCommentCount + this.initialGiftCount,
       giftDiamondTotal: this.giftDiamondTotal,
       shareCount: this.shareCount,
-      comments: this.comments,
-      gifts: this.gifts,
-      shares: this.shares,
+      comments: this.comments.map((comment) => this.decorateUserEvent(comment)),
+      gifts: this.gifts.map((gift) => this.decorateUserEvent(gift)),
+      shares: this.shares.map((share) => this.decorateUserEvent(share)),
       topUsers,
       topGifters,
       topWatchers,
@@ -439,8 +474,15 @@ class LiveSession extends EventEmitter {
       currentViewerRanking,
       topGifts,
       followedTodayCount,
+      heartMeStats,
+      followStats,
       viewerStats: this.viewerStats
     };
+  }
+
+  decorateUserEvent(event) {
+    const user = this.userStats.get(event.userId);
+    return user ? { ...event, ...userDisplayState(user) } : event;
   }
 
   updateEstimatedWatch() {
@@ -487,7 +529,7 @@ class LiveSession extends EventEmitter {
   }
 
   toCsv() {
-    const rows = [["type", "source", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds", "followed_today"]];
+    const rows = [["type", "source", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds", "followed_today", "follows_host", "heart_me_status", "heart_me_level"]];
     for (const comment of [...this.comments].reverse()) {
       const user = this.userStats.get(comment.userId);
       rows.push([
@@ -500,7 +542,10 @@ class LiveSession extends EventEmitter {
         "",
         "",
         user?.watchSeconds || "",
-        user?.followedToday ? "yes" : ""
+        user?.followedToday ? "yes" : "",
+        user?.isFollowingHost === null ? "" : user?.isFollowingHost ? "yes" : "no",
+        user?.heartMeStatus || "",
+        user?.heartMeLevel || ""
       ]);
     }
     for (const gift of [...this.gifts].reverse()) {
@@ -515,7 +560,10 @@ class LiveSession extends EventEmitter {
         gift.repeatCount,
         gift.totalDiamonds,
         user?.watchSeconds || "",
-        user?.followedToday ? "yes" : ""
+        user?.followedToday ? "yes" : "",
+        user?.isFollowingHost === null ? "" : user?.isFollowingHost ? "yes" : "no",
+        user?.heartMeStatus || "",
+        user?.heartMeLevel || ""
       ]);
     }
     for (const share of [...this.shares].reverse()) {
@@ -530,7 +578,10 @@ class LiveSession extends EventEmitter {
         1,
         "",
         user?.watchSeconds || "",
-        user?.followedToday ? "yes" : ""
+        user?.followedToday ? "yes" : "",
+        user?.isFollowingHost === null ? "" : user?.isFollowingHost ? "yes" : "no",
+        user?.heartMeStatus || "",
+        user?.heartMeLevel || ""
       ]);
     }
     return "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
@@ -681,7 +732,8 @@ function personFromRankedViewer(entry) {
   if (!userId || cleanDisplayName(userId) === "unknown") return null;
   return {
     userId: cleanUserId(userId),
-    nickname: cleanDisplayName(nickname || userId)
+    nickname: cleanDisplayName(nickname || userId),
+    signals: userSignalsFromRawUser(rawUser)
   };
 }
 
@@ -694,13 +746,181 @@ function firstText(...values) {
   return values.find((value) => value !== undefined && value !== null && String(value).trim());
 }
 
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function applyUserSignals(user, signals, at) {
+  if (!signals) return;
+  const heartMe = signals.heartMe;
+  if (heartMe?.status) {
+    const keepNewToday = user.heartMeStatus === "new_today" && (heartMe.status === "active" || heartMe.status === "none");
+    if (!keepNewToday) {
+      user.heartMeStatus = heartMe.status;
+    }
+    user.heartMeStatusRaw = heartMe.rawStatus ?? user.heartMeStatusRaw;
+    user.heartMeStatusSource = heartMe.source || user.heartMeStatusSource;
+    user.heartMeStatusAt = at;
+    if (Number.isFinite(heartMe.level)) {
+      user.heartMeLevel = heartMe.level;
+    }
+  }
+
+  const follow = signals.follow;
+  if (follow?.status) {
+    user.followStatus = follow.status;
+    user.followStatusRaw = follow.rawStatus ?? user.followStatusRaw;
+    user.followStatusSource = follow.source || user.followStatusSource;
+    user.isFollowingHost = follow.isFollowingHost;
+  }
+}
+
+function userSignalsFromRawUser(rawUser) {
+  return {
+    heartMe: heartMeStateFromUser(rawUser),
+    follow: followStateFromUser(rawUser)
+  };
+}
+
+function heartMeStateFromUser(rawUser) {
+  if (!rawUser || typeof rawUser !== "object") return null;
+  const fansClub = rawUser.fansClub || rawUser.fansClubMember || {};
+  const preferData = fansClub.preferData && typeof fansClub.preferData === "object"
+    ? Object.values(fansClub.preferData).find(Boolean)
+    : null;
+  const fansData = fansClub.data || preferData || rawUser.fansClubData || null;
+  const fansInfo = rawUser.fansClubInfo || {};
+  const badgeLevel = teamMemberLevelFromUser(rawUser);
+  const level = firstPositiveNumber(
+    fansData?.level,
+    fansInfo?.fansLevel,
+    rawUser.teamMemberLevel,
+    badgeLevel
+  );
+  const rawStatus = firstDefined(fansData?.userFansClubStatus, rawUser.userFansClubStatus);
+  const statusNumber = Number(rawStatus);
+  const isSleeping = booleanValue(fansInfo?.isSleeping);
+
+  if (Number.isFinite(statusNumber)) {
+    if (statusNumber === 1) return { status: "active", rawStatus, level, source: "fans_club_status" };
+    if (statusNumber === 2) return { status: "inactive", rawStatus, level, source: "fans_club_status" };
+    if (statusNumber === 0) return { status: "none", rawStatus, level: 0, source: "fans_club_status" };
+  }
+  if (isSleeping === true) {
+    return { status: "inactive", rawStatus: "sleeping", level, source: "fans_club_info" };
+  }
+  if (level > 0) {
+    return { status: "active", rawStatus, level, source: "fan_badge_level" };
+  }
+  if (Array.isArray(rawUser.userBadges) || Array.isArray(rawUser.badges) || rawUser.teamMemberLevel !== undefined) {
+    return { status: "none", rawStatus, level: 0, source: "fan_badge_absent" };
+  }
+  return null;
+}
+
+function followStateFromUser(rawUser) {
+  if (!rawUser || typeof rawUser !== "object") return null;
+  const rawStatus = firstDefined(rawUser.followInfo?.followStatus, rawUser.followRole);
+  if (rawStatus === undefined) return null;
+  const statusNumber = Number(rawStatus);
+  if (!Number.isFinite(statusNumber)) return { status: "unknown", rawStatus, isFollowingHost: null, source: "follow_info" };
+  return {
+    status: statusNumber > 0 ? "following" : "not_following",
+    rawStatus,
+    isFollowingHost: statusNumber > 0,
+    source: "follow_info"
+  };
+}
+
+function teamMemberLevelFromUser(rawUser) {
+  const direct = Number(rawUser?.teamMemberLevel || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const simplifiedBadge = Array.isArray(rawUser?.userBadges)
+    ? rawUser.userBadges.find((badge) => Number(badge?.badgeSceneType) === 10 && Number(badge?.level || 0) > 0)
+    : null;
+  if (simplifiedBadge) return Number(simplifiedBadge.level);
+
+  if (Array.isArray(rawUser?.badges)) {
+    for (const badgeGroup of rawUser.badges) {
+      const scene = Number(firstDefined(badgeGroup?.badgeSceneType, badgeGroup?.badgeScene));
+      if (scene !== 10) continue;
+      const level = firstPositiveNumber(
+        badgeGroup?.level,
+        badgeGroup?.privilegeLogExtra?.level,
+        ...(Array.isArray(badgeGroup?.badges) ? badgeGroup.badges.map((badge) => badge?.level) : [])
+      );
+      return level || 1;
+    }
+  }
+  return 0;
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const number = Number(value || 0);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return 0;
+}
+
+function booleanValue(value) {
+  if (value === true || value === "true" || value === 1 || value === "1") return true;
+  if (value === false || value === "false" || value === 0 || value === "0") return false;
+  return null;
+}
+
+function userDisplayState(user) {
+  return {
+    followedToday: Boolean(user.followedToday),
+    isFollowingHost: user.isFollowingHost,
+    followStatus: user.followStatus,
+    followStatusRaw: user.followStatusRaw,
+    heartMeStatus: user.heartMeStatus,
+    heartMeLevel: user.heartMeLevel,
+    heartMeToday: Boolean(user.heartMeToday),
+    heartMeGiftCount: Number(user.heartMeGiftCount || 0),
+    lastHeartMeAt: user.lastHeartMeAt
+  };
+}
+
+function summarizeHeartMe(users) {
+  return users.reduce((summary, user) => {
+    const key = user.heartMeStatus || "unknown";
+    summary[key] = Number(summary[key] || 0) + 1;
+    return summary;
+  }, { active: 0, new_today: 0, inactive: 0, none: 0, unknown: 0 });
+}
+
+function summarizeFollowStatus(users) {
+  return users.reduce((summary, user) => {
+    if (user.isFollowingHost === true) summary.following += 1;
+    else if (user.isFollowingHost === false) summary.notFollowing += 1;
+    else summary.unknown += 1;
+    if (user.followedToday) summary.followedToday += 1;
+    return summary;
+  }, { following: 0, notFollowing: 0, unknown: 0, followedToday: 0 });
+}
+
 function personFromEvent(data) {
-  const nickname = data.nickname || data.user?.nickname || data.user?.uniqueId || data.uniqueId || "unknown";
-  const userId = data.user?.uniqueId || data.uniqueId || data.user?.userId || nickname;
+  const rawUser = data.user || data.userInfo || data.viewer || data.author || data.data?.user || data;
+  const nickname = data.nickname || rawUser?.nickname || rawUser?.uniqueId || data.uniqueId || "unknown";
+  const userId = rawUser?.uniqueId || data.uniqueId || rawUser?.userId || rawUser?.id || nickname;
   return {
     userId: cleanUserId(userId),
-    nickname: cleanDisplayName(nickname)
+    nickname: cleanDisplayName(nickname),
+    signals: userSignalsFromRawUser(rawUser)
   };
+}
+
+function isHeartMeGift(data, extended = {}) {
+  const names = [
+    data.giftName,
+    data.gift?.name,
+    data.giftDetails?.name,
+    data.extendedGiftInfo?.name,
+    extended.name
+  ].filter(Boolean).join(" ").toLowerCase();
+  return /ハート\s*ミー|heart\s*me|heartme/.test(names);
 }
 
 function parseGiftEvent(data) {
@@ -723,6 +943,8 @@ function parseGiftEvent(data) {
     giftName: data.giftName || extended.name || data.giftId || "ギフト",
     repeatCount: Number(data.repeatCount || data.repeat_count || 1),
     diamondCount,
+    isHeartMe: isHeartMeGift(data, extended),
+    signals: person.signals,
     at: Date.now()
   };
 }
@@ -734,6 +956,7 @@ function parseShareEvent(data) {
     userId: person.userId,
     nickname: person.nickname,
     label: shareEventLabel(data),
+    signals: person.signals,
     at: Date.now()
   };
 }
