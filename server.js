@@ -38,8 +38,10 @@ class LiveSession extends EventEmitter {
     this.giftCount = 0;
     this.initialGiftCount = 0;
     this.giftDiamondTotal = 0;
+    this.shareCount = 0;
     this.comments = [];
     this.gifts = [];
+    this.shares = [];
     this.userStats = new Map();
     this.displayNameIndex = new Map();
     this.giftStats = new Map();
@@ -142,6 +144,13 @@ class LiveSession extends EventEmitter {
   }
 
   attachLiveHandlers(connection, events = {}) {
+    const handleShare = (data) => {
+      const share = parseShareEvent(data);
+      share.source = this.currentEventSource();
+      this.markSeen({ userId: share.userId, nickname: share.nickname }, share.at);
+      this.addShare(share);
+    };
+
     connection.on(events.CHAT || "chat", (data) => {
       const person = personFromEvent(data);
       this.markSeen(person, Date.now());
@@ -171,7 +180,12 @@ class LiveSession extends EventEmitter {
       this.markFollowedToday(personFromEvent(data), Date.now());
     });
 
+    connection.on(events.SHARE || "share", handleShare);
+
     connection.on(events.SOCIAL || "social", (data) => {
+      if (isShareEvent(data)) {
+        handleShare(data);
+      }
       if (isFollowEvent(data)) {
         this.markFollowedToday(personFromEvent(data), Date.now());
       }
@@ -291,6 +305,19 @@ class LiveSession extends EventEmitter {
     this.broadcast("gift", { gift: normalizedGift, snapshot: this.snapshot() });
   }
 
+  addShare(share) {
+    this.lastEventAt = Math.max(this.lastEventAt || 0, share.at);
+    this.shareCount += 1;
+    this.shares.unshift(share);
+    this.shares = this.shares.slice(0, 200);
+
+    const user = this.getUserStat(share.userId, share.nickname, share.at);
+    user.shares = Number(user.shares || 0) + 1;
+    user.lastSeenAt = share.at;
+    this.userStats.set(user.userId, user);
+    this.broadcast("share", { share, snapshot: this.snapshot() });
+  }
+
   getUserStat(rawUserId, rawNickname, at) {
     const nickname = cleanDisplayName(rawNickname || rawUserId || "unknown");
     const displayKey = displayNameKey(nickname);
@@ -303,6 +330,7 @@ class LiveSession extends EventEmitter {
       nickname,
       comments: 0,
       gifts: 0,
+      shares: 0,
       diamonds: 0,
       firstSeenAt: at,
       lastSeenAt: at,
@@ -400,8 +428,10 @@ class LiveSession extends EventEmitter {
       initialGiftCount: this.initialGiftCount,
       initialEventCount: this.initialCommentCount + this.initialGiftCount,
       giftDiamondTotal: this.giftDiamondTotal,
+      shareCount: this.shareCount,
       comments: this.comments,
       gifts: this.gifts,
+      shares: this.shares,
       topUsers,
       topGifters,
       topWatchers,
@@ -484,6 +514,21 @@ class LiveSession extends EventEmitter {
         gift.giftName || gift.giftId,
         gift.repeatCount,
         gift.totalDiamonds,
+        user?.watchSeconds || "",
+        user?.followedToday ? "yes" : ""
+      ]);
+    }
+    for (const share of [...this.shares].reverse()) {
+      const user = this.userStats.get(share.userId);
+      rows.push([
+        "share",
+        share.source || "live",
+        new Date(share.at).toISOString(),
+        share.userId,
+        share.nickname,
+        share.label || "share",
+        1,
+        "",
         user?.watchSeconds || "",
         user?.followedToday ? "yes" : ""
       ]);
@@ -682,6 +727,28 @@ function parseGiftEvent(data) {
   };
 }
 
+function parseShareEvent(data) {
+  const person = personFromEvent(data);
+  return {
+    id: data.msgId || randomUUID(),
+    userId: person.userId,
+    nickname: person.nickname,
+    label: shareEventLabel(data),
+    at: Date.now()
+  };
+}
+
+function shareEventLabel(data) {
+  return firstText(
+    data.label,
+    data.displayType,
+    data.common?.displayText?.displayType,
+    data.common?.displayText?.defaultPattern,
+    data.common?.displayText?.key,
+    "シェア"
+  );
+}
+
 function isFollowEvent(data) {
   const text = [
     data.displayType,
@@ -691,11 +758,29 @@ function isFollowEvent(data) {
     data.event,
     data.socialType,
     data.socialAction,
+    data.common?.displayText?.displayType,
     data.common?.displayText?.defaultPattern,
     data.common?.displayText?.key,
     data.common?.method
   ].filter(Boolean).join(" ").toLowerCase();
   return /follow|フォロー/.test(text);
+}
+
+function isShareEvent(data) {
+  const text = [
+    data.displayType,
+    data.label,
+    data.type,
+    data.action,
+    data.event,
+    data.socialType,
+    data.socialAction,
+    data.common?.displayText?.displayType,
+    data.common?.displayText?.defaultPattern,
+    data.common?.displayText?.key,
+    data.common?.method
+  ].filter(Boolean).join(" ").toLowerCase();
+  return /share|シェア|共有/.test(text);
 }
 
 function cleanDisplayName(value) {

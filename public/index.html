@@ -47,6 +47,7 @@
           <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
           <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
           <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
+          <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
           <label><input type="checkbox" data-panel-toggle="watchers" checked> 滞在時間ランキング</label>
           <label><input type="checkbox" data-panel-toggle="silent" checked> 現在視聴中・15分以上コメントなし</label>
           <label><input type="checkbox" data-panel-toggle="gifts" checked> ギフトランキング</label>
@@ -90,6 +91,13 @@
             <h2>コメント</h2>
             <div id="commentList" class="list">
               <p class="empty">接続するとコメントがここに流れます。</p>
+            </div>
+          </section>
+
+          <section data-panel="shares">
+            <h2>シェアしたユーザー</h2>
+            <div id="shareHistory" class="list small">
+              <p class="empty">シェアされるとユーザー名と時刻がここに表示されます。</p>
             </div>
           </section>
 

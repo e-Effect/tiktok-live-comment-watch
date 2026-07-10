@@ -20,6 +20,7 @@ const commentList = document.querySelector("#commentList");
 const userList = document.querySelector("#userList");
 const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
+const shareHistory = document.querySelector("#shareHistory");
 const watcherList = document.querySelector("#watcherList");
 const silentList = document.querySelector("#silentList");
 const reportList = document.querySelector("#reportList");
@@ -84,11 +85,16 @@ renderSelectedSession();
 refreshServerState();
 setInterval(refreshServerState, 30000);
 
-async function startSession() {
+async function startSession(options = {}) {
   setBusy(true);
   setStatus("connecting", "接続を準備しています。", "追加中");
 
-  const username = cleanUsername(usernameInput.value);
+  const username = cleanUsername(options.username ?? usernameInput.value);
+  if (!username) {
+    setStatus("stopped", "TikTok IDを入力してください。", "入力待ち");
+    setBusy(false);
+    return;
+  }
   const cooldown = readRateLimitCooldown();
   if (cooldown.active) {
     setStatus("stopped", `TikTok側の接続制限中です。${formatClock(cooldown.until)}頃まで新しい接続を止めます。`, "制限中");
@@ -125,6 +131,7 @@ async function startSession() {
     activateSession(body.id, username, { select: true });
     rememberRecentId(username);
     refreshRecentProfile(username);
+    usernameInput.value = "";
   } catch (error) {
     setStatus("stopped", error.message, "未接続");
   } finally {
@@ -186,6 +193,10 @@ function openEventStream(sessionId) {
     renderSnapshot(payload.snapshot);
   });
   source.addEventListener("gift", (event) => {
+    const payload = JSON.parse(event.data);
+    renderSnapshot(payload.snapshot);
+  });
+  source.addEventListener("share", (event) => {
     const payload = JSON.parse(event.data);
     renderSnapshot(payload.snapshot);
   });
@@ -441,6 +452,7 @@ function renderRecentIds() {
         ${entry.displayName ? `<span class="recent-name">${escapeHtml(entry.displayName)}</span>` : ""}
         <span class="recent-id">@${escapeHtml(entry.id)}</span>
       </button>
+      <button type="button" class="recent-start" data-start-recent="${escapeHtml(entry.id)}">追加</button>
       <button type="button" class="recent-remove" data-remove-recent="${escapeHtml(entry.id)}" aria-label="${escapeHtml(entry.id)}を履歴から削除" title="履歴から削除">×</button>
     </div>
   `).join("");
@@ -448,6 +460,12 @@ function renderRecentIds() {
     button.addEventListener("click", () => {
       usernameInput.value = button.dataset.recentId;
       usernameInput.focus();
+    });
+  });
+  recentIdList.querySelectorAll("[data-start-recent]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      usernameInput.value = button.dataset.startRecent;
+      await startSession({ username: button.dataset.startRecent });
     });
   });
   recentIdList.querySelectorAll("[data-remove-recent]").forEach((button) => {
@@ -627,6 +645,7 @@ function renderSelectedSession() {
     renderUsers([]);
     renderGifters([]);
     renderGiftHistory([]);
+    renderShareHistory([]);
     return;
   }
   const cooldown = readRateLimitCooldown();
@@ -643,6 +662,7 @@ function renderSelectedSession() {
   renderUsers(snapshot.topUsers || []);
   renderGifters(snapshot.topGifters || []);
   renderGiftHistory(snapshot.gifts || []);
+  renderShareHistory(snapshot.shares || []);
 }
 
 function updateSelectedControls() {
@@ -752,11 +772,13 @@ function renderReport(snapshot) {
   const topWatcher = snapshot.topWatchers?.[0];
   const silentCount = Number(snapshot.silentLongWatchers?.length || 0);
   const followedCount = Number(snapshot.followedTodayCount || 0);
+  const shareCount = Number(snapshot.shareCount || snapshot.shares?.length || 0);
   reportList.innerHTML = `
     <article><span>コメント最多</span><strong>${escapeHtml(topCommenter?.nickname || topCommenter?.userId || "-")}</strong><small>${formatNumber(topCommenter?.comments || 0)}件</small></article>
     <article><span>ギフト最多</span><strong>${escapeHtml(topGifter?.nickname || topGifter?.userId || "-")}</strong><small>${formatNumber(topGifter?.diamonds || 0)}ダイヤ</small></article>
     <article><span>最長滞在</span><strong>${escapeHtml(topWatcher?.nickname || topWatcher?.userId || "-")}</strong><small>${formatDuration(topWatcher?.watchSeconds || 0)}</small></article>
     <article><span>現視聴15分無言</span><strong>${formatNumber(silentCount)}</strong><small>人</small></article>
+    <article><span>シェア</span><strong>${formatNumber(shareCount)}</strong><small>回</small></article>
     <article><span>本日フォロー</span><strong>${formatNumber(followedCount)}</strong><small>人</small></article>
     <article><span>計測時間</span><strong>${formatDuration(snapshot.elapsedSeconds)}</strong><small>${escapeHtml(snapshot.displayName || snapshot.username || "")}</small></article>
   `;
@@ -860,6 +882,23 @@ function renderGiftHistory(gifts) {
         <strong>x${formatNumber(gift.repeatCount)}</strong>
         <span>${formatNumber(gift.totalDiamonds)} ダイヤ</span>
       </p>
+    </article>
+  `).join("");
+}
+
+function renderShareHistory(shares) {
+  if (!shareHistory) return;
+  if (!shares.length) {
+    shareHistory.innerHTML = `<p class="empty">シェアされるとユーザー名と時刻がここに表示されます。</p>`;
+    return;
+  }
+  shareHistory.innerHTML = shares.map((share) => `
+    <article class="comment share-card">
+      <header>
+        <span class="name">${escapeHtml(share.nickname || share.userId)}</span>
+        <span class="time">${formatClock(share.at)}</span>
+      </header>
+      <p>${eventSourceBadge(share)}シェア</p>
     </article>
   `).join("");
 }
