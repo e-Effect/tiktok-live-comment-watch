@@ -28,6 +28,10 @@ const recentIds = document.querySelector("#recentIds");
 const recentIdList = document.querySelector("#recentIdList");
 const sessionList = document.querySelector("#sessionList");
 const panelToggles = [...document.querySelectorAll("[data-panel-toggle]")];
+const layoutGrid = document.querySelector(".grid");
+const layoutPanels = [...document.querySelectorAll(".grid [data-panel]")];
+const layoutEditToggle = document.querySelector("#layoutEditToggle");
+const resetLayoutBtn = document.querySelector("#resetLayoutBtn");
 const fixedAccountLabel = document.querySelector("#fixedAccountLabel");
 const pinAccountBtn = document.querySelector("#pinAccountBtn");
 const startFixedBtn = document.querySelector("#startFixedBtn");
@@ -38,11 +42,25 @@ const LEGACY_STORAGE_KEY = "tiktok-live-active-session";
 const SESSIONS_KEY = "tiktok-live-active-sessions";
 const RECENT_IDS_KEY = "tiktok-live-recent-ids";
 const PANEL_PREFS_KEY = "tiktok-live-panel-prefs";
+const LAYOUT_PREFS_KEY = "tiktok-live-layout-prefs";
 const RATE_LIMIT_KEY = "tiktok-live-rate-limit-until";
 const FIXED_ACCOUNT_KEY = "tiktok-live-fixed-account";
 const SINGLE_MODE_KEY = "tiktok-live-single-mode";
 const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
+const PANEL_SIZE_OPTIONS = ["small", "medium", "large", "wide"];
+const PANEL_SIZE_LABELS = { small: "小", medium: "中", large: "大", wide: "横" };
+const DEFAULT_PANEL_SIZES = {
+  report: "wide",
+  comments: "large",
+  shares: "medium",
+  watchers: "medium",
+  silent: "medium",
+  gifts: "medium",
+  users: "medium",
+  giftHistory: "medium"
+};
+const DEFAULT_PANEL_ORDER = layoutPanels.map((panel) => panel.dataset.panel);
 
 const sessions = new Map();
 const eventSources = new Map();
@@ -76,6 +94,7 @@ window.addEventListener("focus", reconnectActiveSessions);
 window.addEventListener("online", reconnectActiveSessions);
 
 setupPanelToggles();
+setupLayoutTools();
 setupFixedAccountTools();
 renderRecentIds();
 refreshMissingRecentProfiles();
@@ -595,6 +614,199 @@ function applyPanelPrefs() {
       panel.hidden = !visible;
     });
   });
+}
+
+function setupLayoutTools() {
+  if (!layoutGrid) return;
+  let draggedPanel = null;
+
+  layoutPanels.forEach((panel) => {
+    panel.classList.add("layout-card");
+    ensurePanelLayoutControls(panel);
+
+    panel.addEventListener("dragstart", (event) => {
+      if (!isLayoutEditing()) {
+        event.preventDefault();
+        return;
+      }
+      draggedPanel = panel;
+      panel.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", panel.dataset.panel);
+    });
+
+    panel.addEventListener("dragover", (event) => {
+      if (!draggedPanel || draggedPanel === panel) return;
+      event.preventDefault();
+      const rect = panel.getBoundingClientRect();
+      const insertAfter = event.clientY > rect.top + rect.height / 2;
+      layoutGrid.insertBefore(draggedPanel, insertAfter ? panel.nextSibling : panel);
+    });
+
+    panel.addEventListener("drop", (event) => {
+      if (!draggedPanel) return;
+      event.preventDefault();
+      saveCurrentLayoutOrder();
+    });
+
+    panel.addEventListener("dragend", () => {
+      if (draggedPanel) saveCurrentLayoutOrder();
+      draggedPanel = null;
+      panel.classList.remove("dragging");
+    });
+  });
+
+  layoutEditToggle?.addEventListener("change", () => setLayoutEditing(layoutEditToggle.checked));
+  resetLayoutBtn?.addEventListener("click", () => {
+    localStorage.removeItem(LAYOUT_PREFS_KEY);
+    applyLayoutPrefs();
+  });
+
+  applyLayoutPrefs();
+  setLayoutEditing(Boolean(layoutEditToggle?.checked));
+}
+
+function ensurePanelLayoutControls(panel) {
+  const heading = panel.querySelector("h2");
+  if (!heading || heading.querySelector(".layout-controls")) return;
+  heading.classList.add("panel-heading");
+
+  const controls = document.createElement("span");
+  controls.className = "layout-controls";
+  controls.setAttribute("aria-label", `${heading.textContent.trim()}のサイズ`);
+
+  const moveUp = document.createElement("button");
+  moveUp.type = "button";
+  moveUp.className = "layout-move-btn";
+  moveUp.textContent = "↑";
+  moveUp.title = `${heading.textContent.trim()}を前へ移動`;
+  moveUp.addEventListener("click", () => movePanel(panel, -1));
+  controls.appendChild(moveUp);
+
+  const moveDown = document.createElement("button");
+  moveDown.type = "button";
+  moveDown.className = "layout-move-btn";
+  moveDown.textContent = "↓";
+  moveDown.title = `${heading.textContent.trim()}を後ろへ移動`;
+  moveDown.addEventListener("click", () => movePanel(panel, 1));
+  controls.appendChild(moveDown);
+
+  PANEL_SIZE_OPTIONS.forEach((size) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "layout-size-btn";
+    button.dataset.layoutSize = size;
+    button.textContent = PANEL_SIZE_LABELS[size];
+    button.title = `${heading.textContent.trim()}を${PANEL_SIZE_LABELS[size]}サイズにする`;
+    button.addEventListener("click", () => setPanelSize(panel.dataset.panel, size));
+    controls.appendChild(button);
+  });
+
+  heading.appendChild(controls);
+}
+
+function isLayoutEditing() {
+  return Boolean(layoutEditToggle?.checked);
+}
+
+function setLayoutEditing(isEditing) {
+  document.body.classList.toggle("layout-editing", isEditing);
+  layoutPanels.forEach((panel) => {
+    panel.draggable = isEditing;
+  });
+}
+
+function readLayoutPrefs() {
+  try {
+    const value = JSON.parse(localStorage.getItem(LAYOUT_PREFS_KEY) || "{}") || {};
+    return {
+      order: Array.isArray(value.order) ? value.order.filter((name) => DEFAULT_PANEL_ORDER.includes(name)) : [],
+      sizes: value.sizes && typeof value.sizes === "object" ? value.sizes : {}
+    };
+  } catch {
+    return { order: [], sizes: {} };
+  }
+}
+
+function writeLayoutPrefs(prefs) {
+  localStorage.setItem(LAYOUT_PREFS_KEY, JSON.stringify({
+    order: normalizedPanelOrder(prefs.order),
+    sizes: normalizedPanelSizes(prefs.sizes)
+  }));
+}
+
+function normalizedPanelOrder(order = []) {
+  const seen = new Set();
+  const valid = order.filter((name) => {
+    if (!DEFAULT_PANEL_ORDER.includes(name) || seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
+  return [...valid, ...DEFAULT_PANEL_ORDER.filter((name) => !seen.has(name))];
+}
+
+function normalizedPanelSizes(sizes = {}) {
+  const next = {};
+  DEFAULT_PANEL_ORDER.forEach((name) => {
+    const size = sizes[name] || DEFAULT_PANEL_SIZES[name] || "medium";
+    next[name] = PANEL_SIZE_OPTIONS.includes(size) ? size : DEFAULT_PANEL_SIZES[name] || "medium";
+  });
+  return next;
+}
+
+function applyLayoutPrefs() {
+  if (!layoutGrid) return;
+  const prefs = readLayoutPrefs();
+  const order = normalizedPanelOrder(prefs.order);
+  const sizes = normalizedPanelSizes(prefs.sizes);
+  const panelsByName = new Map(layoutPanels.map((panel) => [panel.dataset.panel, panel]));
+
+  order.forEach((name) => {
+    const panel = panelsByName.get(name);
+    if (panel) layoutGrid.appendChild(panel);
+  });
+
+  layoutPanels.forEach((panel) => {
+    const size = sizes[panel.dataset.panel] || "medium";
+    PANEL_SIZE_OPTIONS.forEach((option) => panel.classList.remove(`panel-size-${option}`));
+    panel.classList.add(`panel-size-${size}`);
+    panel.querySelectorAll("[data-layout-size]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.layoutSize === size);
+    });
+  });
+}
+
+function setPanelSize(panelName, size) {
+  if (!DEFAULT_PANEL_ORDER.includes(panelName) || !PANEL_SIZE_OPTIONS.includes(size)) return;
+  const prefs = readLayoutPrefs();
+  prefs.sizes = { ...normalizedPanelSizes(prefs.sizes), [panelName]: size };
+  writeLayoutPrefs({ ...prefs, order: currentPanelOrder() });
+  applyLayoutPrefs();
+}
+
+function movePanel(panel, direction) {
+  if (!layoutGrid || !panel) return;
+  const panels = [...layoutGrid.querySelectorAll("[data-panel]")];
+  const index = panels.indexOf(panel);
+  const targetIndex = index + direction;
+  if (index < 0 || targetIndex < 0 || targetIndex >= panels.length) return;
+
+  if (direction < 0) {
+    layoutGrid.insertBefore(panel, panels[targetIndex]);
+  } else {
+    layoutGrid.insertBefore(panel, panels[targetIndex].nextSibling);
+  }
+  saveCurrentLayoutOrder();
+}
+
+function currentPanelOrder() {
+  return [...layoutGrid?.querySelectorAll("[data-panel]") || []].map((panel) => panel.dataset.panel);
+}
+
+function saveCurrentLayoutOrder() {
+  const prefs = readLayoutPrefs();
+  writeLayoutPrefs({ ...prefs, order: currentPanelOrder() });
+  applyLayoutPrefs();
 }
 
 function setBusy(isBusy) {

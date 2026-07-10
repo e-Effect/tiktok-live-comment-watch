@@ -21,3 +21,13 @@ button[type=submit]{background:var(--ink);color:white}.actions{display:grid;grid
 .single-mode .app{grid-template-columns:300px 1fr}.single-mode .session-list{display:none}
 @media(max-width:900px){.app,.grid,.single-mode .app{grid-template-columns:1fr}.panel{position:static}.metrics,.report-list{grid-template-columns:repeat(2,minmax(0,1fr))}.list{height:360px}}
 @media(max-width:520px){.app{width:min(100% - 18px,1180px);margin:12px auto}.row,.metrics,.report-list,.fixed-actions{grid-template-columns:1fr}}
+
+.layout-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.layout-tools label{margin:0}.layout-tools button{padding:8px 10px;background:#eef3f4;color:var(--ink);font-size:.82rem}
+.grid{grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}.grid>section{min-width:0}.grid>section[hidden]{display:none}
+.grid>section.panel-size-small{grid-column:span 1}.grid>section.panel-size-medium{grid-column:span 2}.grid>section.panel-size-large{grid-column:span 3}.grid>section.panel-size-wide{grid-column:1 / -1}
+.panel-heading{display:flex;align-items:center;gap:8px}.layout-controls{display:none;align-items:center;gap:4px;margin-left:auto;flex:0 0 auto}.layout-editing .layout-controls{display:flex}.layout-size-btn,.layout-move-btn{padding:4px 7px;border-radius:6px;background:#eef3f4;color:var(--ink);font-size:.72rem;line-height:1}.layout-size-btn.active{background:var(--ink);color:white}
+.layout-editing .layout-card{outline:2px dashed rgba(0,184,169,.45);outline-offset:3px;cursor:grab}.layout-editing .layout-card:active{cursor:grabbing}.layout-card.dragging{opacity:.45}
+.panel-size-small .list{height:260px}.panel-size-medium .list{height:360px}.panel-size-large .list{height:520px}.panel-size-wide .list{height:420px}
+@media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.grid>section.panel-size-large,.grid>section.panel-size-wide{grid-column:1 / -1}.panel-size-large .list,.panel-size-wide .list{height:420px}}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.grid>section.panel-size-small,.grid>section.panel-size-medium,.grid>section.panel-size-large,.grid>section.panel-size-wide{grid-column:1 / -1}.layout-tools{grid-template-columns:1fr}.layout-controls{flex-wrap:wrap}.panel-size-small .list,.panel-size-medium .list,.panel-size-large .list,.panel-size-wide .list{height:340px}}
