@@ -16,11 +16,13 @@ const giftDiamonds = document.querySelector("#giftDiamonds");
 const elapsedTime = document.querySelector("#elapsedTime");
 const currentViewers = document.querySelector("#currentViewers");
 const watchTime = document.querySelector("#watchTime");
+const visitorCount = document.querySelector("#visitorCount");
 const commentList = document.querySelector("#commentList");
 const userList = document.querySelector("#userList");
 const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
 const shareHistory = document.querySelector("#shareHistory");
+const visitorHistory = document.querySelector("#visitorHistory");
 const targetGiftSelect = document.querySelector("#targetGiftSelect");
 const giftRankingRange = document.querySelector("#giftRankingRange");
 const giftRankingRefresh = document.querySelector("#giftRankingRefresh");
@@ -64,6 +66,15 @@ const candidateStatusFilter = document.querySelector("#candidateStatusFilter");
 const candidateLiveFilter = document.querySelector("#candidateLiveFilter");
 const candidateSummary = document.querySelector("#candidateSummary");
 const candidateList = document.querySelector("#candidateList");
+const activeStreamerState = document.querySelector("#activeStreamerState");
+const activeStreamerName = document.querySelector("#activeStreamerName");
+const activeStreamerId = document.querySelector("#activeStreamerId");
+const settingsPanel = document.querySelector("#settingsPanel");
+const settingsBackdrop = document.querySelector("#settingsBackdrop");
+const settingsOpenBtn = document.querySelector("#settingsOpenBtn");
+const settingsCloseBtn = document.querySelector("#settingsCloseBtn");
+const settingsTabs = [...document.querySelectorAll("[data-settings-tab]")];
+const settingsPages = [...document.querySelectorAll("[data-settings-page]")];
 
 const LEGACY_STORAGE_KEY = "tiktok-live-active-session";
 const SESSIONS_KEY = "tiktok-live-active-sessions";
@@ -80,6 +91,7 @@ const PANEL_SIZE_OPTIONS = ["small", "medium", "large", "wide"];
 const PANEL_SIZE_LABELS = { small: "小", medium: "中", large: "大", wide: "横" };
 const DEFAULT_PANEL_SIZES = {
   report: "wide",
+  visitors: "medium",
   comments: "large",
   shares: "medium",
   watchers: "medium",
@@ -141,6 +153,7 @@ window.addEventListener("online", reconnectActiveSessions);
 
 setupPanelToggles();
 setupLayoutTools();
+setupSettingsPanel();
 setupFixedAccountTools();
 setupCandidateTools();
 renderRecentIds();
@@ -1061,6 +1074,33 @@ function exportCandidatesCsv() {
   link.remove();
   URL.revokeObjectURL(url);
 }
+
+function setupSettingsPanel() {
+  const setOpen = (open) => {
+    document.body.classList.toggle("settings-open", open);
+    settingsPanel?.setAttribute("aria-hidden", String(!open));
+    settingsOpenBtn?.setAttribute("aria-expanded", String(open));
+    if (settingsBackdrop) settingsBackdrop.hidden = !open;
+  };
+
+  const selectTab = (name) => {
+    settingsTabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.settingsTab === name));
+    settingsPages.forEach((page) => {
+      const active = page.dataset.settingsPage === name;
+      page.classList.toggle("active", active);
+      page.hidden = !active;
+    });
+  };
+
+  settingsOpenBtn?.addEventListener("click", () => setOpen(true));
+  settingsCloseBtn?.addEventListener("click", () => setOpen(false));
+  settingsBackdrop?.addEventListener("click", () => setOpen(false));
+  settingsTabs.forEach((tab) => tab.addEventListener("click", () => selectTab(tab.dataset.settingsTab)));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("settings-open")) setOpen(false);
+  });
+}
+
 function setupPanelToggles() {
   const prefs = readPanelPrefs();
   panelToggles.forEach((toggle) => {
@@ -1330,6 +1370,7 @@ function renderSelectedSession() {
   updateSelectedControls();
   if (!snapshot) {
     setStatus("stopped", sessions.size ? "配信を選択してください。" : "未接続", sessions.size ? "選択待ち" : "待機中");
+    renderActiveStreamer(selected, null);
     renderConnectionDetails(null);
     renderMetrics(emptySnapshot());
     renderReport(null);
@@ -1340,6 +1381,7 @@ function renderSelectedSession() {
     renderGifters([]);
     renderGiftHistory([]);
     renderShareHistory([]);
+    renderVisitorHistory([]);
     renderTargetGiftRanking([]);
     return;
   }
@@ -1348,6 +1390,7 @@ function renderSelectedSession() {
     ? `${snapshot.message || statusMessage(snapshot)} 新規追加は${formatClock(cooldown.until)}頃まで止めています。`
     : snapshot.message || statusMessage(snapshot);
   setStatus(snapshot.status, message, modeLabel(snapshot));
+  renderActiveStreamer(selected, snapshot);
   renderConnectionDetails(snapshot);
   renderMetrics(snapshot);
   renderReport(snapshot);
@@ -1358,10 +1401,29 @@ function renderSelectedSession() {
   renderGifters(snapshot.topGifters || []);
   renderGiftHistory(snapshot.gifts || []);
   renderShareHistory(snapshot.shares || []);
+  renderVisitorHistory(snapshot.visitors || []);
   if (!targetGiftSelect?.dataset.sessionId || targetGiftSelect.dataset.sessionId !== snapshot.id) {
     targetGiftSelect.dataset.sessionId = snapshot.id;
     refreshTargetGiftRanking();
   }
+}
+
+function renderActiveStreamer(selected, snapshot) {
+  if (!activeStreamerState || !activeStreamerName || !activeStreamerId) return;
+  if (!selected) {
+    activeStreamerState.textContent = "未接続";
+    activeStreamerState.classList.remove("live");
+    activeStreamerName.textContent = "ライバー未選択";
+    activeStreamerId.textContent = "-";
+    return;
+  }
+  const username = snapshot?.username || selected.username || "";
+  const displayName = snapshot?.displayName || username || "読み込み中";
+  const isLive = snapshot?.status === "live";
+  activeStreamerState.textContent = isLive ? "接続中" : "選択中";
+  activeStreamerState.classList.toggle("live", isLive);
+  activeStreamerName.textContent = displayName;
+  activeStreamerId.textContent = username ? `@${username}` : "-";
 }
 
 function updateSelectedControls() {
@@ -1474,6 +1536,7 @@ function renderReport(snapshot) {
   const silentCount = Number(snapshot.silentLongWatchers?.length || 0);
   const followedCount = Number(snapshot.followedTodayCount || 0);
   const shareCount = Number(snapshot.shareCount || snapshot.shares?.length || 0);
+  const visitors = Number(snapshot.viewerStats?.knownJoins || 0);
   const heartMeStats = snapshot.heartMeStats || {};
   const followStats = snapshot.followStats || {};
   const heartMeActiveCount = Number(heartMeStats.active || 0) + Number(heartMeStats.new_today || 0);
@@ -1490,6 +1553,7 @@ function renderReport(snapshot) {
     <article><span>現視聴15分無言</span><strong>${formatNumber(silentCount)}</strong><small>人</small></article>
     <article><span>シェア</span><strong>${formatNumber(shareCount)}</strong><small>回</small></article>
     <article><span>本日フォロー</span><strong>${formatNumber(followedCount)}</strong><small>人</small></article>
+    <article><span>確認来訪</span><strong>${formatNumber(visitors)}</strong><small>この配信</small></article>
     <article><span>計測時間</span><strong>${formatDuration(snapshot.elapsedSeconds)}</strong><small>${escapeHtml(snapshot.displayName || snapshot.username || "")}</small></article>
   `;
 }
@@ -1504,6 +1568,7 @@ function renderMetrics(snapshot) {
   watchTime.textContent = snapshot.viewerStats?.estimatedWatchSeconds
     ? formatDuration(Math.floor(snapshot.viewerStats.estimatedWatchSeconds))
     : "-";
+  if (visitorCount) visitorCount.textContent = formatNumber(snapshot.viewerStats?.knownJoins || 0);
 }
 
 function renderComments(comments) {
@@ -1613,6 +1678,46 @@ function renderShareHistory(shares) {
   `).join("");
 }
 
+function renderVisitorHistory(visitors) {
+  if (!visitorHistory) return;
+  if (!visitors.length) {
+    visitorHistory.innerHTML = `<p class="empty">入室を確認したユーザーがここに表示されます。</p>`;
+    return;
+  }
+  visitorHistory.innerHTML = visitors.map((user) => {
+    const visits = Number(user.visitCount || 0);
+    const entryEvents = Number(user.entryEventCount || 0);
+    const visitLabel = visits > 1 ? `累計${formatNumber(visits)}回目` : "この配信で確認";
+    const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
+    return `
+      <div class="user-row visitor-row">
+        <span class="visit-badge">${escapeHtml(visitSourceLabel(user.visitSource))}</span>
+        <span class="name">${renderDecoratedName(user)}</span>
+        <span class="visit-meta">
+          <strong>${visitLabel}</strong>
+          <small>${formatClock(user.firstJoinAt || user.firstSeenAt)}${reentryLabel}</small>
+        </span>
+      </div>
+    `;
+  }).join("");
+}
+
+function visitSourceLabel(source) {
+  const labels = {
+    member: "入室",
+    super_fan_join: "会員入室",
+    viewer_ranking: "視聴中",
+    comment: "コメント",
+    gift: "ギフト",
+    share: "シェア",
+    follow: "フォロー",
+    like: "いいね",
+    subscribe: "登録",
+    heart_me: "ハート"
+  };
+  return labels[source] || "確認";
+}
+
 async function refreshTargetGiftRanking() {
   const session = selectedSessionId ? sessions.get(selectedSessionId) : null;
   if (!session || !targetGiftRanking) {
@@ -1719,7 +1824,7 @@ function renderName(user) {
 
 function renderDecoratedName(user) {
   const name = escapeHtml(user.nickname || user.userId);
-  return `${heartMeMark(user)}${followStatusMark(user)}${todayFollowMark(user)}${name}`;
+  return `${heartMeMark(user)}${followStatusMark(user)}${todayFollowMark(user)}${visitCountMark(user)}${name}`;
 }
 
 function heartMeMark(user) {
@@ -1727,7 +1832,9 @@ function heartMeMark(user) {
   const level = Number(user.heartMeLevel || 0);
   const className = String(status).replaceAll("_", "-");
   const titleMap = {
-    new_today: "この配信でハートミー送信済み",
+    new_today: user.heartMeStatusSource === "heart_me_gift_new"
+      ? "この配信で初めてハートミー送信"
+      : "この配信でハートミー送信（初回か再開か未確認）",
     active: "ハートミー有効",
     inactive: "ハートミー凍結/休止",
     none: "ハートミー未加入",
@@ -1736,6 +1843,12 @@ function heartMeMark(user) {
   const title = `${titleMap[status] || titleMap.unknown}${level > 0 ? ` Lv.${level}` : ""}`;
   const symbol = status === "none" || status === "unknown" ? "♡" : "♥";
   return `<span class="heart-mark heart-${className}" title="${escapeHtml(title)}">${symbol}</span>`;
+}
+
+function visitCountMark(user) {
+  const count = Number(user.visitCount || 0);
+  if (count <= 1) return "";
+  return `<span class="visit-count-mark" title="確認できた来訪回数">${formatNumber(count)}回目</span>`;
 }
 
 function followStatusMark(user) {

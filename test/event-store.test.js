@@ -31,3 +31,39 @@ test("gift ranking converts database totals to numbers", async () => {
   assert.equal(rows[0].diamonds, 12);
   assert.equal(typeof rows[0].lastGiftAt, "number");
 });
+
+test("visit history counts distinct live room ids instead of re-entries", async () => {
+  const store = new EventStore();
+  const calls = [];
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (sql.includes("COUNT(DISTINCT")) {
+        return {
+          rows: [{
+            visitCount: "3",
+            firstVisitAt: new Date("2026-07-01T00:00:00Z"),
+            lastVisitAt: new Date("2026-07-28T00:00:00Z")
+          }]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const summary = await store.recordVisit({
+    id: "session-id",
+    username: "streamer"
+  }, {
+    userId: "viewer-id",
+    nickname: "Viewer",
+    at: Date.parse("2026-07-28T00:00:00Z"),
+    source: "member"
+  });
+
+  assert.equal(summary.visitCount, 3);
+  assert.match(calls[0].sql, /ON CONFLICT \(session_id, user_id\)/);
+  assert.match(calls[1].sql, /COALESCE\(NULLIF\(s\.room_id, ''\), v\.session_id::text\)/);
+  assert.deepEqual(calls[1].values, ["streamer", "viewer-id"]);
+});

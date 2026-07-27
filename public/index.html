@@ -7,18 +7,45 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
+    <header class="app-topbar">
+      <div class="brand-block">
+        <span class="brand-kicker">TikTok LIVE</span>
+        <strong>配信計測</strong>
+      </div>
+      <div class="active-streamer" aria-live="polite">
+        <span id="activeStreamerState">未接続</span>
+        <strong id="activeStreamerName">ライバー未選択</strong>
+        <small id="activeStreamerId">-</small>
+      </div>
+      <form id="connectForm" class="quick-connect">
+        <input id="username" name="username" list="recentIds" autocomplete="off" placeholder="@TikTok ID" aria-label="TikTok ID" required>
+        <datalist id="recentIds"></datalist>
+        <button type="submit">追加</button>
+      </form>
+      <div class="top-actions">
+        <button id="stopBtn" type="button" disabled>停止</button>
+        <a id="exportLink" class="disabled" aria-disabled="true">CSV</a>
+        <button id="settingsOpenBtn" type="button" aria-controls="settingsPanel" aria-expanded="false">設定</button>
+      </div>
+    </header>
+    <div id="settingsBackdrop" class="settings-backdrop" hidden></div>
     <main class="app">
-      <section class="panel">
-        <h1>TikTok LIVE 配信計測</h1>
-        <form id="connectForm" class="form">
-          <label for="username">TikTok ID</label>
-          <div class="row">
-            <input id="username" name="username" list="recentIds" autocomplete="off" placeholder="@username" required>
-            <datalist id="recentIds"></datalist>
-            <button type="submit">追加</button>
-          </div>
+      <aside id="settingsPanel" class="panel settings-panel" aria-label="設定" aria-hidden="true">
+        <div class="settings-header">
+          <h1>設定</h1>
+          <button id="settingsCloseBtn" type="button" aria-label="設定を閉じる">×</button>
+        </div>
+        <nav class="settings-tabs" aria-label="設定項目">
+          <button type="button" data-settings-tab="accounts" class="active">アカウント</button>
+          <button type="button" data-settings-tab="display">表示</button>
+          <button type="button" data-settings-tab="candidates">候補</button>
+        </nav>
+
+        <div class="settings-page active" data-settings-page="accounts">
+          <section class="recent-section" aria-label="最近使ったID">
+            <h2>最近使ったID</h2>
           <div id="recentIdList" class="recent-list" aria-label="最近使ったID"></div>
-        </form>
+          </section>
 
         <section class="monitor-section" aria-label="監視中の配信">
           <h2>監視中の配信</h2>
@@ -36,13 +63,32 @@
             <button id="clearFixedBtn" type="button">解除</button>
           </div>
         </section>
-
-        <div class="actions">
-          <button id="stopBtn" type="button" disabled>選択中を停止</button>
-          <a id="exportLink" class="disabled" aria-disabled="true">CSV出力</a>
         </div>
 
-        <section class="candidate-controls" aria-label="候補発掘">
+        <div class="settings-page" data-settings-page="display" hidden>
+          <section class="view-settings" aria-label="表示項目">
+            <h2>表示項目</h2>
+            <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
+            <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
+            <label><input type="checkbox" data-panel-toggle="visitors" checked> 入室履歴</label>
+            <label><input type="checkbox" data-panel-toggle="candidates" checked> 候補発掘</label>
+            <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
+            <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
+            <label><input type="checkbox" data-panel-toggle="watchers" checked> 滞在時間ランキング</label>
+            <label><input type="checkbox" data-panel-toggle="silent" checked> 現在視聴中・15分以上コメントなし</label>
+            <label><input type="checkbox" data-panel-toggle="gifts" checked> ギフトランキング</label>
+            <label><input type="checkbox" data-panel-toggle="targetGift" checked> ギフト別ランキング</label>
+            <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
+            <label><input type="checkbox" data-panel-toggle="giftHistory" checked> ギフト履歴</label>
+            <div class="layout-tools">
+              <label><input id="layoutEditToggle" type="checkbox"> レイアウト編集</label>
+              <button id="resetLayoutBtn" type="button">初期配置</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="settings-page" data-settings-page="candidates" hidden>
+          <section class="candidate-controls" aria-label="候補発掘">
           <h2>候補発掘</h2>
           <div class="candidate-discovery">
             <select id="candidateDiscoverRegion" aria-label="取得地域">
@@ -95,26 +141,8 @@
             <button id="candidateExportBtn" type="button">候補CSV</button>
           </div>
         </section>
-
-        <section class="view-settings" aria-label="表示項目">
-          <h2>表示項目</h2>
-          <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
-          <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
-          <label><input type="checkbox" data-panel-toggle="candidates" checked> 候補発掘</label>
-          <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
-          <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
-          <label><input type="checkbox" data-panel-toggle="watchers" checked> 滞在時間ランキング</label>
-          <label><input type="checkbox" data-panel-toggle="silent" checked> 現在視聴中・15分以上コメントなし</label>
-          <label><input type="checkbox" data-panel-toggle="gifts" checked> ギフトランキング</label>
-          <label><input type="checkbox" data-panel-toggle="targetGift" checked> ギフト別ランキング</label>
-          <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
-          <label><input type="checkbox" data-panel-toggle="giftHistory" checked> ギフト履歴</label>
-          <div class="layout-tools">
-            <label><input id="layoutEditToggle" type="checkbox"> レイアウト編集</label>
-            <button id="resetLayoutBtn" type="button">初期配置</button>
-          </div>
-        </section>
-      </section>
+        </div>
+      </aside>
 
       <section class="dashboard" aria-live="polite">
         <div class="status">
@@ -137,6 +165,7 @@
           <article><span>計測時間</span><strong id="elapsedTime">00:00</strong></article>
           <article><span>現在視聴</span><strong id="currentViewers">-</strong></article>
           <article><span>推定滞在</span><strong id="watchTime">-</strong></article>
+          <article><span>確認来訪</span><strong id="visitorCount">0</strong></article>
         </div>
 
         <div class="grid">
@@ -193,6 +222,13 @@
             <h2>コメント</h2>
             <div id="commentList" class="list">
               <p class="empty">接続するとコメントがここに流れます。</p>
+            </div>
+          </section>
+
+          <section data-panel="visitors">
+            <h2>入室履歴</h2>
+            <div id="visitorHistory" class="list small">
+              <p class="empty">入室を確認したユーザーがここに表示されます。</p>
             </div>
           </section>
 

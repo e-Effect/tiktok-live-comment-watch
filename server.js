@@ -5,6 +5,12 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { EventStore } from "./lib/event-store.js";
+import {
+  heartMeLevelFromEvent,
+  heartMeStateFromUser,
+  isHeartMeGift,
+  nextHeartMeStatusForGift
+} from "./lib/heart-me.js";
 import { LiveCueForwarder } from "./lib/livecue-forwarder.js";
 import { liveProviderInfo, loadLiveProvider } from "./lib/live-provider.js";
 
@@ -82,6 +88,7 @@ class LiveSession extends EventEmitter {
     this.userStats = new Map();
     this.displayNameIndex = new Map();
     this.giftStats = new Map();
+    this.heartMeGiftIds = new Set();
     this.viewerStats = {
       current: 0,
       peak: 0,
@@ -95,6 +102,7 @@ class LiveSession extends EventEmitter {
     this.notice = "";
     this.errorCode = "";
     this.displayName = username;
+    this.roomId = String(options.roomId || "");
     this.connectedAt = null;
     this.lastEventAt = null;
     this.connection = null;
@@ -116,12 +124,13 @@ class LiveSession extends EventEmitter {
       this.status = "connecting";
       this.broadcast("status", this.snapshot(`${connector.label}でTikTok LIVEへ接続中です。`));
       const state = await this.connectLiveWithRetries(connector);
+      this.roomId = String(state?.roomId || this.connection?.roomId || this.roomId || "");
       this.displayName = displayNameFromRoomInfo(state?.roomInfo || this.connection?.roomInfo, this.username);
       this.status = "live";
       this.connectedAt = Date.now();
       this.lastEventAt = this.connectedAt;
       this.persistSession();
-      this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
+      this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${this.roomId || "取得済み"}`));
     } catch (error) {
       this.fail(`実接続失敗: ${diagnoseConnectError(error)}`, isRateLimitError(error) ? "rate_limited" : "");
     }
@@ -188,14 +197,14 @@ class LiveSession extends EventEmitter {
     const handleShare = (data) => {
       const share = parseShareEvent(data);
       share.source = this.currentEventSource();
-      this.markSeen({ userId: share.userId, nickname: share.nickname, signals: share.signals }, share.at);
+      this.markSeen({ userId: share.userId, nickname: share.nickname, signals: share.signals }, share.at, "share");
       this.addShare(share);
     };
 
     connection.on(events.CHAT || "chat", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
-      this.markSeen(person, at);
+      this.markSeen(person, at, "comment");
       this.addComment({
         id: data.msgId || randomUUID(),
         userId: person.userId,
@@ -210,18 +219,19 @@ class LiveSession extends EventEmitter {
     connection.on(events.GIFT || "gift", (data) => {
       const giftType = Number(data.giftType ?? data.giftDetails?.giftType ?? data.extendedGiftInfo?.giftType ?? 0);
       if (giftType === 1 && data.repeatEnd === false) return;
-      const gift = parseGiftEvent(data);
+      const gift = parseGiftEvent(data, this.heartMeGiftIds);
       gift.source = this.currentEventSource();
       const previousUser = this.userStats.get(gift.userId);
       gift.previousHeartMeStatus = previousUser?.heartMeStatus || null;
-      this.markSeen({ userId: gift.userId, nickname: gift.nickname, signals: gift.signals }, gift.at);
+      if (gift.isHeartMe && gift.giftId) this.heartMeGiftIds.add(String(gift.giftId));
+      this.markSeen({ userId: gift.userId, nickname: gift.nickname, signals: gift.signals }, gift.at, "gift");
       this.addGift(gift);
     });
 
     connection.on(events.MEMBER || "member", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
-      this.markSeen(person, at);
+      this.markSeen(person, at, "member", { entryEvent: true });
       this.emitNormalized({
         id: data.msgId || randomUUID(),
         type: "join",
@@ -234,6 +244,7 @@ class LiveSession extends EventEmitter {
     connection.on(events.FOLLOW || "follow", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
+      this.markSeen(person, at, "follow");
       this.markFollowedToday(person, at);
       this.emitNormalized({
         id: data.msgId || randomUUID(),
@@ -253,6 +264,7 @@ class LiveSession extends EventEmitter {
       if (isFollowEvent(data)) {
         const person = personFromEvent(data);
         const at = eventTime(data);
+        this.markSeen(person, at, "follow");
         this.markFollowedToday(person, at);
         this.emitNormalized({
           id: data.msgId || randomUUID(),
@@ -267,7 +279,7 @@ class LiveSession extends EventEmitter {
     connection.on(events.LIKE || "like", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
-      this.markSeen(person, at);
+      this.markSeen(person, at, "like");
       this.emitNormalized({
         id: data.msgId || randomUUID(),
         type: "like",
@@ -282,7 +294,7 @@ class LiveSession extends EventEmitter {
     connection.on(events.SUBSCRIBE || "subscribe", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
-      this.markSeen(person, at);
+      this.markSeen(person, at, "subscribe");
       this.emitNormalized({
         id: data.msgId || randomUUID(),
         type: "subscribe",
@@ -290,6 +302,28 @@ class LiveSession extends EventEmitter {
         subMonth: Number(data.subMonth || 0),
         at,
         source: this.currentEventSource()
+      });
+    });
+
+    connection.on(events.SUPER_FAN || "superFan", (data) => {
+      const person = personFromEvent(data);
+      const at = eventTime(data);
+      this.markSeen(person, at, "heart_me");
+      this.markHeartMe(person, at, {
+        status: "new_today",
+        level: heartMeLevelFromEvent(data),
+        source: "super_fan_event"
+      });
+    });
+
+    connection.on(events.SUPER_FAN_JOIN || "superFanJoin", (data) => {
+      const person = personFromEvent(data);
+      const at = eventTime(data);
+      this.markSeen(person, at, "super_fan_join", { entryEvent: true });
+      this.markHeartMe(person, at, {
+        status: "active",
+        level: heartMeLevelFromEvent(data),
+        source: "super_fan_join"
       });
     });
 
@@ -340,15 +374,67 @@ class LiveSession extends EventEmitter {
     });
   }
 
-  markSeen(person, at) {
+  markSeen(person, at, presenceSource = "event", { entryEvent = false } = {}) {
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     if (!user.hasJoined) {
       user.hasJoined = true;
+      user.firstJoinAt = at;
+      user.lastJoinAt = at;
+      user.visitCount = Math.max(1, Number(user.visitCount || 0));
+      user.visitSource = presenceSource;
+      user.entryEventCount = entryEvent ? 1 : Number(user.entryEventCount || 0);
       this.viewerStats.knownJoins += 1;
+      this.recordVisit(user, at, presenceSource);
+    } else if (entryEvent) {
+      user.lastJoinAt = at;
+      user.entryEventCount = Number(user.entryEventCount || 0) + 1;
     }
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
+  }
+
+  markHeartMe(person, at, { status, level = 0, source = "" } = {}) {
+    const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
+    const resolvedStatus = status === "new_today"
+      ? nextHeartMeStatusForGift(user.heartMeStatus)
+      : status;
+    user.heartMeStatus = resolvedStatus || user.heartMeStatus;
+    if (status === "new_today") {
+      user.heartMeToday = true;
+      user.lastHeartMeAt = at;
+    }
+    user.heartMeStatusSource = source || user.heartMeStatusSource;
+    user.heartMeStatusAt = at;
+    user.heartMeLevel = Math.max(Number(user.heartMeLevel || 0), Number(level || 0));
+    this.userStats.set(user.userId, user);
+    this.emitNormalized({
+      id: randomUUID(),
+      type: resolvedStatus === "active" ? "heart_me_active" : "heart_me",
+      userId: user.userId,
+      nickname: user.nickname,
+      at,
+      source: this.currentEventSource()
+    });
+    this.broadcast("status", this.snapshot());
+  }
+
+  recordVisit(user, at, source) {
+    eventStore.recordVisit(this, {
+      userId: user.userId,
+      nickname: user.nickname,
+      at,
+      source
+    }).then((summary) => {
+      if (!summary) return;
+      const current = this.userStats.get(user.userId);
+      if (!current) return;
+      current.visitCount = Math.max(1, Number(summary.visitCount || current.visitCount || 1));
+      current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || at;
+      current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || at;
+      this.userStats.set(current.userId, current);
+      this.broadcast("status", this.snapshot());
+    }).catch(() => {});
   }
 
   markFollowedToday(person, at) {
@@ -405,8 +491,12 @@ class LiveSession extends EventEmitter {
       user.heartMeGiftCount = Number(user.heartMeGiftCount || 0) + repeatCount;
       user.heartMeToday = true;
       user.lastHeartMeAt = gift.at;
-      user.heartMeStatus = "new_today";
-      user.heartMeStatusSource = gift.previousHeartMeStatus === "none" ? "heart_me_gift_new" : "heart_me_gift_today";
+      user.heartMeStatus = nextHeartMeStatusForGift(gift.previousHeartMeStatus);
+      user.heartMeStatusSource = gift.previousHeartMeStatus === "none"
+        ? "heart_me_gift_new"
+        : gift.previousHeartMeStatus === "active" || gift.previousHeartMeStatus === "inactive"
+          ? "heart_me_gift_returning"
+          : "heart_me_gift_today_unconfirmed";
       user.heartMeStatusAt = gift.at;
       user.heartMeLevel = Math.max(1, Number(user.heartMeLevel || 0));
     }
@@ -459,8 +549,10 @@ class LiveSession extends EventEmitter {
   getUserStat(rawUserId, rawNickname, at, signals = null) {
     const nickname = cleanDisplayName(rawNickname || rawUserId || "unknown");
     const displayKey = displayNameKey(nickname);
-    const existingId = this.displayNameIndex.get(displayKey);
-    const userId = existingId || cleanUserId(rawUserId || nickname);
+    const suppliedId = cleanUserId(rawUserId || "");
+    const hasStableId = suppliedId && suppliedId !== "unknown" && suppliedId !== cleanUserId(nickname);
+    const existingId = hasStableId ? "" : this.displayNameIndex.get(displayKey);
+    const userId = suppliedId || existingId || cleanUserId(nickname);
     this.displayNameIndex.set(displayKey, userId);
 
     const current = this.userStats.get(userId) || {
@@ -473,6 +565,13 @@ class LiveSession extends EventEmitter {
       firstSeenAt: at,
       lastSeenAt: at,
       hasJoined: false,
+      firstJoinAt: null,
+      lastJoinAt: null,
+      entryEventCount: 0,
+      visitCount: 0,
+      visitSource: "",
+      firstVisitAt: null,
+      lastVisitAt: null,
       watchSeconds: 0,
       followedToday: false,
       followedAt: null,
@@ -512,11 +611,8 @@ class LiveSession extends EventEmitter {
     entries.forEach((entry, index) => {
       const person = personFromRankedViewer(entry);
       if (!person) return;
+      this.markSeen(person, at, "viewer_ranking");
       const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
-      if (!user.hasJoined) {
-        user.hasJoined = true;
-        this.viewerStats.knownJoins += 1;
-      }
       user.lastSeenAt = Math.max(user.lastSeenAt, at);
       user.isCurrentlyRanked = true;
       user.currentViewerRank = rankedViewerPosition(entry, index);
@@ -555,6 +651,10 @@ class LiveSession extends EventEmitter {
       .filter((user) => user.isCurrentlyRanked)
       .sort((a, b) => a.currentViewerRank - b.currentViewerRank || b.watchSeconds - a.watchSeconds || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 100);
+    const visitors = [...users]
+      .filter((user) => user.hasJoined)
+      .sort((a, b) => b.firstJoinAt - a.firstJoinAt || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, 200);
     const topGifts = [...this.giftStats.values()]
       .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
       .slice(0, 30);
@@ -566,6 +666,7 @@ class LiveSession extends EventEmitter {
       id: this.id,
       username: this.username,
       displayName: this.displayName,
+      roomId: this.roomId,
       provider: this.provider,
       mode: this.mode,
       status: this.status,
@@ -591,6 +692,7 @@ class LiveSession extends EventEmitter {
       topWatchers,
       silentLongWatchers,
       currentViewerRanking,
+      visitors,
       topGifts,
       followedTodayCount,
       heartMeStats,
@@ -883,11 +985,11 @@ function personFromRankedViewer(entry) {
     entry.uniqueId
   );
   const userId = firstText(
-    rawUser.uniqueId,
-    rawUser.userId,
     rawUser.id,
-    entry.uniqueId,
+    rawUser.userId,
+    rawUser.uniqueId,
     entry.userId,
+    entry.uniqueId,
     nickname
   );
   if (!userId || cleanDisplayName(userId) === "unknown") return null;
@@ -945,61 +1047,6 @@ function userSignalsFromRawUser(rawUser) {
   };
 }
 
-function heartMeStateFromUser(rawUser) {
-  if (!rawUser || typeof rawUser !== "object") return null;
-  const fansClub = rawUser.fansClub || rawUser.fansClubMember || {};
-  const preferData = fansClub.preferData && typeof fansClub.preferData === "object"
-    ? Object.values(fansClub.preferData).find(Boolean)
-    : null;
-  const fansData = fansClub.data || preferData || rawUser.fansClubData || null;
-  const fansInfo = rawUser.fansClubInfo || {};
-  const badgeLevel = teamMemberLevelFromUser(rawUser);
-  const level = firstPositiveNumber(
-    fansData?.level,
-    fansData?.badge?.level,
-    fansData?.badge?.badgeLevel,
-    fansInfo?.fansLevel,
-    fansInfo?.level,
-    rawUser.teamMemberLevel,
-    badgeLevel
-  );
-  const rawStatus = firstDefined(
-    fansData?.userFansClubStatus,
-    fansData?.user_fans_club_status,
-    fansData?.fansClubStatus,
-    fansData?.status,
-    fansClub?.userFansClubStatus,
-    fansClub?.user_fans_club_status,
-    fansInfo?.userFansClubStatus,
-    fansInfo?.user_fans_club_status,
-    rawUser.userFansClubStatus,
-    rawUser.user_fans_club_status,
-    rawUser.fansClubStatus
-  );
-  const status = fanClubStatusFromRaw(rawStatus);
-  const isSleeping = firstBoolean(
-    fansInfo?.isSleeping,
-    fansInfo?.is_sleeping,
-    fansData?.isSleeping,
-    fansData?.is_sleeping,
-    rawUser.isFansClubSleeping,
-    rawUser.is_fans_club_sleeping
-  );
-
-  if (status) {
-    if (status === "active") return { status, rawStatus, level, source: "fans_club_status" };
-    if (status === "inactive") return { status, rawStatus, level, source: "fans_club_status" };
-    if (status === "none") return { status, rawStatus, level: 0, source: "fans_club_status" };
-  }
-  if (isSleeping === true) {
-    return { status: "inactive", rawStatus: "sleeping", level, source: "fans_club_info" };
-  }
-  if (level > 0) {
-    return { status: "active", rawStatus, level, source: "fan_badge_level" };
-  }
-  return null;
-}
-
 function followStateFromUser(rawUser) {
   if (!rawUser || typeof rawUser !== "object") return null;
   const rawStatus = firstDefined(rawUser.followInfo?.followStatus, rawUser.followRole);
@@ -1014,68 +1061,6 @@ function followStateFromUser(rawUser) {
   };
 }
 
-function teamMemberLevelFromUser(rawUser) {
-  const direct = Number(rawUser?.teamMemberLevel || 0);
-  if (Number.isFinite(direct) && direct > 0) return direct;
-  const simplifiedBadge = Array.isArray(rawUser?.userBadges)
-    ? rawUser.userBadges.find((badge) => Number(badge?.badgeSceneType) === 10 && Number(badge?.level || 0) > 0)
-    : null;
-  if (simplifiedBadge) return Number(simplifiedBadge.level);
-
-  if (Array.isArray(rawUser?.badges)) {
-    for (const badgeGroup of rawUser.badges) {
-      const scene = Number(firstDefined(badgeGroup?.badgeSceneType, badgeGroup?.badgeScene));
-      if (scene !== 10) continue;
-      const level = firstPositiveNumber(
-        badgeGroup?.level,
-        badgeGroup?.privilegeLogExtra?.level,
-        ...(Array.isArray(badgeGroup?.badges) ? badgeGroup.badges.map((badge) => badge?.level) : [])
-      );
-      return level || 1;
-    }
-  }
-  return 0;
-}
-
-function firstPositiveNumber(...values) {
-  for (const value of values) {
-    const number = Number(value || 0);
-    if (Number.isFinite(number) && number > 0) return number;
-  }
-  return 0;
-}
-
-function fanClubStatusFromRaw(value) {
-  const statusNumber = Number(value);
-  if (Number.isFinite(statusNumber)) {
-    if (statusNumber === 1) return "active";
-    if (statusNumber === 2) return "inactive";
-    if (statusNumber === 0) return "none";
-  }
-  const text = String(value || "").normalize("NFKC").toLowerCase();
-  if (!text) return "";
-  if (text.includes("inactive") || text.includes("sleep") || text.includes("frozen") || text.includes("freeze") || text.includes("expired") || text.includes("paused")) {
-    return "inactive";
-  }
-  if (text.includes("active") || text.includes("valid")) return "active";
-  if (text.includes("notjoined") || text.includes("not_joined") || text.includes("none") || text.includes("not joined")) return "none";
-  return "";
-}
-
-function booleanValue(value) {
-  if (value === true || value === "true" || value === 1 || value === "1") return true;
-  if (value === false || value === "false" || value === 0 || value === "0") return false;
-  return null;
-}
-
-function firstBoolean(...values) {
-  for (const value of values) {
-    const result = booleanValue(value);
-    if (result !== null) return result;
-  }
-  return null;
-}
-
 function userDisplayState(user) {
   return {
     followedToday: Boolean(user.followedToday),
@@ -1083,10 +1068,14 @@ function userDisplayState(user) {
     followStatus: user.followStatus,
     followStatusRaw: user.followStatusRaw,
     heartMeStatus: user.heartMeStatus,
+    heartMeStatusSource: user.heartMeStatusSource,
     heartMeLevel: user.heartMeLevel,
     heartMeToday: Boolean(user.heartMeToday),
     heartMeGiftCount: Number(user.heartMeGiftCount || 0),
-    lastHeartMeAt: user.lastHeartMeAt
+    lastHeartMeAt: user.lastHeartMeAt,
+    visitCount: Number(user.visitCount || 0),
+    firstVisitAt: user.firstVisitAt,
+    lastVisitAt: user.lastVisitAt
   };
 }
 
@@ -1111,7 +1100,7 @@ function summarizeFollowStatus(users) {
 function personFromEvent(data) {
   const rawUser = data.user || data.userInfo || data.viewer || data.author || data.data?.user || data;
   const nickname = data.nickname || rawUser?.nickname || rawUser?.uniqueId || data.uniqueId || "unknown";
-  const userId = rawUser?.uniqueId || data.uniqueId || rawUser?.userId || rawUser?.id || nickname;
+  const userId = rawUser?.id || rawUser?.userId || rawUser?.uniqueId || data.uniqueId || nickname;
   return {
     userId: cleanUserId(userId),
     nickname: cleanDisplayName(nickname),
@@ -1119,41 +1108,7 @@ function personFromEvent(data) {
   };
 }
 
-function isHeartMeGift(data, extended = {}) {
-  const fields = [
-    data.giftName,
-    data.giftNameKey,
-    data.describe,
-    data.description,
-    data.gift?.name,
-    data.gift?.giftNameKey,
-    data.gift?.describe,
-    data.gift?.description,
-    data.giftDetails?.name,
-    data.giftDetails?.giftNameKey,
-    data.giftDetails?.describe,
-    data.giftDetails?.description,
-    data.extendedGiftInfo?.name,
-    data.extendedGiftInfo?.giftNameKey,
-    data.extendedGiftInfo?.describe,
-    data.extendedGiftInfo?.description,
-    extended.name,
-    extended.giftNameKey,
-    extended.describe,
-    extended.description
-  ];
-  const text = normalizeGiftText(fields.filter(Boolean).join(" "));
-  return text.includes("heartme") || text.includes("ハートミー") || (text.includes("ハート") && text.includes("ミー"));
-}
-
-function normalizeGiftText(value) {
-  return String(value || "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[\s_\-・･.]/g, "");
-}
-
-function parseGiftEvent(data) {
+function parseGiftEvent(data, knownHeartMeGiftIds = []) {
   const person = personFromEvent(data);
   const extended = data.extendedGiftInfo || data.giftDetails || data.gift || {};
   const diamondCount = Number(
@@ -1173,7 +1128,7 @@ function parseGiftEvent(data) {
     giftName: data.giftName || extended.name || data.giftId || "ギフト",
     repeatCount: Number(data.repeatCount || data.repeat_count || 1),
     diamondCount,
-    isHeartMe: isHeartMeGift(data, extended),
+    isHeartMe: isHeartMeGift(data, extended, knownHeartMeGiftIds),
     signals: person.signals,
     at: eventTime(data)
   };
@@ -1764,7 +1719,8 @@ async function restorePersistentSessions() {
     restoredUsernames.add(username.toLowerCase());
     const session = new LiveSession(username, {
       id: item.id,
-      startedAt: item.startedAt
+      startedAt: item.startedAt,
+      roomId: item.roomId
     });
     sessions.set(session.id, session);
     session.start();
