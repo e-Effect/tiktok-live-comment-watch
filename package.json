@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@tiktool/live": "^2.12.1",
+    "pg": "^8.22.0",
     "tiktok-live-connector": "^2.1.1-beta1"
   }
 }

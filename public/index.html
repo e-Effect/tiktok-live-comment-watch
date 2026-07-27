@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>TikTok LIVE コメント計測</title>
+    <title>TikTok LIVE 配信計測</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <main class="app">
       <section class="panel">
-        <h1>TikTok LIVE コメント計測</h1>
+        <h1>TikTok LIVE 配信計測</h1>
         <form id="connectForm" class="form">
           <label for="username">TikTok ID</label>
           <div class="row">
@@ -42,15 +42,71 @@
           <a id="exportLink" class="disabled" aria-disabled="true">CSV出力</a>
         </div>
 
+        <section class="candidate-controls" aria-label="候補発掘">
+          <h2>候補発掘</h2>
+          <div class="candidate-discovery">
+            <select id="candidateDiscoverRegion" aria-label="取得地域">
+              <option value="Japan">Japan</option>
+              <option value="US">North America</option>
+              <option value="KR">South Korea</option>
+              <option value="TW">Broader China</option>
+            </select>
+            <select id="candidateDiscoverLeague" aria-label="取得リーグ">
+              <option value="target">狙い目</option>
+              <option value="top100">公開ランキング</option>
+              <option value="B5">B5</option>
+              <option value="C">C帯</option>
+              <option value="D">D帯</option>
+              <option value="C1">C1</option>
+              <option value="C2">C2</option>
+              <option value="D1">D1</option>
+              <option value="D2">D2</option>
+              <option value="D3">D3</option>
+            </select>
+            <label><input id="candidateDiscoverLiveOnly" type="checkbox"> LIVE中だけ</label>
+            <button id="candidateDiscoverBtn" type="button">候補一覧を取得</button>
+          </div>
+          <p id="candidateDiscoverStatus" class="candidate-status">まずは「候補一覧を取得」で公開ランキングから候補を並べます。</p>
+          <form id="candidateForm" class="candidate-form">
+            <input id="candidateUsername" autocomplete="off" placeholder="@username" required>
+            <input id="candidateDisplayName" autocomplete="off" placeholder="表示名">
+            <select id="candidateRegion" aria-label="地域">
+              <option value="Japan">Japan</option>
+              <option value="JP">JP</option>
+              <option value="US">US</option>
+              <option value="KR">KR</option>
+              <option value="TW">TW</option>
+              <option value="Other">Other</option>
+            </select>
+            <select id="candidateLeague" aria-label="リーグ">
+              <option value="">リーグ</option>
+              <option>D5</option><option>D4</option><option>D3</option><option>D2</option><option>D1</option>
+              <option>C5</option><option>C4</option><option>C3</option><option>C2</option><option>C1</option>
+              <option>B5</option><option>B4</option><option>B3</option><option>B2</option><option>B1</option>
+              <option>A2</option><option>A1</option>
+            </select>
+            <input id="candidateDiamonds" type="number" min="0" step="1" inputmode="numeric" placeholder="日次ダイヤ">
+            <label class="candidate-live"><input id="candidateLiveNow" type="checkbox"> LIVE中</label>
+            <button type="submit">候補追加</button>
+          </form>
+          <textarea id="candidateImport" rows="4" placeholder="@id, 表示名, Japan, B5, 12000, live"></textarea>
+          <div class="candidate-actions">
+            <button id="candidateImportBtn" type="button">取り込み</button>
+            <button id="candidateExportBtn" type="button">候補CSV</button>
+          </div>
+        </section>
+
         <section class="view-settings" aria-label="表示項目">
           <h2>表示項目</h2>
           <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
           <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
+          <label><input type="checkbox" data-panel-toggle="candidates" checked> 候補発掘</label>
           <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
           <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
           <label><input type="checkbox" data-panel-toggle="watchers" checked> 滞在時間ランキング</label>
           <label><input type="checkbox" data-panel-toggle="silent" checked> 現在視聴中・15分以上コメントなし</label>
           <label><input type="checkbox" data-panel-toggle="gifts" checked> ギフトランキング</label>
+          <label><input type="checkbox" data-panel-toggle="targetGift" checked> ギフト別ランキング</label>
           <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
           <label><input type="checkbox" data-panel-toggle="giftHistory" checked> ギフト履歴</label>
           <div class="layout-tools">
@@ -91,6 +147,48 @@
             </div>
           </section>
 
+          <section data-panel="candidates" class="candidate-board">
+            <div class="candidate-head">
+              <h2>候補発掘</h2>
+              <strong id="candidateSummary">0件</strong>
+            </div>
+            <div class="candidate-filter-bar">
+              <input id="candidateSearch" autocomplete="off" placeholder="ID・表示名・メモ">
+              <select id="candidateRegionFilter" aria-label="地域で絞り込み">
+                <option value="all">地域すべて</option>
+                <option value="Japan">Japan</option>
+                <option value="JP">JP</option>
+                <option value="US">US</option>
+                <option value="KR">KR</option>
+                <option value="TW">TW</option>
+                <option value="Other">Other</option>
+              </select>
+              <select id="candidateLeagueFilter" aria-label="リーグ帯で絞り込み">
+                <option value="target">狙い目</option>
+                <option value="all">全リーグ</option>
+                <option value="d">D帯</option>
+                <option value="c">C帯</option>
+                <option value="b">B帯</option>
+                <option value="a">A帯</option>
+                <option value="lower-b">C帯〜B下位</option>
+              </select>
+              <select id="candidateStatusFilter" aria-label="確認状態で絞り込み">
+                <option value="active">未確認・不明</option>
+                <option value="all">状態すべて</option>
+                <option value="queued">Backstage未確認</option>
+                <option value="unassigned">未所属</option>
+                <option value="affiliated">所属済み</option>
+                <option value="unknown">不明</option>
+                <option value="contacted">DM済み</option>
+                <option value="replied">返信あり</option>
+                <option value="ng">NG</option>
+              </select>
+              <label><input id="candidateLiveFilter" type="checkbox"> LIVE中</label>
+            </div>
+            <div id="candidateList" class="candidate-list">
+              <p class="empty">候補はまだありません。</p>
+            </div>
+          </section>
           <section data-panel="comments">
             <h2>コメント</h2>
             <div id="commentList" class="list">
@@ -123,6 +221,29 @@
             <h2>ギフトランキング</h2>
             <div id="giftList" class="list small">
               <p class="empty">まだギフトはありません。</p>
+            </div>
+          </section>
+
+          <section data-panel="targetGift" class="gift-ranking-board">
+            <div class="gift-ranking-head">
+              <h2>ギフト別ランキング</h2>
+              <span id="giftRankingStatus">現在の配信</span>
+            </div>
+            <div class="gift-ranking-controls">
+              <select id="targetGiftSelect" aria-label="集計するギフト">
+                <option value="">すべてのギフト</option>
+              </select>
+              <select id="giftRankingRange" aria-label="集計期間">
+                <option value="session">現在の配信</option>
+                <option value="today">本日</option>
+                <option value="7d">過去7日</option>
+                <option value="30d">過去30日</option>
+                <option value="all">全期間</option>
+              </select>
+              <button id="giftRankingRefresh" type="button" title="ランキングを更新">更新</button>
+            </div>
+            <div id="targetGiftRanking" class="list gift-ranking-list">
+              <p class="empty">ギフトが届くと、種類を選んで人数と累計個数を確認できます。</p>
             </div>
           </section>
 

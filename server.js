@@ -4,6 +4,9 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { EventStore } from "./lib/event-store.js";
+import { LiveCueForwarder } from "./lib/livecue-forwarder.js";
+import { liveProviderInfo, loadLiveProvider } from "./lib/live-provider.js";
 
 if (!globalThis.process) {
   globalThis.process = { env: {} };
@@ -15,6 +18,39 @@ const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
 let connectionPauseUntil = 0;
+const TIKTOOLS_SESSION_COOKIE = String(globalThis.process?.env?.TIKTOOLS_SESSION_COOKIE || "").trim();
+const providerInfo = liveProviderInfo(globalThis.process?.env || {});
+const eventStore = new EventStore({
+  connectionString: globalThis.process?.env?.DATABASE_URL || "",
+  ssl: String(globalThis.process?.env?.DATABASE_SSL || "").toLowerCase() === "false" ? false : undefined
+});
+const liveCue = new LiveCueForwarder({
+  endpoint: globalThis.process?.env?.LIVECUE_ENDPOINT || "",
+  channelId: globalThis.process?.env?.LIVECUE_CHANNEL_ID || "",
+  token: globalThis.process?.env?.LIVECUE_ADMIN_TOKEN || ""
+});
+
+const TIKTOOLS_REGION_SLUGS = {
+  Japan: { slug: "japan", code: "JP", label: "Japan" },
+  JP: { slug: "japan", code: "JP", label: "Japan" },
+  US: { slug: "north-america", code: "US+", label: "North America" },
+  KR: { slug: "south-korea", code: "KR", label: "South Korea" },
+  TW: { slug: "broader-china", code: "BC", label: "Broader China" },
+  Other: { slug: "japan", code: "JP", label: "Japan" }
+};
+
+const TIKTOOLS_CLASS_TYPES = {
+  A1: 2000,
+  A2: 1900,
+  B5: 1100,
+  C1: 1000,
+  C2: 900,
+  D1: 500,
+  D2: 400,
+  D3: 300
+};
+
+const DISCOVERY_TARGET_LEAGUES = ["B5", "C1", "C2", "D1", "D2", "D3"];
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -25,13 +61,14 @@ const MIME_TYPES = {
 };
 
 class LiveSession extends EventEmitter {
-  constructor(username) {
+  constructor(username, options = {}) {
     super();
-    this.id = randomUUID();
+    this.id = options.id || randomUUID();
     this.username = username;
+    this.provider = providerInfo.id;
     this.mode = "connecting";
     this.status = "connecting";
-    this.startedAt = Date.now();
+    this.startedAt = options.startedAt ? new Date(options.startedAt).getTime() : Date.now();
     this.stoppedAt = null;
     this.commentCount = 0;
     this.initialCommentCount = 0;
@@ -67,21 +104,23 @@ class LiveSession extends EventEmitter {
   }
 
   async start() {
-    const connector = await loadTikTokConnector();
+    const connector = await loadLiveProvider().catch(() => null);
     if (!connector) {
-      this.fail("tiktok-live-connector が未導入のため、実接続を開始できません。");
+      this.fail("LIVE接続モジュールを読み込めないため、接続を開始できません。");
       return;
     }
 
     try {
+      this.provider = connector.id;
       this.mode = "live";
       this.status = "connecting";
-      this.broadcast("status", this.snapshot("TikTok LIVEへ接続中です。"));
+      this.broadcast("status", this.snapshot(`${connector.label}でTikTok LIVEへ接続中です。`));
       const state = await this.connectLiveWithRetries(connector);
       this.displayName = displayNameFromRoomInfo(state?.roomInfo || this.connection?.roomInfo, this.username);
       this.status = "live";
       this.connectedAt = Date.now();
       this.lastEventAt = this.connectedAt;
+      this.persistSession();
       this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${state?.roomId || this.connection.roomId || "取得済み"}`));
     } catch (error) {
       this.fail(`実接続失敗: ${diagnoseConnectError(error)}`, isRateLimitError(error) ? "rate_limited" : "");
@@ -90,7 +129,9 @@ class LiveSession extends EventEmitter {
 
   async connectLiveWithRetries(connector) {
     let lastError = null;
-    const attempts = [
+    const attempts = connector.id === "tiktools" ? [
+      { processInitialData: false, fetchRoomInfoOnConnect: false }
+    ] : [
       { processInitialData: true, fetchRoomInfoOnConnect: true },
       { processInitialData: false, fetchRoomInfoOnConnect: true },
       { processInitialData: false, fetchRoomInfoOnConnect: false }
@@ -147,26 +188,28 @@ class LiveSession extends EventEmitter {
     const handleShare = (data) => {
       const share = parseShareEvent(data);
       share.source = this.currentEventSource();
-      this.markSeen({ userId: share.userId, nickname: share.nickname }, share.at);
+      this.markSeen({ userId: share.userId, nickname: share.nickname, signals: share.signals }, share.at);
       this.addShare(share);
     };
 
     connection.on(events.CHAT || "chat", (data) => {
       const person = personFromEvent(data);
-      this.markSeen(person, Date.now());
+      const at = eventTime(data);
+      this.markSeen(person, at);
       this.addComment({
         id: data.msgId || randomUUID(),
         userId: person.userId,
         nickname: person.nickname,
         text: data.comment || "",
-        at: Date.now(),
+        at,
         source: this.currentEventSource(),
         signals: person.signals
       });
     });
 
     connection.on(events.GIFT || "gift", (data) => {
-      if (data.giftType === 1 && data.repeatEnd === false) return;
+      const giftType = Number(data.giftType ?? data.giftDetails?.giftType ?? data.extendedGiftInfo?.giftType ?? 0);
+      if (giftType === 1 && data.repeatEnd === false) return;
       const gift = parseGiftEvent(data);
       gift.source = this.currentEventSource();
       const previousUser = this.userStats.get(gift.userId);
@@ -176,11 +219,29 @@ class LiveSession extends EventEmitter {
     });
 
     connection.on(events.MEMBER || "member", (data) => {
-      this.markSeen(personFromEvent(data), Date.now());
+      const person = personFromEvent(data);
+      const at = eventTime(data);
+      this.markSeen(person, at);
+      this.emitNormalized({
+        id: data.msgId || randomUUID(),
+        type: "join",
+        ...person,
+        at,
+        source: this.currentEventSource()
+      });
     });
 
     connection.on(events.FOLLOW || "follow", (data) => {
-      this.markFollowedToday(personFromEvent(data), Date.now());
+      const person = personFromEvent(data);
+      const at = eventTime(data);
+      this.markFollowedToday(person, at);
+      this.emitNormalized({
+        id: data.msgId || randomUUID(),
+        type: "follow",
+        ...person,
+        at,
+        source: this.currentEventSource()
+      });
     });
 
     connection.on(events.SHARE || "share", handleShare);
@@ -190,8 +251,46 @@ class LiveSession extends EventEmitter {
         handleShare(data);
       }
       if (isFollowEvent(data)) {
-        this.markFollowedToday(personFromEvent(data), Date.now());
+        const person = personFromEvent(data);
+        const at = eventTime(data);
+        this.markFollowedToday(person, at);
+        this.emitNormalized({
+          id: data.msgId || randomUUID(),
+          type: "follow",
+          ...person,
+          at,
+          source: this.currentEventSource()
+        });
       }
+    });
+
+    connection.on(events.LIKE || "like", (data) => {
+      const person = personFromEvent(data);
+      const at = eventTime(data);
+      this.markSeen(person, at);
+      this.emitNormalized({
+        id: data.msgId || randomUUID(),
+        type: "like",
+        ...person,
+        likeCount: Number(data.likeCount || 0),
+        totalLikes: Number(data.totalLikes || 0),
+        at,
+        source: this.currentEventSource()
+      });
+    });
+
+    connection.on(events.SUBSCRIBE || "subscribe", (data) => {
+      const person = personFromEvent(data);
+      const at = eventTime(data);
+      this.markSeen(person, at);
+      this.emitNormalized({
+        id: data.msgId || randomUUID(),
+        type: "subscribe",
+        ...person,
+        subMonth: Number(data.subMonth || 0),
+        at,
+        source: this.currentEventSource()
+      });
     });
 
     connection.on(events.ROOM_USER || "roomUser", (data) => {
@@ -220,8 +319,20 @@ class LiveSession extends EventEmitter {
     connection.on(events.DISCONNECTED || "disconnected", () => {
       if (!this.stoppedAt) {
         this.status = "disconnected";
-        this.broadcast("status", this.snapshot("接続が切れました。"));
+        this.persistSession();
+        const message = this.provider === "tiktools"
+          ? "接続が切れました。サーバー側で自動再接続しています。"
+          : "接続が切れました。";
+        this.broadcast("status", this.snapshot(message));
       }
+    });
+
+    connection.on(events.CONNECTED || "connected", () => {
+      if (this.stoppedAt) return;
+      this.status = "live";
+      this.connectedAt ||= Date.now();
+      this.persistSession();
+      this.broadcast("status", this.snapshot("TikTok LIVEへ接続しています。"));
     });
 
     connection.on(events.ERROR || "error", (error) => {
@@ -264,6 +375,7 @@ class LiveSession extends EventEmitter {
     current.comments += 1;
     current.lastSeenAt = comment.at;
     this.userStats.set(current.userId, current);
+    this.emitNormalized({ ...comment, type: "comment" });
     this.broadcast("comment", { comment, snapshot: this.snapshot() });
   }
 
@@ -317,6 +429,7 @@ class LiveSession extends EventEmitter {
     stat.lastGiftAt = gift.at;
     this.giftStats.set(giftKey, stat);
 
+    this.emitNormalized({ ...normalizedGift, type: "gift" });
     this.broadcast("gift", { gift: normalizedGift, snapshot: this.snapshot() });
   }
 
@@ -330,7 +443,17 @@ class LiveSession extends EventEmitter {
     user.shares = Number(user.shares || 0) + 1;
     user.lastSeenAt = share.at;
     this.userStats.set(user.userId, user);
+    this.emitNormalized({ ...share, type: "share" });
     this.broadcast("share", { share, snapshot: this.snapshot() });
+  }
+
+  emitNormalized(event) {
+    eventStore.recordEvent(this, event).catch(() => {});
+    liveCue.publish(event);
+  }
+
+  persistSession(options) {
+    eventStore.saveSession(this, options).catch(() => {});
   }
 
   getUserStat(rawUserId, rawNickname, at, signals = null) {
@@ -443,6 +566,7 @@ class LiveSession extends EventEmitter {
       id: this.id,
       username: this.username,
       displayName: this.displayName,
+      provider: this.provider,
       mode: this.mode,
       status: this.status,
       errorCode: this.errorCode,
@@ -490,6 +614,46 @@ class LiveSession extends EventEmitter {
     this.viewerStats.estimatedWatchSeconds = total;
   }
 
+  currentGiftCatalog() {
+    const catalog = new Map();
+    for (const gift of this.giftStats.values()) {
+      const key = String(gift.giftId || gift.giftName || "gift");
+      const current = catalog.get(key) || {
+        giftId: String(gift.giftId || ""),
+        giftName: gift.giftName || "ギフト",
+        count: 0,
+        lastGiftAt: 0
+      };
+      current.count += Number(gift.count || 0);
+      current.lastGiftAt = Math.max(current.lastGiftAt, Number(gift.lastGiftAt || 0));
+      catalog.set(key, current);
+    }
+    return [...catalog.values()]
+      .sort((a, b) => b.lastGiftAt - a.lastGiftAt || b.count - a.count);
+  }
+
+  currentGiftRanking({ giftId = "", giftName = "" } = {}) {
+    const ranking = new Map();
+    for (const gift of this.giftStats.values()) {
+      if (giftId && String(gift.giftId || "") !== String(giftId)) continue;
+      if (!giftId && giftName && gift.giftName !== giftName) continue;
+      const current = ranking.get(gift.userId) || {
+        userId: gift.userId,
+        nickname: gift.nickname,
+        count: 0,
+        diamonds: 0,
+        lastGiftAt: 0
+      };
+      current.nickname = gift.nickname || current.nickname;
+      current.count += Number(gift.count || 0);
+      current.diamonds += Number(gift.diamonds || 0);
+      current.lastGiftAt = Math.max(current.lastGiftAt, Number(gift.lastGiftAt || 0));
+      ranking.set(gift.userId, current);
+    }
+    return [...ranking.values()]
+      .sort((a, b) => b.count - a.count || b.diamonds - a.diamonds || b.lastGiftAt - a.lastGiftAt);
+  }
+
   broadcast(type, payload) {
     this.emit("event", { type, payload });
   }
@@ -510,6 +674,7 @@ class LiveSession extends EventEmitter {
       connectionPauseUntil = Math.max(connectionPauseUntil, nextConnectionWindow(Date.now()));
     }
     this.stoppedAt = Date.now();
+    this.persistSession({ autoResume: false });
     this.broadcast("status", this.snapshot(message));
   }
 
@@ -520,6 +685,7 @@ class LiveSession extends EventEmitter {
     if (this.connection?.disconnect) {
       Promise.resolve(this.connection.disconnect()).catch(() => {});
     }
+    this.persistSession({ autoResume: false });
     this.broadcast("status", this.snapshot(message));
   }
 
@@ -1009,7 +1175,7 @@ function parseGiftEvent(data) {
     diamondCount,
     isHeartMe: isHeartMeGift(data, extended),
     signals: person.signals,
-    at: Date.now()
+    at: eventTime(data)
   };
 }
 
@@ -1068,6 +1234,12 @@ function isShareEvent(data) {
     data.common?.method
   ].filter(Boolean).join(" ").toLowerCase();
   return /share|シェア|共有/.test(text);
+}
+
+function eventTime(data) {
+  const value = Number(data?.timestamp || data?.createTime || data?.create_time || 0);
+  if (!value) return Date.now();
+  return value < 100000000000 ? value * 1000 : value;
 }
 
 function cleanDisplayName(value) {
@@ -1166,6 +1338,207 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+async function discoverCreatorCandidates(params) {
+  const regionSetting = TIKTOOLS_REGION_SLUGS[params.get("region") || "Japan"] || TIKTOOLS_REGION_SLUGS.Japan;
+  const leagueFilter = String(params.get("league") || "target");
+  const liveOnly = params.get("liveOnly") === "1";
+  const limit = Math.min(100, Math.max(1, Number(params.get("limit") || 50)));
+  const warnings = [];
+  const candidates = [];
+
+  if (leagueFilter !== "top100") {
+    if (TIKTOOLS_SESSION_COOKIE) {
+      try {
+        candidates.push(...await fetchTikToolsLeagueCandidates(regionSetting, leagueFilter));
+      } catch (error) {
+        warnings.push(`リーグ別取得に失敗しました: ${shortError(error)}`);
+      }
+    } else {
+      warnings.push("リーグ別一覧にはTikToolのAPI用セッションが必要です。公開ランキングから見える範囲だけ取得します。");
+    }
+  }
+
+  if (!candidates.length || leagueFilter === "top100") {
+    try {
+      candidates.push(...await fetchTikToolsCountryCandidates(regionSetting));
+    } catch (error) {
+      warnings.push(`地域ランキングAPIに接続できませんでした: ${shortError(error)}`);
+    }
+  }
+
+  if (!candidates.length) {
+    try {
+      candidates.push(...await scrapeTikToolsRankingPage(regionSetting));
+    } catch (error) {
+      warnings.push(`公開ランキングページの読み取りに失敗しました: ${shortError(error)}`);
+    }
+  }
+
+  const unique = dedupeCandidates(candidates)
+    .filter((candidate) => !liveOnly || candidate.liveNow)
+    .slice(0, limit);
+
+  if (!unique.length) {
+    warnings.push("公開ランキングはログインなしだと候補IDがマスクされていました。TikToolのAPI用セッションを設定すると一覧取得できます。");
+  }
+
+  return {
+    ok: unique.length > 0,
+    source: TIKTOOLS_SESSION_COOKIE ? "tiktools-api" : "tiktools-public",
+    region: regionSetting.label,
+    candidates: unique,
+    warnings,
+    discoveredAt: Date.now()
+  };
+}
+
+async function fetchTikToolsLeagueCandidates(regionSetting, leagueFilter) {
+  const labels = leagueLabelsForFilter(leagueFilter);
+  const results = [];
+  for (const label of labels) {
+    const classType = TIKTOOLS_CLASS_TYPES[label];
+    if (!classType) continue;
+    const url = `https://tik.tools/api/leaderboards/league/${encodeURIComponent(regionSetting.code)}/${classType}`;
+    const body = await fetchTikToolsJson(url);
+    const entries = Array.isArray(body?.entries) ? body.entries : [];
+    for (const entry of entries) {
+      results.push(candidateFromTikToolsEntry(entry, regionSetting.label, label, "tiktools-league"));
+    }
+  }
+  return results.filter(Boolean);
+}
+
+function leagueLabelsForFilter(filter) {
+  const normalized = String(filter || "").toUpperCase();
+  if (normalized === "TARGET" || normalized === "LOWER-B") return DISCOVERY_TARGET_LEAGUES;
+  if (normalized === "C") return ["C1", "C2"];
+  if (normalized === "D") return ["D1", "D2", "D3"];
+  if (normalized === "B") return ["B5"];
+  if (TIKTOOLS_CLASS_TYPES[normalized]) return [normalized];
+  return DISCOVERY_TARGET_LEAGUES;
+}
+
+async function fetchTikToolsCountryCandidates(regionSetting) {
+  const body = await fetchTikToolsJson(`https://tik.tools/api/leaderboards/country/${regionSetting.slug}`);
+  const entries = Array.isArray(body) ? body : body?.current?.channels;
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .map((entry) => candidateFromTikToolsEntry(entry, regionSetting.label, "", "tiktools-country"))
+    .filter(Boolean);
+}
+
+async function fetchTikToolsJson(url) {
+  const headers = { Accept: "application/json" };
+  if (TIKTOOLS_SESSION_COOKIE) headers.Cookie = TIKTOOLS_SESSION_COOKIE;
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout?.(12000) });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("JSONとして読めませんでした。");
+  }
+}
+
+async function scrapeTikToolsRankingPage(regionSetting) {
+  const response = await fetch(`https://tik.tools/ranking/${regionSetting.slug}`, {
+    headers: { Accept: "text/html,application/xhtml+xml" },
+    signal: AbortSignal.timeout?.(12000)
+  });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  const html = await response.text();
+  const text = decodeHtmlEntities(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, "\n")
+    .replace(/\n{2,}/g, "\n");
+  const candidates = [];
+  const usernamePattern = /@([A-Za-z0-9_.]{2,32})/g;
+  let match;
+  while ((match = usernamePattern.exec(text)) && candidates.length < 40) {
+    const username = match[1];
+    if (!isDiscoveryUsername(username)) continue;
+    const before = text.slice(Math.max(0, match.index - 160), match.index).split("\n").map((part) => part.trim()).filter(Boolean);
+    const after = text.slice(match.index, match.index + 180);
+    const nickname = before.reverse().find((part) => !/^#?\d+$/.test(part) && !/^Image:/i.test(part) && !/^login$/i.test(part)) || username;
+    const scoreText = after.match(/(\d+(?:\.\d+)?)\s*([kKmM万]?)/)?.[0] || "";
+    candidates.push({
+      username,
+      displayName: nickname.replace(/^Image:\s*/i, ""),
+      region: regionSetting.label,
+      league: "",
+      diamondsPerDay: parseCompactNumber(scoreText),
+      liveNow: /●\s*LIVE|LIVE/.test(after),
+      status: "queued",
+      source: "tiktools-public-page",
+      profileMemo: "TikTool公開ランキングページから取得"
+    });
+  }
+  return candidates.filter((candidate) => isValidUsername(candidate.username));
+}
+
+function candidateFromTikToolsEntry(entry, region, league, source) {
+  const username = normalizeTikTokUsername(entry?.uniqueId || entry?.username || "");
+  if (!isDiscoveryUsername(username) || entry?.masked || entry?.locked) return null;
+  return {
+    username,
+    displayName: cleanDiscoveryText(entry?.nickname || entry?.displayName || username),
+    region,
+    league,
+    diamondsPerDay: Math.max(0, Math.round(Number(entry?.score || entry?.diamonds || 0))),
+    liveNow: Boolean(entry?.isLive || entry?.live),
+    status: "queued",
+    source,
+    profileMemo: `${source} #${entry?.rank || "-"}`
+  };
+}
+
+function isDiscoveryUsername(username) {
+  const normalized = normalizeTikTokUsername(username).toLowerCase();
+  if (!isValidUsername(normalized)) return false;
+  if (/^\d+$/.test(normalized)) return false;
+  return !["someone", "media", "keyframes", "font-face", "import"].includes(normalized);
+}
+
+function dedupeCandidates(candidates) {
+  const seen = new Map();
+  for (const candidate of candidates) {
+    if (!candidate?.username || !isValidUsername(candidate.username)) continue;
+    const key = candidate.username.toLowerCase();
+    const existing = seen.get(key);
+    if (!existing || Number(candidate.diamondsPerDay || 0) > Number(existing.diamondsPerDay || 0)) {
+      seen.set(key, candidate);
+    }
+  }
+  return [...seen.values()].sort((a, b) => Number(b.diamondsPerDay || 0) - Number(a.diamondsPerDay || 0));
+}
+
+function cleanDiscoveryText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;|&apos;/g, "'");
+}
+
+function parseCompactNumber(value) {
+  const match = String(value || "").match(/(\d+(?:\.\d+)?)\s*([kKmM万]?)/);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return 0;
+  if (/m/i.test(match[2])) return Math.round(amount * 1000000);
+  if (/k/i.test(match[2])) return Math.round(amount * 1000);
+  if (match[2] === "万") return Math.round(amount * 10000);
+  return Math.round(amount);
+}
+
 async function serveStatic(response, urlPath) {
   const filePath = urlPath === "/" ? "/index.html" : urlPath;
   const normalized = normalize(join(PUBLIC_DIR, filePath));
@@ -1208,6 +1581,7 @@ const server = createServer(async (request, response) => {
       }
       const session = new LiveSession(username);
       sessions.set(session.id, session);
+      await eventStore.saveSession(session);
       sendJson(response, 201, { id: session.id });
       session.start();
     } catch (error) {
@@ -1220,8 +1594,24 @@ const server = createServer(async (request, response) => {
     sendJson(response, 200, {
       ok: true,
       sessions: sessions.size,
-      uptimeSeconds: Math.floor(getUptimeSeconds())
+      uptimeSeconds: Math.floor(getUptimeSeconds()),
+      provider: providerInfo,
+      database: eventStore.status(),
+      liveCue: liveCue.status()
     });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/candidates/discover") {
+    try {
+      sendJson(response, 200, await discoverCreatorCandidates(url.searchParams));
+    } catch (error) {
+      sendJson(response, 502, {
+        ok: false,
+        candidates: [],
+        warnings: [shortError(error)]
+      });
+    }
     return;
   }
 
@@ -1274,6 +1664,41 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && action === "gift-ranking") {
+      const giftId = String(url.searchParams.get("giftId") || "");
+      const giftName = String(url.searchParams.get("giftName") || "");
+      const requestedRange = String(url.searchParams.get("range") || "session");
+      const range = ["session", "today", "7d", "30d", "all"].includes(requestedRange)
+        ? requestedRange
+        : "session";
+      try {
+        const persistent = eventStore.status().ready;
+        const ranking = persistent
+          ? await eventStore.giftRanking({
+              sessionId: session.id,
+              username: session.username,
+              giftId,
+              giftName,
+              range
+            })
+          : session.currentGiftRanking({ giftId, giftName });
+        const catalog = persistent
+          ? await eventStore.giftCatalog(range === "session"
+              ? { sessionId: session.id }
+              : { username: session.username })
+          : session.currentGiftCatalog();
+        sendJson(response, 200, {
+          persistent,
+          effectiveRange: persistent ? range : "session",
+          ranking,
+          catalog
+        });
+      } catch (error) {
+        sendJson(response, 500, { error: shortError(error) });
+      }
+      return;
+    }
+
     if (request.method === "GET" && action === "export.csv") {
       session.touch();
       response.writeHead(200, {
@@ -1300,9 +1725,17 @@ const server = createServer(async (request, response) => {
   response.end("Method not allowed");
 });
 
+await eventStore.init();
+
 server.listen(PORT, () => {
   console.log(`TikTok LIVE app: http://localhost:${PORT}`);
 });
+
+if (providerInfo.paidApiReady && eventStore.status().ready) {
+  restorePersistentSessions().catch((error) => {
+    console.error(`Session restore failed: ${shortError(error)}`);
+  });
+}
 
 setInterval(() => {
   const now = Date.now();
@@ -1318,4 +1751,22 @@ function getUptimeSeconds() {
     return globalThis.process.uptime();
   }
   return 0;
+}
+
+async function restorePersistentSessions() {
+  const saved = await eventStore.restorableSessions(
+    Number(globalThis.process?.env?.SESSION_RESTORE_MAX_AGE_HOURS || 12)
+  );
+  const restoredUsernames = new Set();
+  for (const item of saved) {
+    const username = normalizeTikTokUsername(item.username);
+    if (!isValidUsername(username) || restoredUsernames.has(username.toLowerCase())) continue;
+    restoredUsernames.add(username.toLowerCase());
+    const session = new LiveSession(username, {
+      id: item.id,
+      startedAt: item.startedAt
+    });
+    sessions.set(session.id, session);
+    session.start();
+  }
 }

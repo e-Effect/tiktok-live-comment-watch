@@ -21,6 +21,11 @@ const userList = document.querySelector("#userList");
 const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
 const shareHistory = document.querySelector("#shareHistory");
+const targetGiftSelect = document.querySelector("#targetGiftSelect");
+const giftRankingRange = document.querySelector("#giftRankingRange");
+const giftRankingRefresh = document.querySelector("#giftRankingRefresh");
+const giftRankingStatus = document.querySelector("#giftRankingStatus");
+const targetGiftRanking = document.querySelector("#targetGiftRanking");
 const watcherList = document.querySelector("#watcherList");
 const silentList = document.querySelector("#silentList");
 const reportList = document.querySelector("#reportList");
@@ -37,6 +42,28 @@ const pinAccountBtn = document.querySelector("#pinAccountBtn");
 const startFixedBtn = document.querySelector("#startFixedBtn");
 const clearFixedBtn = document.querySelector("#clearFixedBtn");
 const singleModeToggle = document.querySelector("#singleModeToggle");
+const candidateForm = document.querySelector("#candidateForm");
+const candidateUsername = document.querySelector("#candidateUsername");
+const candidateDisplayName = document.querySelector("#candidateDisplayName");
+const candidateRegion = document.querySelector("#candidateRegion");
+const candidateLeague = document.querySelector("#candidateLeague");
+const candidateDiamonds = document.querySelector("#candidateDiamonds");
+const candidateLiveNow = document.querySelector("#candidateLiveNow");
+const candidateImport = document.querySelector("#candidateImport");
+const candidateImportBtn = document.querySelector("#candidateImportBtn");
+const candidateExportBtn = document.querySelector("#candidateExportBtn");
+const candidateDiscoverRegion = document.querySelector("#candidateDiscoverRegion");
+const candidateDiscoverLeague = document.querySelector("#candidateDiscoverLeague");
+const candidateDiscoverLiveOnly = document.querySelector("#candidateDiscoverLiveOnly");
+const candidateDiscoverBtn = document.querySelector("#candidateDiscoverBtn");
+const candidateDiscoverStatus = document.querySelector("#candidateDiscoverStatus");
+const candidateSearch = document.querySelector("#candidateSearch");
+const candidateRegionFilter = document.querySelector("#candidateRegionFilter");
+const candidateLeagueFilter = document.querySelector("#candidateLeagueFilter");
+const candidateStatusFilter = document.querySelector("#candidateStatusFilter");
+const candidateLiveFilter = document.querySelector("#candidateLiveFilter");
+const candidateSummary = document.querySelector("#candidateSummary");
+const candidateList = document.querySelector("#candidateList");
 
 const LEGACY_STORAGE_KEY = "tiktok-live-active-session";
 const SESSIONS_KEY = "tiktok-live-active-sessions";
@@ -44,6 +71,7 @@ const RECENT_IDS_KEY = "tiktok-live-recent-ids";
 const PANEL_PREFS_KEY = "tiktok-live-panel-prefs";
 const LAYOUT_PREFS_KEY = "tiktok-live-layout-prefs";
 const RATE_LIMIT_KEY = "tiktok-live-rate-limit-until";
+const CANDIDATES_KEY = "tiktok-live-creator-candidates";
 const FIXED_ACCOUNT_KEY = "tiktok-live-fixed-account";
 const SINGLE_MODE_KEY = "tiktok-live-single-mode";
 const MAX_RECENT_IDS = 8;
@@ -61,6 +89,23 @@ const DEFAULT_PANEL_SIZES = {
   giftHistory: "medium"
 };
 const DEFAULT_PANEL_ORDER = layoutPanels.map((panel) => panel.dataset.panel);
+const MAX_CANDIDATES = 500;
+const TARGET_LEAGUES = new Set(["D5", "D4", "C5", "C4", "C3", "C2", "C1", "B5", "B4", "B3"]);
+const STATUS_LABELS = {
+  queued: "Backstage未確認",
+  unassigned: "未所属",
+  affiliated: "所属済み",
+  unknown: "不明",
+  contacted: "DM済み",
+  replied: "返信あり",
+  ng: "NG"
+};
+const LEAGUE_ORDER = {
+  D1: 1, D2: 2, D3: 3, D4: 4, D5: 5,
+  C1: 6, C2: 7, C3: 8, C4: 9, C5: 10,
+  B1: 11, B2: 12, B3: 13, B4: 14, B5: 15,
+  A2: 16, A1: 17
+};
 
 const sessions = new Map();
 const eventSources = new Map();
@@ -70,6 +115,7 @@ let selectedSessionId = null;
 let clockTimer = null;
 let reconnectTimer = null;
 let snapshotFetchTick = 0;
+let giftRankingRequest = 0;
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -96,6 +142,7 @@ window.addEventListener("online", reconnectActiveSessions);
 setupPanelToggles();
 setupLayoutTools();
 setupFixedAccountTools();
+setupCandidateTools();
 renderRecentIds();
 refreshMissingRecentProfiles();
 restoreSavedSessions();
@@ -103,6 +150,10 @@ renderSessionCards();
 renderSelectedSession();
 refreshServerState();
 setInterval(refreshServerState, 30000);
+
+targetGiftSelect?.addEventListener("change", () => refreshTargetGiftRanking());
+giftRankingRange?.addEventListener("change", () => refreshTargetGiftRanking());
+giftRankingRefresh?.addEventListener("click", () => refreshTargetGiftRanking());
 
 async function startSession(options = {}) {
   setBusy(true);
@@ -214,6 +265,7 @@ function openEventStream(sessionId) {
   source.addEventListener("gift", (event) => {
     const payload = JSON.parse(event.data);
     renderSnapshot(payload.snapshot);
+    if (selectedSessionId === sessionId) refreshTargetGiftRanking();
   });
   source.addEventListener("share", (event) => {
     const payload = JSON.parse(event.data);
@@ -310,6 +362,7 @@ function selectSession(sessionId, options = {}) {
   if (options.save !== false) saveActiveSessions();
   renderSessionCards();
   renderSelectedSession();
+  refreshTargetGiftRanking();
 }
 
 function findSessionByUsername(username) {
@@ -579,6 +632,435 @@ function applySingleMode() {
   document.body.classList.toggle("single-mode", isSingleMode());
 }
 
+function setupCandidateTools() {
+  if (!candidateForm || !candidateList) return;
+
+  candidateDiscoverBtn?.addEventListener("click", discoverCandidates);
+  if (location.protocol === "file:") {
+    setCandidateDiscoveryStatus("この画面は直接開かれています。候補一覧取得とLIVE監視はSTART_HERE.cmdから開くと動きます。", false, true);
+  }
+
+  candidateForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const candidate = normalizeCandidate({
+      username: candidateUsername.value,
+      displayName: candidateDisplayName.value,
+      region: candidateRegion.value,
+      league: candidateLeague.value,
+      diamondsPerDay: candidateDiamonds.value,
+      liveNow: candidateLiveNow.checked,
+      source: "manual",
+      status: "queued"
+    });
+    if (!candidate) return;
+    upsertCandidate(candidate);
+    candidateUsername.value = "";
+    candidateDisplayName.value = "";
+    candidateLeague.value = "";
+    candidateDiamonds.value = "";
+    candidateLiveNow.checked = false;
+    renderCandidateList();
+  });
+
+  candidateImportBtn?.addEventListener("click", () => {
+    const lines = candidateImport.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    let imported = 0;
+    for (const line of lines) {
+      const candidate = parseCandidateLine(line);
+      if (!candidate) continue;
+      upsertCandidate(candidate);
+      imported += 1;
+    }
+    if (imported > 0) {
+      candidateImport.value = "";
+      renderCandidateList();
+    }
+  });
+
+  candidateExportBtn?.addEventListener("click", exportCandidatesCsv);
+  [candidateSearch, candidateRegionFilter, candidateLeagueFilter, candidateStatusFilter, candidateLiveFilter]
+    .filter(Boolean)
+    .forEach((control) => control.addEventListener("input", renderCandidateList));
+
+  candidateList.addEventListener("change", handleCandidateChange);
+  candidateList.addEventListener("click", handleCandidateClick);
+  renderCandidateList();
+}
+
+async function discoverCandidates() {
+  if (location.protocol === "file:") {
+    setCandidateDiscoveryStatus("候補一覧の取得はサーバー起動が必要です。START_HERE.cmdから開いてください。", false, true);
+    return;
+  }
+  const region = candidateDiscoverRegion?.value || "Japan";
+  const league = candidateDiscoverLeague?.value || "target";
+  const liveOnly = candidateDiscoverLiveOnly?.checked ? "1" : "0";
+  const url = `/api/candidates/discover?region=${encodeURIComponent(region)}&league=${encodeURIComponent(league)}&liveOnly=${liveOnly}&limit=80`;
+
+  setCandidateDiscoveryStatus("候補一覧を取得しています。", true);
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    const body = await response.json();
+    if (!response.ok || !body.ok) {
+      throw new Error(body.warnings?.join(" ") || "候補一覧を取得できませんでした。");
+    }
+    let added = 0;
+    for (const item of body.candidates || []) {
+      const candidate = normalizeCandidate({
+        username: item.username,
+        displayName: item.displayName,
+        region: item.region || region,
+        league: item.league || "",
+        diamondsPerDay: item.diamondsPerDay || 0,
+        liveNow: item.liveNow,
+        status: "queued",
+        source: item.source || body.source || "discovery",
+        profileMemo: item.profileMemo || "自動取得"
+      });
+      if (!candidate) continue;
+      upsertCandidate(candidate);
+      added += 1;
+    }
+    renderCandidateList();
+    const warningText = (body.warnings || []).length ? ` ${body.warnings.join(" ")}` : "";
+    setCandidateDiscoveryStatus(`${added}件を候補一覧に追加しました。${warningText}`, false);
+  } catch (error) {
+    setCandidateDiscoveryStatus(error.message || "候補一覧を取得できませんでした。", false, true);
+  }
+}
+
+function setCandidateDiscoveryStatus(message, busy = false, isError = false) {
+  if (candidateDiscoverBtn) candidateDiscoverBtn.disabled = busy;
+  if (!candidateDiscoverStatus) return;
+  candidateDiscoverStatus.textContent = message;
+  candidateDiscoverStatus.classList.toggle("error", Boolean(isError));
+}
+
+function parseCandidateLine(line) {
+  const username = extractUsername(line);
+  if (!username) return null;
+  const parts = line.split(/[,\t|;]/).map((part) => part.trim()).filter(Boolean);
+  const usernameLower = username.toLowerCase();
+  const league = normalizeLeague(line.match(/\b(A[12]|B[1-5]|C[1-5]|D[1-5])\b/i)?.[1] || "");
+  const region = detectRegion(line, parts);
+  const diamondsPerDay = parseDiamondValue(line);
+  const liveNow = /\bLIVE\b|配信中|ライブ中/i.test(line);
+  const displayName = parts.find((part) => {
+    const cleaned = cleanUsername(part);
+    if (!cleaned || cleaned.toLowerCase() === usernameLower) return false;
+    if (normalizeLeague(part) || isExplicitRegion(part)) return false;
+    if (/https?:|tiktok\.com|live|配信中|ライブ中|^\d/.test(part)) return false;
+    return !part.includes("@");
+  }) || "";
+  return normalizeCandidate({
+    username,
+    displayName,
+    region,
+    league,
+    diamondsPerDay,
+    liveNow,
+    source: "import",
+    status: "queued",
+    profileMemo: line
+  });
+}
+
+function extractUsername(text) {
+  const raw = String(text || "");
+  const urlMatch = raw.match(/tiktok\.com\/@([A-Za-z0-9_.]{2,32})/i);
+  if (urlMatch) return cleanUsername(urlMatch[1]);
+  const atMatch = raw.match(/@([A-Za-z0-9_.]{2,32})/);
+  if (atMatch) return cleanUsername(atMatch[1]);
+  const first = raw.split(/[,\s\t|;]/).map(cleanUsername).find((part) => /^[A-Za-z0-9_.]{2,32}$/.test(part));
+  return first || "";
+}
+
+function detectRegion(line, parts = []) {
+  const text = [line, ...parts].join(" ").toLowerCase();
+  if (/(^|\s)(japan|jp|日本)(\s|$)/i.test(text)) return "Japan";
+  if (/(^|\s)(us|usa|united states)(\s|$)/i.test(text)) return "US";
+  if (/(^|\s)(kr|korea|south korea|韓国)(\s|$)/i.test(text)) return "KR";
+  if (/(^|\s)(tw|taiwan|台湾)(\s|$)/i.test(text)) return "TW";
+  return "Other";
+}
+
+function isExplicitRegion(value) {
+  return /^(japan|jp|日本|us|usa|united states|kr|korea|south korea|韓国|tw|taiwan|台湾|other)$/i
+    .test(String(value || "").trim());
+}
+
+function parseDiamondValue(text) {
+  const raw = String(text || "");
+  const explicitMatch = raw.match(/(\d+(?:\.\d+)?)\s*([kKmM万]?)\s*(?:◆|diamonds?|ダイヤ)/i);
+  const compactNumber = raw
+    .split(/[,\t|;]/)
+    .map((part) => part.trim())
+    .find((part) => /^\d+(?:\.\d+)?\s*[kKmM万]?$/.test(part));
+  const diamondMatch = explicitMatch || compactNumber?.match(/^(\d+(?:\.\d+)?)\s*([kKmM万]?)$/);
+  if (!diamondMatch) return 0;
+  const value = Number(diamondMatch[1]);
+  const unit = diamondMatch[2];
+  if (!Number.isFinite(value)) return 0;
+  if (unit === "M" || unit === "m") return Math.round(value * 1000000);
+  if (unit === "K" || unit === "k") return Math.round(value * 1000);
+  if (unit === "万") return Math.round(value * 10000);
+  return Math.round(value);
+}
+
+function upsertCandidate(candidate) {
+  const normalized = normalizeCandidate(candidate);
+  if (!normalized) return;
+  const entries = readCandidates();
+  const index = entries.findIndex((entry) => entry.username.toLowerCase() === normalized.username.toLowerCase());
+  const existing = index >= 0 ? entries[index] : {};
+  const next = {
+    ...existing,
+    ...normalized,
+    displayName: normalized.displayName || existing.displayName || "",
+    region: normalized.region || existing.region || "Other",
+    league: normalized.league || existing.league || "",
+    diamondsPerDay: normalized.diamondsPerDay || existing.diamondsPerDay || 0,
+    liveNow: Boolean(normalized.liveNow || existing.liveNow),
+    status: normalized.status || existing.status || "queued",
+    profileMemo: normalized.profileMemo || existing.profileMemo || "",
+    backstageMemo: normalized.backstageMemo ?? existing.backstageMemo ?? "",
+    createdAt: existing.createdAt || Date.now(),
+    updatedAt: Date.now()
+  };
+  if (index >= 0) {
+    entries[index] = next;
+  } else {
+    entries.unshift(next);
+  }
+  writeCandidates(entries);
+}
+
+function readCandidates() {
+  try {
+    const value = JSON.parse(localStorage.getItem(CANDIDATES_KEY) || "[]");
+    if (!Array.isArray(value)) return [];
+    return value.map(normalizeCandidate).filter(Boolean).slice(0, MAX_CANDIDATES);
+  } catch {
+    return [];
+  }
+}
+
+function writeCandidates(entries) {
+  const normalized = entries.map(normalizeCandidate).filter(Boolean).slice(0, MAX_CANDIDATES);
+  localStorage.setItem(CANDIDATES_KEY, JSON.stringify(normalized));
+}
+
+function normalizeCandidate(entry) {
+  const username = cleanUsername(entry?.username || entry?.id || "");
+  if (!/^[A-Za-z0-9_.]{2,32}$/.test(username)) return null;
+  const status = STATUS_LABELS[entry?.status] ? entry.status : "queued";
+  return {
+    username,
+    displayName: cleanRecentDisplayName(entry?.displayName || entry?.name || "", username),
+    region: String(entry?.region || "Other").trim() || "Other",
+    league: normalizeLeague(entry?.league || ""),
+    diamondsPerDay: Math.max(0, Math.round(Number(entry?.diamondsPerDay || entry?.diamonds || 0))),
+    liveNow: Boolean(entry?.liveNow),
+    status,
+    source: String(entry?.source || "manual"),
+    profileMemo: String(entry?.profileMemo || ""),
+    backstageMemo: String(entry?.backstageMemo || ""),
+    createdAt: Number(entry?.createdAt || Date.now()),
+    updatedAt: Number(entry?.updatedAt || Date.now())
+  };
+}
+
+function normalizeLeague(value) {
+  const text = String(value || "").trim().toUpperCase();
+  return LEAGUE_ORDER[text] ? text : "";
+}
+
+function renderCandidateList() {
+  if (!candidateList) return;
+  const all = readCandidates();
+  const filtered = all
+    .filter(matchesCandidateFilters)
+    .map((candidate) => ({ ...candidate, score: scoreCandidate(candidate) }))
+    .sort((a, b) => b.score - a.score || b.updatedAt - a.updatedAt);
+
+  if (candidateSummary) {
+    const unassigned = all.filter((candidate) => candidate.status === "unassigned").length;
+    candidateSummary.textContent = `${filtered.length}/${all.length}件・未所属${unassigned}`;
+  }
+
+  if (!filtered.length) {
+    candidateList.innerHTML = `<p class="empty">条件に合う候補はありません。</p>`;
+    return;
+  }
+
+  candidateList.innerHTML = filtered.map((candidate) => `
+    <article class="candidate-card" data-candidate-id="${escapeHtml(candidate.username)}">
+      <header>
+        <div class="candidate-title">
+          <strong>${escapeHtml(candidate.displayName || `@${candidate.username}`)}</strong>
+          <span>@${escapeHtml(candidate.username)}</span>
+        </div>
+        <strong class="candidate-score">${candidate.score}</strong>
+      </header>
+      <div class="candidate-chips">
+        <span>${escapeHtml(candidate.region || "Other")}</span>
+        <span>${escapeHtml(candidate.league || "リーグ未入力")}</span>
+        <span>${candidate.diamondsPerDay ? `${formatNumber(candidate.diamondsPerDay)}ダイヤ/日` : "ダイヤ未入力"}</span>
+        ${candidate.liveNow ? "<span>LIVE中</span>" : ""}
+        <span>${escapeHtml(STATUS_LABELS[candidate.status])}</span>
+      </div>
+      <div class="candidate-edit">
+        <label>
+          <span>確認</span>
+          <select data-candidate-status>
+            ${Object.entries(STATUS_LABELS).map(([value, label]) => `
+              <option value="${value}" ${candidate.status === value ? "selected" : ""}>${escapeHtml(label)}</option>
+            `).join("")}
+          </select>
+        </label>
+        <label>
+          <span>メモ</span>
+          <input data-candidate-memo value="${escapeHtml(candidate.backstageMemo)}" placeholder="Backstage確認・DM状況">
+        </label>
+      </div>
+      ${candidate.profileMemo ? `<p class="candidate-note">${escapeHtml(candidate.profileMemo)}</p>` : ""}
+      <div class="candidate-card-actions">
+        <button type="button" data-candidate-monitor>監視追加</button>
+        <button type="button" data-candidate-status-set="unassigned">未所属</button>
+        <button type="button" data-candidate-status-set="affiliated">所属済み</button>
+        <button type="button" data-candidate-remove>削除</button>
+      </div>
+    </article>
+  `).join("");
+}
+
+function matchesCandidateFilters(candidate) {
+  const query = String(candidateSearch?.value || "").trim().toLowerCase();
+  if (query) {
+    const target = [
+      candidate.username,
+      candidate.displayName,
+      candidate.region,
+      candidate.league,
+      candidate.profileMemo,
+      candidate.backstageMemo,
+      STATUS_LABELS[candidate.status]
+    ].join(" ").toLowerCase();
+    if (!target.includes(query)) return false;
+  }
+
+  const region = candidateRegionFilter?.value || "all";
+  if (region !== "all" && candidate.region !== region) return false;
+
+  const status = candidateStatusFilter?.value || "active";
+  if (status === "active" && !["queued", "unknown"].includes(candidate.status)) return false;
+  if (status !== "all" && status !== "active" && candidate.status !== status) return false;
+
+  if (candidateLiveFilter?.checked && !candidate.liveNow) return false;
+  return matchesLeagueFilter(candidate.league, candidateLeagueFilter?.value || "target");
+}
+
+function matchesLeagueFilter(league, filter) {
+  const normalized = normalizeLeague(league);
+  if (filter === "all") return true;
+  if (!normalized) return filter === "target";
+  if (filter === "target") return TARGET_LEAGUES.has(normalized);
+  if (filter === "lower-b") return normalized.startsWith("C") || ["B5", "B4", "B3"].includes(normalized);
+  return normalized.toLowerCase().startsWith(filter);
+}
+
+function scoreCandidate(candidate) {
+  let score = 40;
+  const league = normalizeLeague(candidate.league);
+  if (candidate.region === "Japan" || candidate.region === "JP") score += 12;
+  if (TARGET_LEAGUES.has(league)) score += 25;
+  if (league.startsWith("A")) score -= 22;
+  if (candidate.liveNow) score += 12;
+  if (candidate.status === "unassigned") score += 28;
+  if (candidate.status === "queued" || candidate.status === "unknown") score += 8;
+  if (candidate.status === "affiliated" || candidate.status === "ng") score -= 60;
+  if (candidate.status === "contacted" || candidate.status === "replied") score += 4;
+  if (candidate.diamondsPerDay > 0 && candidate.diamondsPerDay <= 120000) score += 10;
+  if (candidate.diamondsPerDay > 250000) score -= 14;
+  if (hasAgencyKeyword(candidate)) score -= 24;
+  return Math.max(0, Math.min(100, score));
+}
+
+function hasAgencyKeyword(candidate) {
+  return /事務所|所属|agency|エージェンシー|ライバー事務所|creator network/i.test([
+    candidate.displayName,
+    candidate.profileMemo,
+    candidate.backstageMemo
+  ].join(" "));
+}
+
+function handleCandidateChange(event) {
+  const card = event.target.closest("[data-candidate-id]");
+  if (!card) return;
+  const candidate = readCandidates().find((entry) => entry.username === card.dataset.candidateId);
+  if (!candidate) return;
+  if (event.target.matches("[data-candidate-status]")) {
+    upsertCandidate({ ...candidate, status: event.target.value });
+  }
+  if (event.target.matches("[data-candidate-memo]")) {
+    upsertCandidate({ ...candidate, backstageMemo: event.target.value });
+  }
+  renderCandidateList();
+}
+
+async function handleCandidateClick(event) {
+  const button = event.target.closest("button");
+  const card = event.target.closest("[data-candidate-id]");
+  if (!button || !card) return;
+  const candidate = readCandidates().find((entry) => entry.username === card.dataset.candidateId);
+  if (!candidate) return;
+
+  if (button.dataset.candidateStatusSet) {
+    upsertCandidate({ ...candidate, status: button.dataset.candidateStatusSet });
+    renderCandidateList();
+    return;
+  }
+
+  if (button.hasAttribute("data-candidate-remove")) {
+    writeCandidates(readCandidates().filter((entry) => entry.username !== candidate.username));
+    renderCandidateList();
+    return;
+  }
+
+  if (button.hasAttribute("data-candidate-monitor")) {
+    usernameInput.value = candidate.username;
+    rememberRecentId(candidate.username, candidate.displayName);
+    await startSession();
+  }
+}
+
+function exportCandidatesCsv() {
+  const rows = [["username", "display_name", "region", "league", "diamonds_per_day", "live_now", "status", "score", "profile_memo", "backstage_memo", "updated_at"]];
+  for (const candidate of readCandidates()) {
+    rows.push([
+      candidate.username,
+      candidate.displayName,
+      candidate.region,
+      candidate.league,
+      candidate.diamondsPerDay,
+      candidate.liveNow ? "yes" : "no",
+      STATUS_LABELS[candidate.status],
+      scoreCandidate(candidate),
+      candidate.profileMemo,
+      candidate.backstageMemo,
+      new Date(candidate.updatedAt).toISOString()
+    ]);
+  }
+  const csv = "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `tiktok-creator-candidates-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 function setupPanelToggles() {
   const prefs = readPanelPrefs();
   panelToggles.forEach((toggle) => {
@@ -858,6 +1340,7 @@ function renderSelectedSession() {
     renderGifters([]);
     renderGiftHistory([]);
     renderShareHistory([]);
+    renderTargetGiftRanking([]);
     return;
   }
   const cooldown = readRateLimitCooldown();
@@ -875,6 +1358,10 @@ function renderSelectedSession() {
   renderGifters(snapshot.topGifters || []);
   renderGiftHistory(snapshot.gifts || []);
   renderShareHistory(snapshot.shares || []);
+  if (!targetGiftSelect?.dataset.sessionId || targetGiftSelect.dataset.sessionId !== snapshot.id) {
+    targetGiftSelect.dataset.sessionId = snapshot.id;
+    refreshTargetGiftRanking();
+  }
 }
 
 function updateSelectedControls() {
@@ -967,7 +1454,9 @@ async function refreshServerState() {
     const response = await fetch("/api/health", { cache: "no-store" });
     const body = await response.json();
     if (!response.ok || !body.ok) throw new Error("health");
-    serverState.textContent = `サーバー稼働中 ${formatDuration(body.uptimeSeconds)}・${formatNumber(body.sessions)}接続`;
+    const provider = body.provider?.paidApiReady ? "Tik.tools" : "標準接続";
+    const storage = body.database?.ready ? "長期保存" : "一時保存";
+    serverState.textContent = `サーバー ${formatDuration(body.uptimeSeconds)}・${formatNumber(body.sessions)}接続・${provider}・${storage}`;
   } catch {
     serverState.textContent = "サーバー確認不可";
   }
@@ -1124,6 +1613,88 @@ function renderShareHistory(shares) {
   `).join("");
 }
 
+async function refreshTargetGiftRanking() {
+  const session = selectedSessionId ? sessions.get(selectedSessionId) : null;
+  if (!session || !targetGiftRanking) {
+    renderTargetGiftRanking([]);
+    return;
+  }
+  const requestId = ++giftRankingRequest;
+  const selectedGift = targetGiftSelect?.value || "";
+  const selectedOption = targetGiftSelect?.selectedOptions?.[0];
+  const params = new URLSearchParams({ range: giftRankingRange?.value || "session" });
+  if (selectedGift) {
+    params.set("giftId", selectedGift);
+    params.set("giftName", selectedOption?.dataset.giftName || "");
+  }
+  if (giftRankingStatus) giftRankingStatus.textContent = "更新中";
+  try {
+    const response = await fetch(`/api/session/${session.id}/gift-ranking?${params}`, { cache: "no-store" });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "ランキングを取得できませんでした。");
+    if (requestId !== giftRankingRequest) return;
+    updateGiftCatalog(body.catalog || [], selectedGift);
+    renderTargetGiftRanking(body.ranking || []);
+    if (giftRankingStatus) {
+      giftRankingStatus.textContent = body.persistent
+        ? rangeLabel(body.effectiveRange)
+        : body.effectiveRange === (giftRankingRange?.value || "session")
+          ? "現在の配信"
+          : "DB接続後に期間保存";
+    }
+  } catch (error) {
+    if (requestId !== giftRankingRequest) return;
+    targetGiftRanking.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+    if (giftRankingStatus) giftRankingStatus.textContent = "取得失敗";
+  }
+}
+
+function updateGiftCatalog(catalog, selectedGift) {
+  if (!targetGiftSelect) return;
+  const options = [`<option value="">すべてのギフト</option>`];
+  for (const gift of catalog) {
+    const value = String(gift.giftId || gift.giftName || "");
+    if (!value) continue;
+    options.push(`
+      <option value="${escapeHtml(value)}" data-gift-name="${escapeHtml(gift.giftName || "")}">
+        ${escapeHtml(gift.giftName || `ギフト ${value}`)} (${formatNumber(gift.count)})
+      </option>
+    `);
+  }
+  targetGiftSelect.innerHTML = options.join("");
+  if ([...targetGiftSelect.options].some((option) => option.value === selectedGift)) {
+    targetGiftSelect.value = selectedGift;
+  }
+}
+
+function renderTargetGiftRanking(users) {
+  if (!targetGiftRanking) return;
+  if (!users.length) {
+    targetGiftRanking.innerHTML = `<p class="empty">この条件のギフトはまだありません。</p>`;
+    return;
+  }
+  targetGiftRanking.innerHTML = users.map((user, index) => `
+    <div class="user-row">
+      <span class="rank">${index + 1}</span>
+      <span class="name">${escapeHtml(user.nickname || user.userId)}</span>
+      <span class="gift-ranking-detail">
+        <strong>${formatNumber(user.count)}個</strong>
+        <small>${formatNumber(user.diamonds)}ダイヤ</small>
+      </span>
+    </div>
+  `).join("");
+}
+
+function rangeLabel(range) {
+  return {
+    session: "現在の配信",
+    today: "本日",
+    "7d": "過去7日",
+    "30d": "過去30日",
+    all: "全期間"
+  }[range] || "現在の配信";
+}
+
 function silentLevelClass(seconds) {
   if (seconds >= 90 * 60) return "silent-red";
   if (seconds >= 60 * 60) return "silent-green";
@@ -1184,7 +1755,7 @@ function todayFollowMark(user) {
 function modeLabel(snapshot) {
   if (snapshot?.errorCode === "rate_limited") return "制限中";
   if (snapshot?.status === "ended") return "終了";
-  if (snapshot?.mode === "live") return "実接続";
+  if (snapshot?.mode === "live") return snapshot?.provider === "tiktools" ? "Tik.tools" : "実接続";
   if (snapshot?.mode === "error") return "接続失敗";
   return "接続中";
 }
