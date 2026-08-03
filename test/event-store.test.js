@@ -128,3 +128,40 @@ test("stores a profile icon resolved for an existing listener", async () => {
 
   assert.equal(updated.avatarUrl, "https://cdn.example/avatar.jpg");
 });
+
+test("matches an imported avatar by numeric id or exact TikTok id", async () => {
+  const store = new EventStore();
+  const calls = [];
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      assert.match(sql, /LOWER\(latest_unique_id\) = LOWER\(\$2\)/);
+      return { rows: [{ userId: values[0] || `username:${values[1]}` }] };
+    }
+  };
+
+  assert.equal(await store.listenerIdForIdentity({ userId: "123", uniqueId: "viewer" }), "123");
+  assert.equal(await store.listenerIdForIdentity({ uniqueId: "viewer" }), "username:viewer");
+  assert.deepEqual(calls[1].values, ["", "viewer"]);
+});
+
+test("stores avatar image bytes without replacing an existing cache", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /avatar_data = \$2/);
+      assert.match(sql, /avatar_data IS NULL/);
+      assert.equal(values[0], "listener-id");
+      assert.ok(Buffer.isBuffer(values[1]));
+      assert.equal(values[2], "image/webp");
+      return { rows: [{ user_id: "listener-id" }] };
+    }
+  };
+
+  assert.equal(await store.storeListenerAvatarData("listener-id", {
+    data: Buffer.from([1, 2, 3]),
+    mime: "image/webp"
+  }), true);
+});

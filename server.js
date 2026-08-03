@@ -1953,17 +1953,28 @@ async function importResolvedListenerAvatars(rawItems) {
   const items = [];
   for (const profile of input) {
     const userId = String(profile?.userId || profile?.user_id || profile?.id || "").trim();
+    const uniqueId = String(profile?.uniqueId || profile?.username || "").replace(/^@/, "").trim();
     const avatarUrl = avatarUrlFromUser(profile);
-    if (!/^\d+$/.test(userId) || !/^https:\/\//i.test(avatarUrl)) {
-      items.push({ userId, ok: false, error: "ユーザーIDまたは画像URLが不正です" });
+    const targetUserId = await eventStore.listenerIdForIdentity({ userId, uniqueId });
+    if ((!/^\d+$/.test(userId) && !uniqueId) || !targetUserId || !/^https:\/\//i.test(avatarUrl)) {
+      items.push({ userId, uniqueId, ok: false, error: "一致するユーザーまたは画像URLがありません" });
       continue;
     }
-    const updated = await eventStore.updateListenerAvatar(userId, {
-      uniqueId: profile.uniqueId || profile.username || "",
+    const updated = await eventStore.updateListenerAvatar(targetUserId, {
+      uniqueId,
       nickname: profile.nickname || "",
       avatarUrl
     });
-    items.push({ userId, ok: Boolean(updated) });
+    let cached = false;
+    const imageBase64 = String(profile?.imageBase64 || "").replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+    const mime = String(profile?.imageMime || "image/jpeg").toLowerCase();
+    if (updated && imageBase64 && /^image\/[a-z0-9.+-]+$/i.test(mime)) {
+      const imageData = Buffer.from(imageBase64, "base64");
+      if (imageData.length > 0 && imageData.length <= 1024 * 1024) {
+        cached = await eventStore.storeListenerAvatarData(targetUserId, { data: imageData, mime });
+      }
+    }
+    items.push({ userId, uniqueId, targetUserId, ok: Boolean(updated), cached });
   }
   return {
     requested: input.length,
