@@ -125,20 +125,24 @@ function renderDetail(data) {
     <section class="detail-section"><h3>ギフト内訳</h3><div class="gift-grid">${(data.gifts||[]).map(g=>`<div class="gift-item"><strong>${escapeHtml(g.giftName||g.giftId||"ギフト")}</strong><small>${number.format(g.count||0)}個・${number.format(g.coins||0)}コイン</small></div>`).join("")||'<p class="empty">ギフト履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>最近のコメント</h3><div>${(data.comments||[]).map(c=>`<div class="history-item"><time>${formatDate(c.at)}</time><p>${escapeHtml(c.text||"")}</p></div>`).join("")||'<p class="empty">コメント履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>過去に確認した名前</h3><div>${(data.aliases||[]).map(a=>`<div class="history-item"><strong>${escapeHtml(a.nickname||"")}</strong> <small>${a.uniqueId?`@${escapeHtml(a.uniqueId)}`:""}</small><p>${formatDate(a.firstSeenAt)} ～ ${formatDate(a.lastSeenAt)}</p></div>`).join("")||'<p class="empty">別名履歴なし</p>'}</div></section>`;
-  el.detailForm.addEventListener("submit", saveDetail);
+  document.getElementById("detailForm")?.addEventListener("submit", saveDetail);
 }
 
 async function saveDetail(event) {
   event.preventDefault();
-  const payload = { isSuperFan:el.detailSuperFan.checked, notes:el.detailNotes.value, tags:el.detailTags.value.split(",").map(v=>v.trim()).filter(Boolean) };
+  const superFan = document.getElementById("detailSuperFan");
+  const notes = document.getElementById("detailNotes");
+  const tags = document.getElementById("detailTags");
+  const saveStatus = document.getElementById("detailSaveStatus");
+  const payload = { isSuperFan:Boolean(superFan?.checked), notes:notes?.value || "", tags:(tags?.value || "").split(",").map(v=>v.trim()).filter(Boolean) };
   const response = await api(`/api/listeners/${encodeURIComponent(state.selectedUserId)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-  el.detailSaveStatus.textContent = response.ok ? "保存しました" : "保存できませんでした";
+  if (saveStatus) saveStatus.textContent = response.ok ? "保存しました" : "保存できませんでした";
   if (response.ok) refreshAll();
 }
 
 function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId=""}
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
-function avatar(item){return item.avatarUrl?`<img class="avatar" src="${escapeAttr(item.avatarUrl)}" alt="" referrerpolicy="no-referrer">`:`<span class="avatar avatar-fallback">${escapeHtml((item.nickname||item.uniqueId||"?").slice(0,1))}</span>`}
+function avatar(item){const first=Array.from(item.nickname||item.uniqueId||"?")[0]||"?";return item.avatarUrl?`<img class="avatar" src="${escapeAttr(item.avatarUrl)}" alt="" referrerpolicy="no-referrer">`:`<span class="avatar avatar-fallback">${escapeHtml(first)}</span>`}
 function cleanUsername(){return el.streamUsername.value.trim().replace(/^@/,"")}
 function params(extra={}){const q=new URLSearchParams(extra);const u=cleanUsername();if(u)q.set("username",u);const s=q.toString();return s?`?${s}`:""}
 function api(path,options={}){return fetch(path,{...options,cache:"no-store",headers:{Authorization:`Bearer ${state.key}`,...(options.headers||{})}})}
