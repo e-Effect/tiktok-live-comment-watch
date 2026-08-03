@@ -44,7 +44,8 @@ test("visit history counts distinct live room ids instead of re-entries", async 
           rows: [{
             visitCount: "3",
             firstVisitAt: new Date("2026-07-01T00:00:00Z"),
-            lastVisitAt: new Date("2026-07-28T00:00:00Z")
+            lastVisitAt: new Date("2026-07-28T00:00:00Z"),
+            previousVisitAt: new Date("2026-07-20T00:00:00Z")
           }]
         };
       }
@@ -63,9 +64,11 @@ test("visit history counts distinct live room ids instead of re-entries", async 
   });
 
   assert.equal(summary.visitCount, 3);
+  assert.equal(summary.previousVisitAt, Date.parse("2026-07-20T00:00:00Z"));
   assert.match(calls[0].sql, /ON CONFLICT \(session_id, user_id\)/);
+  assert.match(calls[1].sql, /FILTER/);
   assert.match(calls[1].sql, /COALESCE\(NULLIF\(s\.room_id, ''\), v\.session_id::text\)/);
-  assert.deepEqual(calls[1].values, ["streamer", "viewer-id"]);
+  assert.deepEqual(calls[1].values, ["streamer", "viewer-id", "session-id"]);
   assert.match(calls[2].sql, /latest_unique_id/);
   assert.match(calls[2].sql, /avatar_url/);
   assert.equal(calls[2].values[1], "");

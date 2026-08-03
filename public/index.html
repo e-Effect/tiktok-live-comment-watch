@@ -88,7 +88,7 @@
             <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
             <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
             <label><input type="checkbox" data-panel-toggle="watchers" checked> 滞在時間ランキング</label>
-            <label><input type="checkbox" data-panel-toggle="silent" checked> 現在視聴中・15分以上コメントなし</label>
+            <label><input type="checkbox" data-panel-toggle="silent" checked> 滞在中コメ無</label>
             <label><input type="checkbox" data-panel-toggle="gifts" checked> ギフトランキング</label>
             <label><input type="checkbox" data-panel-toggle="targetGift" checked> ギフト別ランキング</label>
             <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
@@ -264,7 +264,10 @@
           </section>
 
           <section data-panel="silent">
-            <h2>現在視聴中・15分以上コメントなし</h2>
+            <h2>滞在中コメ無</h2>
+            <div class="silent-legend" aria-label="滞在時間の色分け">
+              <span class="green">15分～</span><span class="yellow">30分～</span><span class="red">1時間～</span>
+            </div>
             <div id="silentList" class="list small">
               <p class="empty">視聴者ランキングにいる対象者はいません。</p>
             </div>

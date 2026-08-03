@@ -443,6 +443,7 @@ class LiveSession extends EventEmitter {
       current.visitCount = Math.max(1, Number(summary.visitCount || current.visitCount || 1));
       current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || at;
       current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || at;
+      current.previousVisitAt = summary.previousVisitAt || current.previousVisitAt || null;
       this.userStats.set(current.userId, current);
       this.broadcast("status", this.snapshot());
     }).catch(() => {});
@@ -585,6 +586,7 @@ class LiveSession extends EventEmitter {
       visitSource: "",
       firstVisitAt: null,
       lastVisitAt: null,
+      previousVisitAt: null,
       watchSeconds: 0,
       followedToday: false,
       followedAt: null,
@@ -1088,7 +1090,8 @@ function userDisplayState(user) {
     lastHeartMeAt: user.lastHeartMeAt,
     visitCount: Number(user.visitCount || 0),
     firstVisitAt: user.firstVisitAt,
-    lastVisitAt: user.lastVisitAt
+    lastVisitAt: user.lastVisitAt,
+    previousVisitAt: user.previousVisitAt
   };
 }
 

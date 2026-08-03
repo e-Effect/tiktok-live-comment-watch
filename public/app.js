@@ -91,8 +91,8 @@ const SINGLE_MODE_KEY = "tiktok-live-single-mode";
 const FONT_SIZE_KEY = "tiktok-live-font-size-level";
 const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
-const PANEL_SIZE_OPTIONS = ["small", "medium", "large", "wide"];
-const PANEL_SIZE_LABELS = { small: "小", medium: "中", large: "大", wide: "横" };
+const PANEL_SIZE_OPTIONS = ["small", "tall", "medium", "large", "wide"];
+const PANEL_SIZE_LABELS = { small: "小", tall: "縦長", medium: "中", large: "大", wide: "横" };
 const DEFAULT_PANEL_SIZES = {
   report: "wide",
   visitors: "medium",
@@ -1610,19 +1610,36 @@ function renderMetrics(snapshot) {
 }
 
 function renderComments(comments) {
+  if (visitorDemoActive) comments = visitorDemoComments();
   if (!comments.length) {
     commentList.innerHTML = `<p class="empty">接続するとコメントがここに流れます。</p>`;
     return;
   }
   commentList.innerHTML = comments.map((comment) => `
-    <article class="comment">
+    <article class="comment ${commentVisitClass(comment)}">
       <header>
         <span class="name">${renderDecoratedName(comment)}</span>
-        <span class="time">${formatClock(comment.at)}</span>
+        <span class="comment-side">
+          ${commentVisitMeta(comment)}
+          <span class="time">${formatClock(comment.at)}</span>
+        </span>
       </header>
       <p>${eventSourceBadge(comment)}${escapeHtml(comment.text)}</p>
     </article>
   `).join("");
+}
+
+function commentVisitClass(comment) {
+  return Number(comment.visitCount || 0) === 1 ? "first-visit-comment" : "";
+}
+
+function commentVisitMeta(comment) {
+  const count = Number(comment.visitCount || 0);
+  if (count <= 0) return "";
+  if (count === 1) return `<span class="comment-visit-meta first">初見</span>`;
+  const previousAt = comment.previousVisitAt || comment.firstVisitAt;
+  const previousLabel = previousAt ? `（前回 ${formatVisitDate(previousAt)}）` : "";
+  return `<span class="comment-visit-meta">${formatNumber(count)}回目${previousLabel}</span>`;
 }
 
 function renderWatchers(users) {
@@ -1757,6 +1774,7 @@ function setVisitorDemoActive(active) {
   }
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   renderVisitorHistory(selected?.snapshot?.visitors || []);
+  renderComments(selected?.snapshot?.comments || []);
 }
 
 function showVisitorDemo() {
@@ -1790,9 +1808,18 @@ function visitorDemoUsers() {
       visitCount: 3,
       entryEventCount: 1,
       visitSource: "viewer_ranking",
+      previousVisitAt: now - 24 * 60 * 60 * 1000,
       firstJoinAt: now - 60_000,
       firstSeenAt: now - 60_000
     }
+  ];
+}
+
+function visitorDemoComments() {
+  const [firstVisit, returnVisit] = visitorDemoUsers();
+  return [
+    { ...firstVisit, at: Date.now(), text: "はじめまして！" },
+    { ...returnVisit, at: Date.now() - 15_000, text: "また来ました！" }
   ];
 }
 
@@ -1895,9 +1922,9 @@ function rangeLabel(range) {
 }
 
 function silentLevelClass(seconds) {
-  if (seconds >= 90 * 60) return "silent-red";
-  if (seconds >= 60 * 60) return "silent-green";
+  if (seconds >= 60 * 60) return "silent-red";
   if (seconds >= 30 * 60) return "silent-yellow";
+  if (seconds >= 15 * 60) return "silent-green";
   return "";
 }
 
@@ -1918,7 +1945,7 @@ function renderName(user) {
 
 function renderDecoratedName(user) {
   const name = escapeHtml(user.nickname || user.userId);
-  return `${heartMeMark(user)}${followStatusMark(user)}${todayFollowMark(user)}${visitCountMark(user)}${name}`;
+  return `${heartMeMark(user)}${followStatusMark(user)}${todayFollowMark(user)}${name}`;
 }
 
 function heartMeMark(user) {
@@ -1937,15 +1964,6 @@ function heartMeMark(user) {
   const title = `${titleMap[status] || titleMap.unknown}${level > 0 ? ` Lv.${level}` : ""}`;
   const symbol = status === "none" || status === "unknown" ? "♡" : "♥";
   return `<span class="heart-mark heart-${className}" title="${escapeHtml(title)}">${symbol}</span>`;
-}
-
-function visitCountMark(user) {
-  const count = Number(user.visitCount || 0);
-  if (count <= 0) return "";
-  if (count === 1) {
-    return `<span class="visit-count-mark first-visit" title="この配信で初めて確認したリスナー">初見</span>`;
-  }
-  return `<span class="visit-count-mark return-visit" title="過去の配信でも確認したリスナー">再訪・${formatNumber(count)}回目</span>`;
 }
 
 function followStatusMark(user) {
@@ -2013,6 +2031,16 @@ function formatClock(timestamp) {
     minute: "2-digit",
     second: "2-digit"
   }).format(new Date(timestamp));
+}
+
+function formatVisitDate(timestamp) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "-";
+  const now = new Date();
+  const options = date.getFullYear() === now.getFullYear()
+    ? { month: "numeric", day: "numeric" }
+    : { year: "numeric", month: "numeric", day: "numeric" };
+  return new Intl.DateTimeFormat("ja-JP", options).format(date);
 }
 
 function escapeHtml(value) {
