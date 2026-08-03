@@ -82,6 +82,7 @@
             </div>
             <h2>表示項目</h2>
             <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
+            <label><input type="checkbox" data-panel-toggle="metrics" checked> 上部集計（コメント数～確認来訪）</label>
             <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
             <label><input type="checkbox" data-panel-toggle="visitors" checked> 入室履歴</label>
             <label><input type="checkbox" data-panel-toggle="candidates" checked> 候補発掘</label>
@@ -170,7 +171,7 @@
           <span id="cooldownTime">制限なし</span>
         </div>
 
-        <div class="metrics">
+        <div class="metrics" data-panel="metrics">
           <article><span>コメント数</span><strong id="commentCount">0</strong></article>
           <article><span>遡り取得</span><strong id="initialCount">0</strong></article>
           <article><span>ギフト数</span><strong id="giftCount">0</strong></article>

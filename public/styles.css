@@ -138,6 +138,7 @@ input, select, textarea {
   gap: 9px;
   margin: 14px 0;
 }
+.metrics[hidden] { display: none; }
 .metrics article {
   min-width: 0;
   border: 1px solid var(--line);
