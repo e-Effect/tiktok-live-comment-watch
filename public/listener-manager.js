@@ -72,6 +72,7 @@ async function refreshSummary() {
     const cards = [
       ["記録リスナー", state.summary.listeners], ["本日活動", state.summary.activeToday],
       ["リピーター", state.summary.returning], ["スーパーファン", state.summary.superFans],
+      ["アイコン取得済み", state.summary.avatars],
       ["来訪回数", state.summary.visits], ["コメント", state.summary.comments],
       ["ギフト個数", state.summary.gifts], ["ギフトコイン", state.summary.coins, true], ["シェア", state.summary.shares]
     ];

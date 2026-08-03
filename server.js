@@ -5,6 +5,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { EventStore } from "./lib/event-store.js";
+import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import {
   heartMeLevelFromEvent,
   heartMeStateFromUser,
@@ -198,7 +199,7 @@ class LiveSession extends EventEmitter {
     const handleShare = (data) => {
       const share = parseShareEvent(data);
       share.source = this.currentEventSource();
-      this.markSeen({ userId: share.userId, nickname: share.nickname, signals: share.signals }, share.at, "share");
+      this.markSeen({ userId: share.userId, uniqueId: share.uniqueId, nickname: share.nickname, avatarUrl: share.avatarUrl, signals: share.signals }, share.at, "share");
       this.addShare(share);
     };
 
@@ -227,7 +228,7 @@ class LiveSession extends EventEmitter {
       const previousUser = this.userStats.get(gift.userId);
       gift.previousHeartMeStatus = previousUser?.heartMeStatus || null;
       if (gift.isHeartMe && gift.giftId) this.heartMeGiftIds.add(String(gift.giftId));
-      this.markSeen({ userId: gift.userId, nickname: gift.nickname, signals: gift.signals }, gift.at, "gift");
+      this.markSeen({ userId: gift.userId, uniqueId: gift.uniqueId, nickname: gift.nickname, avatarUrl: gift.avatarUrl, signals: gift.signals }, gift.at, "gift");
       this.addGift(gift);
     });
 
@@ -380,6 +381,8 @@ class LiveSession extends EventEmitter {
   markSeen(person, at, presenceSource = "event", { entryEvent = false } = {}) {
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
+    if (person.uniqueId) user.uniqueId = person.uniqueId;
+    if (person.avatarUrl) user.avatarUrl = person.avatarUrl;
     if (!user.hasJoined) {
       user.hasJoined = true;
       user.firstJoinAt = at;
@@ -415,7 +418,9 @@ class LiveSession extends EventEmitter {
       id: randomUUID(),
       type: resolvedStatus === "active" ? "heart_me_active" : "heart_me",
       userId: user.userId,
+      uniqueId: person.uniqueId || user.uniqueId || "",
       nickname: user.nickname,
+      avatarUrl: person.avatarUrl || user.avatarUrl || "",
       at,
       source: this.currentEventSource()
     });
@@ -425,7 +430,9 @@ class LiveSession extends EventEmitter {
   recordVisit(user, at, source) {
     eventStore.recordVisit(this, {
       userId: user.userId,
+      uniqueId: user.uniqueId || "",
       nickname: user.nickname,
+      avatarUrl: user.avatarUrl || "",
       at,
       source
     }).then((summary) => {
@@ -1111,27 +1118,6 @@ function personFromEvent(data) {
     avatarUrl: avatarUrlFromUser(rawUser),
     signals: userSignalsFromRawUser(rawUser)
   };
-}
-
-function avatarUrlFromUser(rawUser) {
-  const candidates = [
-    rawUser?.avatarThumb,
-    rawUser?.avatarMedium,
-    rawUser?.avatarLarge,
-    rawUser?.avatar,
-    rawUser?.profilePictureUrl,
-    rawUser?.avatar_url,
-    rawUser?.avatarUrl
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) return candidate;
-    const list = candidate?.urlList || candidate?.url_list || candidate?.urls;
-    if (Array.isArray(list)) {
-      const url = list.find((item) => typeof item === "string" && /^https?:\/\//i.test(item));
-      if (url) return url;
-    }
-  }
-  return "";
 }
 
 function parseGiftEvent(data, knownHeartMeGiftIds = []) {

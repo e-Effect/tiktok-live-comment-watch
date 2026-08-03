@@ -66,6 +66,10 @@ test("visit history counts distinct live room ids instead of re-entries", async 
   assert.match(calls[0].sql, /ON CONFLICT \(session_id, user_id\)/);
   assert.match(calls[1].sql, /COALESCE\(NULLIF\(s\.room_id, ''\), v\.session_id::text\)/);
   assert.deepEqual(calls[1].values, ["streamer", "viewer-id"]);
+  assert.match(calls[2].sql, /latest_unique_id/);
+  assert.match(calls[2].sql, /avatar_url/);
+  assert.equal(calls[2].values[1], "");
+  assert.equal(calls[2].values[3], "");
 });
 
 test("clears only unedited Count Pocket super-fan imports", async () => {
