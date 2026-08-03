@@ -1,12 +1,13 @@
 const storageKey = "tiktok-listener-admin-key";
-const state = { key: localStorage.getItem(storageKey) || "", items: [], summary: {}, timer: null, selectedUserId: "" };
+const state = { key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null, selectedUserId: "" };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
 const dateTime = new Intl.DateTimeFormat("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
 
 el.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  state.key = el.adminKey.value.trim();
+  state.key = normalizeAdminKey(el.adminKey.value);
+  el.adminKey.value = state.key;
   if (!state.key) return;
   await authenticate();
 });
@@ -36,8 +37,18 @@ async function authenticate() {
     clearInterval(state.timer);
     state.timer = setInterval(refreshRealtime, 10000);
   } catch (error) {
-    el.loginError.textContent = error.message;
+    localStorage.removeItem(storageKey);
+    state.key = "";
+    el.app.hidden = true;
+    el.loginPanel.hidden = false;
+    el.adminKey.value = "";
+    el.adminKey.focus();
+    el.loginError.textContent = error.message || "管理キーを確認して、もう一度入力してください";
   }
+}
+
+function normalizeAdminKey(value) {
+  return String(value || "").normalize("NFKC").replace(/\s+/g, "").trim();
 }
 
 function logout() {
