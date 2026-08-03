@@ -23,6 +23,7 @@ const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
 const shareHistory = document.querySelector("#shareHistory");
 const visitorHistory = document.querySelector("#visitorHistory");
+const visitorDemoBtn = document.querySelector("#visitorDemoBtn");
 const targetGiftSelect = document.querySelector("#targetGiftSelect");
 const giftRankingRange = document.querySelector("#giftRankingRange");
 const giftRankingRefresh = document.querySelector("#giftRankingRefresh");
@@ -128,6 +129,7 @@ let clockTimer = null;
 let reconnectTimer = null;
 let snapshotFetchTick = 0;
 let giftRankingRequest = 0;
+let visitorDemoActive = false;
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -167,6 +169,7 @@ setInterval(refreshServerState, 30000);
 targetGiftSelect?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRange?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRefresh?.addEventListener("click", () => refreshTargetGiftRanking());
+visitorDemoBtn?.addEventListener("click", toggleVisitorDemo);
 
 async function startSession(options = {}) {
   setBusy(true);
@@ -1680,11 +1683,15 @@ function renderShareHistory(shares) {
 
 function renderVisitorHistory(visitors) {
   if (!visitorHistory) return;
+  if (visitorDemoActive) visitors = visitorDemoUsers();
   if (!visitors.length) {
     visitorHistory.innerHTML = `<p class="empty">入室を確認したユーザーがここに表示されます。</p>`;
     return;
   }
-  visitorHistory.innerHTML = visitors.map((user) => {
+  const demoNotice = visitorDemoActive
+    ? `<p class="visitor-demo-notice">デモ表示中です。訪問回数や台帳には保存されません。</p>`
+    : "";
+  visitorHistory.innerHTML = demoNotice + visitors.map((user) => {
     const visits = Number(user.visitCount || 0);
     const entryEvents = Number(user.entryEventCount || 0);
     const visitLabel = visits > 1 ? `再訪・累計${formatNumber(visits)}回目` : "初見";
@@ -1700,6 +1707,41 @@ function renderVisitorHistory(visitors) {
       </div>
     `;
   }).join("");
+}
+
+function toggleVisitorDemo() {
+  visitorDemoActive = !visitorDemoActive;
+  if (visitorDemoBtn) {
+    visitorDemoBtn.textContent = visitorDemoActive ? "デモ表示を終了" : "初見・再訪をデモ表示";
+    visitorDemoBtn.setAttribute("aria-pressed", String(visitorDemoActive));
+    visitorDemoBtn.classList.toggle("active", visitorDemoActive);
+  }
+  const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
+  renderVisitorHistory(selected?.snapshot?.visitors || []);
+}
+
+function visitorDemoUsers() {
+  const now = Date.now();
+  return [
+    {
+      userId: "demo-first",
+      nickname: "はじめて来たリスナー",
+      visitCount: 1,
+      entryEventCount: 1,
+      visitSource: "member",
+      firstJoinAt: now,
+      firstSeenAt: now
+    },
+    {
+      userId: "demo-return",
+      nickname: "また来てくれたリスナー",
+      visitCount: 3,
+      entryEventCount: 1,
+      visitSource: "viewer_ranking",
+      firstJoinAt: now - 60_000,
+      firstSeenAt: now - 60_000
+    }
+  ];
 }
 
 function visitSourceLabel(source) {

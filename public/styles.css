@@ -285,6 +285,11 @@ h2 { margin: 2px 0 9px; font-size: 1rem; }
 .visit-count-mark { display: inline-block; margin-right: 5px; border-radius: 999px; background: #e7eefb; color: #31558b; font-size: .7rem; font-weight: 900; padding: 2px 6px; vertical-align: 1px; }
 .visit-count-mark.first-visit { background: #fff1b8; color: #795800; }
 .visit-count-mark.return-visit { background: #dff4e7; color: #17663a; }
+.visitor-demo-tools { display: flex; align-items: center; gap: 8px; margin: -2px 0 9px; }
+.visitor-demo-tools button { background: var(--soft); color: var(--ink); padding: 7px 10px; font-size: .78rem; }
+.visitor-demo-tools button.active { background: var(--accent); color: var(--accent-ink); }
+.visitor-demo-tools small { color: var(--muted); font-size: .72rem; }
+.visitor-demo-notice { margin: 0; padding: 9px 12px; background: #eef8f6; color: #17665d; border-bottom: 1px solid var(--line); font-size: .76rem; font-weight: 800; }
 
 .report-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 8px; }
 .report-list article { min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: #fafbfb; padding: 10px; }
