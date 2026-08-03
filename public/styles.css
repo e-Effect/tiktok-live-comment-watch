@@ -341,8 +341,8 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .panel-heading { display: flex; align-items: center; gap: 8px; }
 .layout-controls { display: none; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
 .layout-editing .layout-controls { display: flex; }
-.layout-size-btn, .layout-move-btn { padding: 4px 7px; border-radius: 6px; background: var(--soft); color: var(--ink); font-size: .7rem; line-height: 1; }
-.layout-size-btn.active { background: var(--ink); color: #fff; }
+.layout-size-btn, .layout-move-btn, .layout-height-btn { padding: 4px 7px; border-radius: 6px; background: var(--soft); color: var(--ink); font-size: .7rem; line-height: 1; white-space: nowrap; }
+.layout-size-btn.active, .layout-height-btn.active { background: var(--ink); color: #fff; }
 .layout-editing .layout-card { outline: 2px dashed rgba(0, 169, 154, .45); outline-offset: 2px; cursor: grab; }
 .layout-card.dragging { opacity: .45; }
 
@@ -392,6 +392,10 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
   .grid > section.panel-size-medium,
   .grid > section.panel-size-large,
   .grid > section.panel-size-wide { grid-row: span 2; }
+  .grid > section.panel-height-long.panel-size-small { grid-row: span 2; }
+  .grid > section.panel-height-long:not(.panel-size-small) { grid-row: span 3; }
+  .grid > section.panel-height-max.panel-size-small { grid-row: span 3; }
+  .grid > section.panel-height-max:not(.panel-size-small) { grid-row: span 4; }
   .grid > section .list,
   .grid > section .candidate-list,
   .grid > section .report-list,
@@ -431,4 +435,8 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
   .fixed-actions, .candidate-form, .candidate-discovery, .gift-ranking-controls { grid-template-columns: 1fr; }
   .candidate-discovery button { grid-column: auto; }
   .settings-panel { width: 100vw; }
+}
+@media (max-width: 900px) {
+  .grid > section.panel-height-long .list { height: 600px; }
+  .grid > section.panel-height-max .list { height: 820px; }
 }

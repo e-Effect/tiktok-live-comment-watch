@@ -93,6 +93,8 @@ const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
 const PANEL_SIZE_OPTIONS = ["small", "tall", "medium", "large", "wide"];
 const PANEL_SIZE_LABELS = { small: "小", tall: "縦長", medium: "中", large: "大", wide: "横" };
+const PANEL_HEIGHT_OPTIONS = ["normal", "long", "max"];
+const PANEL_HEIGHT_LABELS = { normal: "高さ標準", long: "高さロング", max: "高さ最大" };
 const DEFAULT_PANEL_SIZES = {
   report: "wide",
   visitors: "medium",
@@ -1232,6 +1234,15 @@ function ensurePanelLayoutControls(panel) {
     controls.appendChild(button);
   });
 
+  const heightButton = document.createElement("button");
+  heightButton.type = "button";
+  heightButton.className = "layout-height-btn";
+  heightButton.dataset.layoutHeightToggle = "";
+  heightButton.textContent = PANEL_HEIGHT_LABELS.normal;
+  heightButton.title = `${heading.textContent.trim()}の高さを切り替える`;
+  heightButton.addEventListener("click", () => cyclePanelHeight(panel.dataset.panel));
+  controls.appendChild(heightButton);
+
   heading.appendChild(controls);
 }
 
@@ -1251,17 +1262,19 @@ function readLayoutPrefs() {
     const value = JSON.parse(localStorage.getItem(LAYOUT_PREFS_KEY) || "{}") || {};
     return {
       order: Array.isArray(value.order) ? value.order.filter((name) => DEFAULT_PANEL_ORDER.includes(name)) : [],
-      sizes: value.sizes && typeof value.sizes === "object" ? value.sizes : {}
+      sizes: value.sizes && typeof value.sizes === "object" ? value.sizes : {},
+      heights: value.heights && typeof value.heights === "object" ? value.heights : {}
     };
   } catch {
-    return { order: [], sizes: {} };
+    return { order: [], sizes: {}, heights: {} };
   }
 }
 
 function writeLayoutPrefs(prefs) {
   localStorage.setItem(LAYOUT_PREFS_KEY, JSON.stringify({
     order: normalizedPanelOrder(prefs.order),
-    sizes: normalizedPanelSizes(prefs.sizes)
+    sizes: normalizedPanelSizes(prefs.sizes),
+    heights: normalizedPanelHeights(prefs.heights)
   }));
 }
 
@@ -1284,11 +1297,21 @@ function normalizedPanelSizes(sizes = {}) {
   return next;
 }
 
+function normalizedPanelHeights(heights = {}) {
+  const next = {};
+  DEFAULT_PANEL_ORDER.forEach((name) => {
+    const height = heights[name] || "normal";
+    next[name] = PANEL_HEIGHT_OPTIONS.includes(height) ? height : "normal";
+  });
+  return next;
+}
+
 function applyLayoutPrefs() {
   if (!layoutGrid) return;
   const prefs = readLayoutPrefs();
   const order = normalizedPanelOrder(prefs.order);
   const sizes = normalizedPanelSizes(prefs.sizes);
+  const heights = normalizedPanelHeights(prefs.heights);
   const panelsByName = new Map(layoutPanels.map((panel) => [panel.dataset.panel, panel]));
 
   order.forEach((name) => {
@@ -1303,6 +1326,14 @@ function applyLayoutPrefs() {
     panel.querySelectorAll("[data-layout-size]").forEach((button) => {
       button.classList.toggle("active", button.dataset.layoutSize === size);
     });
+    const height = heights[panel.dataset.panel] || "normal";
+    PANEL_HEIGHT_OPTIONS.forEach((option) => panel.classList.remove(`panel-height-${option}`));
+    panel.classList.add(`panel-height-${height}`);
+    panel.querySelectorAll("[data-layout-height-toggle]").forEach((button) => {
+      button.textContent = PANEL_HEIGHT_LABELS[height];
+      button.title = `${PANEL_HEIGHT_LABELS[height]}で表示中。クリックで切り替え`;
+      button.classList.toggle("active", height !== "normal");
+    });
   });
 }
 
@@ -1311,6 +1342,16 @@ function setPanelSize(panelName, size) {
   const prefs = readLayoutPrefs();
   prefs.sizes = { ...normalizedPanelSizes(prefs.sizes), [panelName]: size };
   writeLayoutPrefs({ ...prefs, order: currentPanelOrder() });
+  applyLayoutPrefs();
+}
+
+function cyclePanelHeight(panelName) {
+  if (!DEFAULT_PANEL_ORDER.includes(panelName)) return;
+  const prefs = readLayoutPrefs();
+  const heights = normalizedPanelHeights(prefs.heights);
+  const currentIndex = PANEL_HEIGHT_OPTIONS.indexOf(heights[panelName]);
+  heights[panelName] = PANEL_HEIGHT_OPTIONS[(currentIndex + 1) % PANEL_HEIGHT_OPTIONS.length];
+  writeLayoutPrefs({ ...prefs, heights, order: currentPanelOrder() });
   applyLayoutPrefs();
 }
 
