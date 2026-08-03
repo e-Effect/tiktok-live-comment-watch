@@ -1886,11 +1886,10 @@ async function backfillListenerAvatars({ limit = 10, offset = 0 } = {}) {
   if (!apiKey) throw new Error("Tik.tools APIキーが設定されていません");
   const candidates = await eventStore.listenersMissingAvatars({ limit, offset });
   if (!candidates.length) return { requested: 0, updated: 0, failed: 0, items: [] };
-  const { TikTokLive } = await import("@tiktool/live");
   const items = [];
   for (const candidate of candidates) {
     try {
-      const profile = await TikTokLive.getUserProfile({ uniqueId: candidate.uniqueId, apiKey });
+      const profile = await fetchTikToolsProfile(candidate.uniqueId, apiKey);
       const avatarUrl = avatarUrlFromUser(profile);
       if (!avatarUrl) throw new Error("プロフィール画像が見つかりません");
       const updated = await eventStore.updateListenerAvatar(candidate.userId, {
@@ -1909,6 +1908,24 @@ async function backfillListenerAvatars({ limit = 10, offset = 0 } = {}) {
     failed: items.filter((item) => !item.ok).length,
     items
   };
+}
+
+async function fetchTikToolsProfile(uniqueId, apiKey) {
+  const url = new URL("https://api.tik.tools/webcast/user_profile");
+  url.searchParams.set("unique_id", String(uniqueId).replace(/^@/, ""));
+  url.searchParams.set("apiKey", apiKey);
+  const response = await fetch(url, { headers: { "x-api-key": apiKey, accept: "application/json" } });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`Tik.toolsプロフィールAPIが利用できません（HTTP ${response.status}）`);
+  }
+  if (!response.ok || payload.status_code !== 0 || !payload.data?.profile) {
+    throw new Error(payload.error || payload.message || `Tik.toolsプロフィール取得失敗（HTTP ${response.status}）`);
+  }
+  return payload.data.profile;
 }
 
 export { server };
