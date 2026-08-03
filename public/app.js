@@ -1749,7 +1749,7 @@ function renderVisitorHistory(visitors) {
     const visitLabel = visits > 1 ? `再訪・累計${formatNumber(visits)}回目` : "初見";
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
-      <div class="user-row visitor-row">
+      <div class="user-row visitor-row ${visits === 1 ? "first-visit-row" : ""}">
         <span class="visit-badge">${escapeHtml(visitSourceLabel(user.visitSource))}</span>
         <span class="name">${renderDecoratedName(user)}</span>
         <span class="visit-meta">
