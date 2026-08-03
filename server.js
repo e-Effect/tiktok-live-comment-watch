@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { EventStore } from "./lib/event-store.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
+import { isSilentWatcher, silentWatcherPresenceMode } from "./lib/silent-watchers.js";
 import {
   heartMeLevelFromEvent,
   heartMeStateFromUser,
@@ -659,8 +660,9 @@ class LiveSession extends EventEmitter {
       .sort((a, b) => b.watchSeconds - a.watchSeconds || b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
     const silentLongWatchers = [...users]
-      .filter((user) => user.isCurrentlyRanked && user.watchSeconds >= 15 * 60 && user.comments === 0)
+      .filter((user) => isSilentWatcher(user))
       .sort((a, b) => b.watchSeconds - a.watchSeconds || a.currentViewerRank - b.currentViewerRank || b.lastSeenAt - a.lastSeenAt)
+      .map((user) => ({ ...user, presenceMode: silentWatcherPresenceMode(user) }))
       .slice(0, 100);
     const currentViewerRanking = [...users]
       .filter((user) => user.isCurrentlyRanked)

@@ -1689,14 +1689,17 @@ function renderWatchers(users) {
 
 function renderSilentLongWatchers(users) {
   if (!users.length) {
-    silentList.innerHTML = `<p class="empty">視聴者ランキングにいる対象者はいません。</p>`;
+    silentList.innerHTML = `<p class="empty">15分以上・コメントなしの対象者はいません。</p>`;
     return;
   }
   silentList.innerHTML = users.map((user, index) => `
     <div class="user-row silent-row ${silentLevelClass(user.watchSeconds)}">
       <span class="rank">${index + 1}</span>
       <span class="name">${renderDecoratedName(user)}</span>
-      <span class="count">${formatDuration(user.watchSeconds)}</span>
+      <span class="silent-count">
+        <strong>${formatDuration(user.watchSeconds)}</strong>
+        <small>${user.presenceMode === "entry_estimate" ? "入室から推定" : "在室確認"}</small>
+      </span>
     </div>
   `).join("");
 }

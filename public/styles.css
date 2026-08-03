@@ -373,6 +373,7 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .silent-legend .green { background: #dff7df; color: #17663a; }
 .silent-legend .yellow { background: #fff4bd; color: #795800; }
 .silent-legend .red { background: #ffd9d9; color: #9b2020; }
+.silent-note { margin: -2px 0 8px; color: var(--muted); font-size: .72rem; line-height: 1.4; }
 .silent-row.silent-yellow { background: #fff4bd; }
 .silent-row.silent-green { background: #dff7df; }
 .silent-row.silent-red { background: #ffd9d9; }
@@ -380,6 +381,9 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .silent-row.silent-green .rank { background: #54c477; color: #082713; }
 .silent-row.silent-red .rank { background: #f45b5b; color: #fff; }
 .silent-row .count { font-weight: 900; color: var(--ink); }
+.silent-count { display: grid; justify-items: end; gap: 2px; margin-left: auto; white-space: nowrap; }
+.silent-count strong { color: var(--ink); }
+.silent-count small { color: var(--muted); font-size: .66rem; font-weight: 900; }
 
 .single-mode [data-panel="candidates"] { display: none !important; }
 .single-mode .session-list { display: none; }
