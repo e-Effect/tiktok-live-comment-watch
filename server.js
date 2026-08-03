@@ -1647,6 +1647,17 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/listeners/avatars/import" && request.method === "POST") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const body = await readBody(request);
+      sendJson(response, 200, await importResolvedListenerAvatars(body.items));
+    } catch (error) {
+      sendJson(response, 400, { error: shortError(error) });
+    }
+    return;
+  }
+
   if (url.pathname === "/api/listeners/import" && request.method === "POST") {
     if (!requireListenerAdmin(request, response)) return;
     try {
@@ -1906,6 +1917,32 @@ async function backfillListenerAvatars({ limit = 10, offset = 0 } = {}) {
   }
   return {
     requested: candidates.length,
+    updated: items.filter((item) => item.ok).length,
+    failed: items.filter((item) => !item.ok).length,
+    items
+  };
+}
+
+async function importResolvedListenerAvatars(rawItems) {
+  const input = Array.isArray(rawItems) ? rawItems.slice(0, 20) : [];
+  if (!input.length) throw new Error("アイコン情報がありません");
+  const items = [];
+  for (const profile of input) {
+    const userId = String(profile?.userId || profile?.user_id || profile?.id || "").trim();
+    const avatarUrl = avatarUrlFromUser(profile);
+    if (!/^\d+$/.test(userId) || !/^https:\/\//i.test(avatarUrl)) {
+      items.push({ userId, ok: false, error: "ユーザーIDまたは画像URLが不正です" });
+      continue;
+    }
+    const updated = await eventStore.updateListenerAvatar(userId, {
+      uniqueId: profile.uniqueId || profile.username || "",
+      nickname: profile.nickname || "",
+      avatarUrl
+    });
+    items.push({ userId, ok: Boolean(updated) });
+  }
+  return {
+    requested: input.length,
     updated: items.filter((item) => item.ok).length,
     failed: items.filter((item) => !item.ok).length,
     items
