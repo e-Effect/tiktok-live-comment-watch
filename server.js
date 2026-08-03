@@ -1661,6 +1661,16 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/listeners/maintenance/clear-imported-super-fans" && request.method === "POST") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      sendJson(response, 200, await eventStore.clearImportedSuperFans());
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
   if (url.pathname === "/api/listeners" && request.method === "GET") {
     if (!requireListenerAdmin(request, response)) return;
     try {

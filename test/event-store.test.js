@@ -67,3 +67,40 @@ test("visit history counts distinct live room ids instead of re-entries", async 
   assert.match(calls[1].sql, /COALESCE\(NULLIF\(s\.room_id, ''\), v\.session_id::text\)/);
   assert.deepEqual(calls[1].values, ["streamer", "viewer-id"]);
 });
+
+test("clears only unedited Count Pocket super-fan imports", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /manually_updated_at IS NULL/);
+      assert.match(sql, /tags @> \$2::jsonb/);
+      assert.deepEqual(values, ["count-pocket", JSON.stringify(["スタンプカード"])]);
+      return { rowCount: 482, rows: [] };
+    }
+  };
+
+  assert.deepEqual(await store.clearImportedSuperFans(), { updated: 482 });
+});
+
+test("does not import Count Pocket users as super fans", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /INSERT INTO listeners/);
+      assert.equal(values[6], false);
+      return { rows: [] };
+    }
+  };
+
+  const result = await store.importListeners([{
+    userId: "username:listener",
+    uniqueId: "listener",
+    nickname: "Listener",
+    isSuperFan: true,
+    tags: ["スタンプカード"]
+  }], { source: "count-pocket" });
+
+  assert.deepEqual(result, { imported: 1, importedStamps: 0 });
+});
