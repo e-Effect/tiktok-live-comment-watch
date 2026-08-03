@@ -283,6 +283,8 @@ h2 { margin: 2px 0 9px; font-size: 1rem; }
 .visit-meta small { color: var(--muted); font-size: .74rem; }
 .visit-badge { border-radius: 999px; background: #e7eefb; color: #31558b; font-size: .72rem; font-weight: 900; padding: 3px 7px; }
 .visit-count-mark { display: inline-block; margin-right: 5px; border-radius: 999px; background: #e7eefb; color: #31558b; font-size: .7rem; font-weight: 900; padding: 2px 6px; vertical-align: 1px; }
+.visit-count-mark.first-visit { background: #fff1b8; color: #795800; }
+.visit-count-mark.return-visit { background: #dff4e7; color: #17663a; }
 
 .report-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 8px; }
 .report-list article { min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: #fafbfb; padding: 10px; }

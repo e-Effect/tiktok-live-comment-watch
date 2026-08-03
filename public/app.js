@@ -1687,7 +1687,7 @@ function renderVisitorHistory(visitors) {
   visitorHistory.innerHTML = visitors.map((user) => {
     const visits = Number(user.visitCount || 0);
     const entryEvents = Number(user.entryEventCount || 0);
-    const visitLabel = visits > 1 ? `累計${formatNumber(visits)}回目` : "この配信で確認";
+    const visitLabel = visits > 1 ? `再訪・累計${formatNumber(visits)}回目` : "初見";
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
       <div class="user-row visitor-row">
@@ -1847,8 +1847,11 @@ function heartMeMark(user) {
 
 function visitCountMark(user) {
   const count = Number(user.visitCount || 0);
-  if (count <= 1) return "";
-  return `<span class="visit-count-mark" title="確認できた来訪回数">${formatNumber(count)}回目</span>`;
+  if (count <= 0) return "";
+  if (count === 1) {
+    return `<span class="visit-count-mark first-visit" title="この配信で初めて確認したリスナー">初見</span>`;
+  }
+  return `<span class="visit-count-mark return-visit" title="過去の配信でも確認したリスナー">再訪・${formatNumber(count)}回目</span>`;
 }
 
 function followStatusMark(user) {
