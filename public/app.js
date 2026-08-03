@@ -77,6 +77,7 @@ const settingsOpenBtn = document.querySelector("#settingsOpenBtn");
 const settingsCloseBtn = document.querySelector("#settingsCloseBtn");
 const settingsTabs = [...document.querySelectorAll("[data-settings-tab]")];
 const settingsPages = [...document.querySelectorAll("[data-settings-page]")];
+const fontSizeButtons = [...document.querySelectorAll("[data-font-size-level]")];
 
 const LEGACY_STORAGE_KEY = "tiktok-live-active-session";
 const SESSIONS_KEY = "tiktok-live-active-sessions";
@@ -87,6 +88,7 @@ const RATE_LIMIT_KEY = "tiktok-live-rate-limit-until";
 const CANDIDATES_KEY = "tiktok-live-creator-candidates";
 const FIXED_ACCOUNT_KEY = "tiktok-live-fixed-account";
 const SINGLE_MODE_KEY = "tiktok-live-single-mode";
+const FONT_SIZE_KEY = "tiktok-live-font-size-level";
 const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
 const PANEL_SIZE_OPTIONS = ["small", "medium", "large", "wide"];
@@ -156,6 +158,7 @@ window.addEventListener("online", reconnectActiveSessions);
 
 setupPanelToggles();
 setupLayoutTools();
+setupFontSizeTools();
 setupSettingsPanel();
 setupFixedAccountTools();
 setupCandidateTools();
@@ -1411,6 +1414,36 @@ function renderSelectedSession() {
     targetGiftSelect.dataset.sessionId = snapshot.id;
     refreshTargetGiftRanking();
   }
+}
+
+function setupFontSizeTools() {
+  applyFontSize(readFontSizeLevel());
+  fontSizeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const level = normalizeFontSizeLevel(button.dataset.fontSizeLevel);
+      localStorage.setItem(FONT_SIZE_KEY, String(level));
+      applyFontSize(level);
+    });
+  });
+}
+
+function readFontSizeLevel() {
+  return normalizeFontSizeLevel(localStorage.getItem(FONT_SIZE_KEY) || 2);
+}
+
+function normalizeFontSizeLevel(value) {
+  const level = Math.round(Number(value));
+  return level >= 1 && level <= 5 ? level : 2;
+}
+
+function applyFontSize(level) {
+  const normalized = normalizeFontSizeLevel(level);
+  document.documentElement.dataset.fontSize = String(normalized);
+  fontSizeButtons.forEach((button) => {
+    const active = Number(button.dataset.fontSizeLevel) === normalized;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
 }
 
 function renderActiveStreamer(selected, snapshot) {

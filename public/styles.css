@@ -12,7 +12,12 @@
 }
 
 * { box-sizing: border-box; }
-html { color-scheme: light; }
+html { color-scheme: light; font-size: 16px; }
+html[data-font-size="1"] { font-size: 14px; }
+html[data-font-size="2"] { font-size: 16px; }
+html[data-font-size="3"] { font-size: 18px; }
+html[data-font-size="4"] { font-size: 21px; }
+html[data-font-size="5"] { font-size: 24px; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -226,6 +231,13 @@ body.settings-open .settings-panel { transform: translateX(0); }
   width: auto;
   min-width: auto;
 }
+.font-size-setting { margin-bottom: 17px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.font-size-setting h2 { margin-bottom: 5px; }
+.font-size-setting p { margin: 0 0 10px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.font-size-buttons { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.font-size-buttons button { display: grid; place-items: center; gap: 1px; min-width: 0; padding: 8px 3px; background: var(--soft); color: var(--ink); }
+.font-size-buttons button small { font-size: .62rem; font-weight: 800; }
+.font-size-buttons button.active { background: var(--ink); color: #fff; box-shadow: 0 0 0 3px rgba(0, 169, 154, .18); }
 .layout-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
 .layout-tools label { margin: 0; }
 

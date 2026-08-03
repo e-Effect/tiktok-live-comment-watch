@@ -69,6 +69,17 @@
 
         <div class="settings-page" data-settings-page="display" hidden>
           <section class="view-settings" aria-label="表示項目">
+            <div class="font-size-setting">
+              <h2>文字の大きさ</h2>
+              <p>遠くから見るときは3～5がおすすめです。現在の標準は2です。</p>
+              <div id="fontSizeButtons" class="font-size-buttons" role="group" aria-label="文字サイズ">
+                <button type="button" data-font-size-level="1">1<small>小</small></button>
+                <button type="button" data-font-size-level="2">2<small>標準</small></button>
+                <button type="button" data-font-size-level="3">3<small>大</small></button>
+                <button type="button" data-font-size-level="4">4<small>特大</small></button>
+                <button type="button" data-font-size-level="5">5<small>最大</small></button>
+              </div>
+            </div>
             <h2>表示項目</h2>
             <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
             <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
