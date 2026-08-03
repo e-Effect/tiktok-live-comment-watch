@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { EventStore } from "./lib/event-store.js";
 import {
   heartMeLevelFromEvent,
@@ -25,6 +25,7 @@ const sessions = new Map();
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
 let connectionPauseUntil = 0;
 const TIKTOOLS_SESSION_COOKIE = String(globalThis.process?.env?.TIKTOOLS_SESSION_COOKIE || "").trim();
+const LISTENER_ADMIN_KEY = String(globalThis.process?.env?.LISTENER_ADMIN_KEY || "").trim();
 const providerInfo = liveProviderInfo(globalThis.process?.env || {});
 const eventStore = new EventStore({
   connectionString: globalThis.process?.env?.DATABASE_URL || "",
@@ -209,6 +210,8 @@ class LiveSession extends EventEmitter {
         id: data.msgId || randomUUID(),
         userId: person.userId,
         nickname: person.nickname,
+        uniqueId: person.uniqueId,
+        avatarUrl: person.avatarUrl,
         text: data.comment || "",
         at,
         source: this.currentEventSource(),
@@ -1103,9 +1106,32 @@ function personFromEvent(data) {
   const userId = rawUser?.id || rawUser?.userId || rawUser?.uniqueId || data.uniqueId || nickname;
   return {
     userId: cleanUserId(userId),
+    uniqueId: cleanDisplayName(rawUser?.uniqueId || data.uniqueId || "").replace(/^unknown$/, ""),
     nickname: cleanDisplayName(nickname),
+    avatarUrl: avatarUrlFromUser(rawUser),
     signals: userSignalsFromRawUser(rawUser)
   };
+}
+
+function avatarUrlFromUser(rawUser) {
+  const candidates = [
+    rawUser?.avatarThumb,
+    rawUser?.avatarMedium,
+    rawUser?.avatarLarge,
+    rawUser?.avatar,
+    rawUser?.profilePictureUrl,
+    rawUser?.avatar_url,
+    rawUser?.avatarUrl
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) return candidate;
+    const list = candidate?.urlList || candidate?.url_list || candidate?.urls;
+    if (Array.isArray(list)) {
+      const url = list.find((item) => typeof item === "string" && /^https?:\/\//i.test(item));
+      if (url) return url;
+    }
+  }
+  return "";
 }
 
 function parseGiftEvent(data, knownHeartMeGiftIds = []) {
@@ -1123,7 +1149,9 @@ function parseGiftEvent(data, knownHeartMeGiftIds = []) {
   return {
     id: data.msgId || randomUUID(),
     userId: person.userId,
+    uniqueId: person.uniqueId,
     nickname: person.nickname,
+    avatarUrl: person.avatarUrl,
     giftId: String(data.giftId || extended.id || ""),
     giftName: data.giftName || extended.name || data.giftId || "ギフト",
     repeatCount: Number(data.repeatCount || data.repeat_count || 1),
@@ -1139,7 +1167,9 @@ function parseShareEvent(data) {
   return {
     id: data.msgId || randomUUID(),
     userId: person.userId,
+    uniqueId: person.uniqueId,
     nickname: person.nickname,
+    avatarUrl: person.avatarUrl,
     label: shareEventLabel(data),
     signals: person.signals,
     at: Date.now()
@@ -1291,6 +1321,28 @@ function sendJson(response, status, body) {
     "Cache-Control": "no-store"
   });
   response.end(JSON.stringify(body));
+}
+
+function isAuthorizedListenerRequest(request) {
+  if (!LISTENER_ADMIN_KEY) return false;
+  const authorization = String(request.headers.authorization || "");
+  const supplied = authorization.replace(/^Bearer\s+/i, "").trim();
+  if (!supplied) return false;
+  const expectedBuffer = Buffer.from(LISTENER_ADMIN_KEY);
+  const suppliedBuffer = Buffer.from(supplied);
+  return expectedBuffer.length === suppliedBuffer.length && timingSafeEqual(expectedBuffer, suppliedBuffer);
+}
+
+function requireListenerAdmin(request, response) {
+  if (!LISTENER_ADMIN_KEY) {
+    sendJson(response, 503, { error: "リスナー管理キーがまだ設定されていません" });
+    return false;
+  }
+  if (!isAuthorizedListenerRequest(request)) {
+    sendJson(response, 401, { error: "管理キーを確認してください" });
+    return false;
+  }
+  return true;
 }
 
 async function discoverCreatorCandidates(params) {
@@ -1552,9 +1604,101 @@ const server = createServer(async (request, response) => {
       uptimeSeconds: Math.floor(getUptimeSeconds()),
       provider: providerInfo,
       database: eventStore.status(),
+      listenerManagement: {
+        configured: Boolean(LISTENER_ADMIN_KEY),
+        ready: Boolean(LISTENER_ADMIN_KEY && eventStore.status().ready)
+      },
       liveCue: liveCue.status()
     });
     return;
+  }
+
+  if (url.pathname === "/api/listeners/auth") {
+    if (!requireListenerAdmin(request, response)) return;
+    sendJson(response, 200, { ok: true, database: eventStore.status() });
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/summary") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      sendJson(response, 200, await eventStore.listenerSummary({
+        username: normalizeTikTokUsername(url.searchParams.get("username") || "")
+      }));
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/events") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      sendJson(response, 200, {
+        items: await eventStore.recentListenerEvents({
+          username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
+          since: Number(url.searchParams.get("since") || 0),
+          limit: Number(url.searchParams.get("limit") || 100)
+        })
+      });
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/import" && request.method === "POST") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const body = await readBody(request);
+      sendJson(response, 200, await eventStore.importListeners(body.items, {
+        username: normalizeTikTokUsername(body.username || ""),
+        source: String(body.source || "import")
+      }));
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners" && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      sendJson(response, 200, await eventStore.listeners({
+        username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
+        search: url.searchParams.get("search") || "",
+        sort: url.searchParams.get("sort") || "last_seen",
+        direction: url.searchParams.get("direction") || "desc",
+        limit: Number(url.searchParams.get("limit") || 100),
+        offset: Number(url.searchParams.get("offset") || 0)
+      }));
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
+  const listenerMatch = url.pathname.match(/^\/api\/listeners\/([^/]+)$/);
+  if (listenerMatch) {
+    if (!requireListenerAdmin(request, response)) return;
+    const userId = decodeURIComponent(listenerMatch[1]);
+    try {
+      if (request.method === "GET") {
+        const detail = await eventStore.listenerDetail(userId, {
+          username: normalizeTikTokUsername(url.searchParams.get("username") || "")
+        });
+        sendJson(response, detail ? 200 : 404, detail || { error: "リスナーが見つかりません" });
+        return;
+      }
+      if (request.method === "PATCH") {
+        const updated = await eventStore.updateListener(userId, await readBody(request));
+        sendJson(response, updated ? 200 : 404, updated || { error: "リスナーが見つかりません" });
+        return;
+      }
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+      return;
+    }
   }
 
   if (request.method === "GET" && url.pathname === "/api/candidates/discover") {
@@ -1726,3 +1870,5 @@ async function restorePersistentSessions() {
     session.start();
   }
 }
+
+export { server };

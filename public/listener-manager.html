@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>リアルタイム・リスナー台帳</title>
+    <link rel="stylesheet" href="/listener-manager.css">
+  </head>
+  <body>
+    <section id="loginPanel" class="login-panel">
+      <div class="login-card">
+        <span class="eyebrow">TikTok LIVE</span>
+        <h1>リアルタイム・リスナー台帳</h1>
+        <p>管理キーを入力すると、配信への来訪・コメント・ギフト履歴を確認できます。</p>
+        <form id="loginForm">
+          <label>管理キー<input id="adminKey" type="password" autocomplete="current-password" required></label>
+          <button type="submit">台帳を開く</button>
+        </form>
+        <p id="loginError" class="error" role="alert"></p>
+      </div>
+    </section>
+
+    <div id="app" class="app" hidden>
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">TikTok LIVE</span>
+          <h1>リアルタイム・リスナー台帳</h1>
+        </div>
+        <div class="top-actions">
+          <span id="connectionStatus" class="status">接続中</span>
+          <a href="/">LIVE取得画面</a>
+          <button id="exportCsv" type="button">CSV</button>
+          <button id="logout" type="button" class="quiet">ログアウト</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="controls card">
+          <label>配信者ID<input id="streamUsername" placeholder="空欄なら全配信"></label>
+          <label class="search">リスナー検索<input id="search" placeholder="名前・@ID・ユーザーID・メモ"></label>
+          <label>並び順
+            <select id="sort">
+              <option value="last_seen">最終来訪が新しい順</option>
+              <option value="visits">来訪回数が多い順</option>
+              <option value="comments">コメント数が多い順</option>
+              <option value="coins">ギフトコインが多い順</option>
+              <option value="gifts">ギフト個数が多い順</option>
+              <option value="shares">シェア回数が多い順</option>
+              <option value="first_seen">初回来訪が古い順</option>
+              <option value="name">名前順</option>
+            </select>
+          </label>
+          <button id="refresh" type="button">更新</button>
+        </section>
+
+        <section id="summary" class="summary-grid" aria-label="全体集計"></section>
+
+        <section class="content-grid">
+          <article class="card listener-card">
+            <div class="section-head">
+              <div><h2>リスナー一覧</h2><p id="resultCount">0人</p></div>
+              <span>行を選ぶと詳細を表示</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>リスナー</th><th>来訪</th><th>コメント</th><th>ギフト</th><th>コイン</th><th>最終来訪</th></tr></thead>
+                <tbody id="listenerRows"></tbody>
+              </table>
+            </div>
+            <p id="emptyState" class="empty" hidden>条件に一致するリスナーはいません。</p>
+          </article>
+
+          <article class="card live-card">
+            <div class="section-head"><div><h2>リアルタイム受信</h2><p>10秒ごとに自動更新</p></div><span class="live-dot">LIVE</span></div>
+            <div id="liveEvents" class="event-list"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <div id="detailBackdrop" class="backdrop" hidden></div>
+    <aside id="detailPanel" class="detail-panel" aria-hidden="true">
+      <button id="detailClose" class="detail-close" type="button" aria-label="閉じる">×</button>
+      <div id="detailContent"></div>
+    </aside>
+    <script src="/listener-manager.js" type="module"></script>
+  </body>
+</html>
