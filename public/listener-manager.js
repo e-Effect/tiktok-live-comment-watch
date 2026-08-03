@@ -91,6 +91,8 @@ async function refreshListeners() {
     el.emptyState.hidden = state.items.length > 0;
     el.listenerRows.innerHTML = state.items.map(rowHtml).join("");
     el.listenerRows.querySelectorAll("tr[data-user-id]").forEach((row) => row.addEventListener("click", () => openDetail(row.dataset.userId)));
+    el.listenerRows.querySelectorAll(".fan-cell").forEach((cell) => cell.addEventListener("click", (event) => event.stopPropagation()));
+    el.listenerRows.querySelectorAll(".fan-toggle").forEach((input) => input.addEventListener("change", () => setInlineSuperFan(input)));
   } catch (error) { showConnectionError(error); }
 }
 
@@ -105,9 +107,39 @@ async function refreshRealtime() {
 }
 
 function rowHtml(item) {
-  const name = escapeHtml(item.nickname || item.uniqueId || item.userId);
+  const rawName = item.nickname || item.uniqueId || item.userId;
+  const name = escapeHtml(rawName);
   const sub = item.uniqueId ? `@${escapeHtml(item.uniqueId)}` : escapeHtml(item.userId);
-  return `<tr class="listener-row" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}</strong><small>${sub}</small></div></div></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+  return `<tr class="listener-row" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}</strong><small>${sub}</small></div></div></td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+}
+
+async function setInlineSuperFan(input) {
+  const row = input.closest("tr[data-user-id]");
+  const userId = row?.dataset.userId || "";
+  const item = state.items.find((candidate) => candidate.userId === userId);
+  if (!row || !item) return;
+  const previous = Boolean(item.isSuperFan);
+  input.disabled = true;
+  try {
+    const response = await api(`/api/listeners/${encodeURIComponent(userId)}`, {
+      method:"PATCH",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({isSuperFan:Boolean(input.checked)})
+    });
+    if (!response.ok) throw new Error("スーパーファン設定を保存できませんでした");
+    const updated = await response.json();
+    item.isSuperFan = Boolean(updated.isSuperFan);
+    input.checked = item.isSuperFan;
+    const name = row.querySelector(".person strong");
+    name?.querySelector(".fan")?.remove();
+    if (item.isSuperFan && name) name.insertAdjacentHTML("beforeend", '<span class="fan">スパファン</span>');
+    await refreshSummary();
+  } catch (error) {
+    input.checked = previous;
+    showConnectionError(error);
+  } finally {
+    input.disabled = false;
+  }
 }
 
 function eventHtml(item) {
