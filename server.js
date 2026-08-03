@@ -1886,14 +1886,16 @@ async function backfillListenerAvatars({ limit = 10, offset = 0 } = {}) {
   if (!apiKey) throw new Error("Tik.tools APIキーが設定されていません");
   const candidates = await eventStore.listenersMissingAvatars({ limit, offset });
   if (!candidates.length) return { requested: 0, updated: 0, failed: 0, items: [] };
+  const profiles = await fetchTikToolsProfilesByUserIds(candidates.map((candidate) => candidate.userId), apiKey);
   const items = [];
   for (const candidate of candidates) {
     try {
-      const profile = await fetchTikToolsProfile(candidate.uniqueId, apiKey);
+      const profile = profiles.get(String(candidate.userId));
+      if (!profile) throw new Error("Tik.toolsからユーザー情報が返りませんでした");
       const avatarUrl = avatarUrlFromUser(profile);
       if (!avatarUrl) throw new Error("プロフィール画像が見つかりません");
       const updated = await eventStore.updateListenerAvatar(candidate.userId, {
-        uniqueId: profile.uniqueId || candidate.uniqueId,
+        uniqueId: profile.uniqueId || profile.username || candidate.uniqueId,
         nickname: profile.nickname || candidate.nickname,
         avatarUrl
       });
@@ -1910,22 +1912,41 @@ async function backfillListenerAvatars({ limit = 10, offset = 0 } = {}) {
   };
 }
 
-async function fetchTikToolsProfile(uniqueId, apiKey) {
-  const url = new URL("https://api.tik.tools/webcast/user_profile");
-  url.searchParams.set("unique_id", String(uniqueId).replace(/^@/, ""));
+async function fetchTikToolsProfilesByUserIds(userIds, apiKey) {
+  const url = new URL("https://api.tik.tools/webcast/resolve_user_ids");
   url.searchParams.set("apiKey", apiKey);
-  const response = await fetch(url, { headers: { "x-api-key": apiKey, accept: "application/json" } });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      accept: "application/json",
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ user_ids: userIds.map(String) })
+  });
   const text = await response.text();
   let payload;
   try {
     payload = JSON.parse(text);
   } catch {
-    throw new Error(`Tik.toolsプロフィールAPIが利用できません（HTTP ${response.status}）`);
+    throw new Error(`Tik.toolsユーザー変換APIが利用できません（HTTP ${response.status}）`);
   }
-  if (!response.ok || payload.status_code !== 0 || !payload.data?.profile) {
-    throw new Error(payload.error || payload.message || `Tik.toolsプロフィール取得失敗（HTTP ${response.status}）`);
+  if (!response.ok || (payload.status_code != null && payload.status_code !== 0)) {
+    throw new Error(payload.error || payload.message || `Tik.toolsユーザー変換失敗（HTTP ${response.status}）`);
   }
-  return payload.data.profile;
+  const data = payload.data?.users || payload.data || payload.users || {};
+  const profiles = new Map();
+  if (Array.isArray(data)) {
+    for (const profile of data) {
+      const userId = String(profile?.userId || profile?.user_id || profile?.id || "");
+      if (userId) profiles.set(userId, profile);
+    }
+  } else {
+    for (const [userId, profile] of Object.entries(data)) {
+      if (profile && typeof profile === "object") profiles.set(String(userId), profile);
+    }
+  }
+  return profiles;
 }
 
 export { server };
