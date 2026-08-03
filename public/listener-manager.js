@@ -1,5 +1,5 @@
 const storageKey = "tiktok-listener-admin-key";
-const state = { key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null, selectedUserId: "" };
+const state = { key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null, selectedUserId: "", avatarObjectUrls: new Map() };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
 const dateTime = new Intl.DateTimeFormat("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
@@ -115,6 +115,7 @@ async function refreshListeners() {
     el.resultCount.textContent = `${number.format(data.total || 0)}人`;
     el.emptyState.hidden = state.items.length > 0;
     el.listenerRows.innerHTML = state.items.map(rowHtml).join("");
+    hydrateAvatars(el.listenerRows);
     el.listenerRows.querySelectorAll("tr[data-user-id]").forEach((row) => row.addEventListener("click", () => openDetail(row.dataset.userId)));
     el.listenerRows.querySelectorAll(".fan-cell").forEach((cell) => cell.addEventListener("click", (event) => event.stopPropagation()));
     el.listenerRows.querySelectorAll(".fan-toggle").forEach((input) => input.addEventListener("change", () => setInlineSuperFan(input)));
@@ -194,6 +195,7 @@ function renderDetail(data) {
     <section class="detail-section"><h3>ギフト内訳</h3><div class="gift-grid">${(data.gifts||[]).map(g=>`<div class="gift-item"><strong>${escapeHtml(g.giftName||g.giftId||"ギフト")}</strong><small>${number.format(g.count||0)}個・${number.format(g.coins||0)}コイン</small></div>`).join("")||'<p class="empty">ギフト履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>最近のコメント</h3><div>${(data.comments||[]).map(c=>`<div class="history-item"><time>${formatDate(c.at)}</time><p>${escapeHtml(c.text||"")}</p></div>`).join("")||'<p class="empty">コメント履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>過去に確認した名前</h3><div>${(data.aliases||[]).map(a=>`<div class="history-item"><strong>${escapeHtml(a.nickname||"")}</strong> <small>${a.uniqueId?`@${escapeHtml(a.uniqueId)}`:""}</small><p>${formatDate(a.firstSeenAt)} ～ ${formatDate(a.lastSeenAt)}</p></div>`).join("")||'<p class="empty">別名履歴なし</p>'}</div></section>`;
+  hydrateAvatars(el.detailContent);
   document.getElementById("detailForm")?.addEventListener("submit", saveDetail);
 }
 
@@ -211,7 +213,24 @@ async function saveDetail(event) {
 
 function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId=""}
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
-function avatar(item){const first=Array.from(item.nickname||item.uniqueId||"?")[0]||"?";return item.avatarUrl?`<img class="avatar" src="${escapeAttr(item.avatarUrl)}" alt="" referrerpolicy="no-referrer">`:`<span class="avatar avatar-fallback">${escapeHtml(first)}</span>`}
+function avatar(item){
+  const first=Array.from(item.nickname||item.uniqueId||"?")[0]||"?";
+  const cached=item.avatarCached?` data-avatar-user="${escapeAttr(item.userId)}"`:"";
+  const image=!item.avatarCached&&item.avatarUrl?`<img class="avatar-image" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" src="${escapeAttr(item.avatarUrl)}" alt="" referrerpolicy="no-referrer">`:"";
+  return `<span class="avatar avatar-fallback avatar-shell" style="position:relative;overflow:hidden;flex:0 0 auto"${cached}>${escapeHtml(first)}${image}</span>`;
+}
+async function hydrateAvatars(root){
+  root.querySelectorAll(".avatar-image").forEach((img)=>img.addEventListener("error",()=>img.remove(),{once:true}));
+  for(const shell of root.querySelectorAll("[data-avatar-user]")){
+    const userId=shell.dataset.avatarUser;
+    try{
+      let objectUrl=state.avatarObjectUrls.get(userId);
+      if(!objectUrl){const response=await api(`/api/listeners/${encodeURIComponent(userId)}/avatar`);if(!response.ok)continue;objectUrl=URL.createObjectURL(await response.blob());state.avatarObjectUrls.set(userId,objectUrl)}
+      shell.querySelector("img")?.remove();
+      const img=document.createElement("img");img.className="avatar-image";img.style.cssText="position:absolute;inset:0;width:100%;height:100%;object-fit:cover";img.alt="";img.src=objectUrl;img.addEventListener("error",()=>img.remove(),{once:true});shell.appendChild(img);
+    }catch{}
+  }
+}
 function cleanUsername(){return el.streamUsername.value.trim().replace(/^@/,"")}
 function params(extra={}){const q=new URLSearchParams(extra);const u=cleanUsername();if(u)q.set("username",u);const s=q.toString();return s?`?${s}`:""}
 function api(path,options={}){return fetch(path,{...options,cache:"no-store",headers:{Authorization:`Bearer ${state.key}`,...(options.headers||{})}})}

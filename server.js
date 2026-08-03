@@ -32,6 +32,7 @@ const eventStore = new EventStore({
   connectionString: globalThis.process?.env?.DATABASE_URL || "",
   ssl: String(globalThis.process?.env?.DATABASE_SSL || "").toLowerCase() === "false" ? false : undefined
 });
+const avatarCachePending = new Set();
 const liveCue = new LiveCueForwarder({
   endpoint: globalThis.process?.env?.LIVECUE_ENDPOINT || "",
   channelId: globalThis.process?.env?.LIVECUE_CHANNEL_ID || "",
@@ -548,7 +549,9 @@ class LiveSession extends EventEmitter {
   }
 
   emitNormalized(event) {
-    eventStore.recordEvent(this, event).catch(() => {});
+    eventStore.recordEvent(this, event)
+      .then(() => cacheListenerAvatar(event.userId, event.avatarUrl))
+      .catch(() => {});
     liveCue.publish(event);
   }
 
@@ -1699,6 +1702,27 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  const listenerAvatarMatch = url.pathname.match(/^\/api\/listeners\/([^/]+)\/avatar$/);
+  if (listenerAvatarMatch && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const avatar = await eventStore.listenerAvatarData(decodeURIComponent(listenerAvatarMatch[1]));
+      if (!avatar?.data) {
+        sendJson(response, 404, { error: "保存済みアイコンがありません" });
+        return;
+      }
+      response.writeHead(200, {
+        "Content-Type": avatar.mime || "image/jpeg",
+        "Content-Length": avatar.data.length,
+        "Cache-Control": "private, max-age=86400"
+      });
+      response.end(avatar.data);
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
   const listenerMatch = url.pathname.match(/^\/api\/listeners\/([^/]+)$/);
   if (listenerMatch) {
     if (!requireListenerAdmin(request, response)) return;
@@ -1947,6 +1971,30 @@ async function importResolvedListenerAvatars(rawItems) {
     failed: items.filter((item) => !item.ok).length,
     items
   };
+}
+
+async function cacheListenerAvatar(userId, avatarUrl) {
+  const id = String(userId || "").trim();
+  const url = String(avatarUrl || "").trim();
+  if (!id || !/^https:\/\//i.test(url) || avatarCachePending.has(id)) return false;
+  avatarCachePending.add(id);
+  try {
+    if (await eventStore.listenerHasCachedAvatar(id)) return true;
+    const response = await fetch(url, {
+      headers: { "user-agent": "Mozilla/5.0", accept: "image/avif,image/webp,image/*,*/*;q=0.8" },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) return false;
+    const mime = String(response.headers.get("content-type") || "image/jpeg").split(";")[0];
+    if (!mime.startsWith("image/")) return false;
+    const data = Buffer.from(await response.arrayBuffer());
+    if (!data.length || data.length > 1024 * 1024) return false;
+    return await eventStore.storeListenerAvatarData(id, { data, mime });
+  } catch {
+    return false;
+  } finally {
+    avatarCachePending.delete(id);
+  }
 }
 
 async function fetchTikToolsProfilesByUserIds(userIds, apiKey) {
