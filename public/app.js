@@ -24,6 +24,7 @@ const giftHistory = document.querySelector("#giftHistory");
 const shareHistory = document.querySelector("#shareHistory");
 const visitorHistory = document.querySelector("#visitorHistory");
 const visitorDemoBtn = document.querySelector("#visitorDemoBtn");
+const visitorDemoShortcutBtn = document.querySelector("#visitorDemoShortcutBtn");
 const targetGiftSelect = document.querySelector("#targetGiftSelect");
 const giftRankingRange = document.querySelector("#giftRankingRange");
 const giftRankingRefresh = document.querySelector("#giftRankingRefresh");
@@ -170,6 +171,7 @@ targetGiftSelect?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRange?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRefresh?.addEventListener("click", () => refreshTargetGiftRanking());
 visitorDemoBtn?.addEventListener("click", toggleVisitorDemo);
+visitorDemoShortcutBtn?.addEventListener("click", showVisitorDemo);
 
 async function startSession(options = {}) {
   setBusy(true);
@@ -1710,7 +1712,11 @@ function renderVisitorHistory(visitors) {
 }
 
 function toggleVisitorDemo() {
-  visitorDemoActive = !visitorDemoActive;
+  setVisitorDemoActive(!visitorDemoActive);
+}
+
+function setVisitorDemoActive(active) {
+  visitorDemoActive = Boolean(active);
   if (visitorDemoBtn) {
     visitorDemoBtn.textContent = visitorDemoActive ? "デモ表示を終了" : "初見・再訪をデモ表示";
     visitorDemoBtn.setAttribute("aria-pressed", String(visitorDemoActive));
@@ -1718,6 +1724,19 @@ function toggleVisitorDemo() {
   }
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   renderVisitorHistory(selected?.snapshot?.visitors || []);
+}
+
+function showVisitorDemo() {
+  const visibilityToggle = panelToggles.find((toggle) => toggle.dataset.panelToggle === "visitors");
+  if (visibilityToggle && !visibilityToggle.checked) {
+    const prefs = readPanelPrefs();
+    prefs.visitors = true;
+    localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(prefs));
+    applyPanelPrefs();
+  }
+  setVisitorDemoActive(true);
+  const visitorPanel = document.querySelector('[data-panel="visitors"]');
+  requestAnimationFrame(() => visitorPanel?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
 function visitorDemoUsers() {

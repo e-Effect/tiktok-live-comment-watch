@@ -98,6 +98,7 @@ input, select, textarea {
 .top-actions button, .top-actions a { background: var(--soft); color: var(--ink); }
 .top-actions a { display: grid; place-items: center; }
 #settingsOpenBtn { background: var(--accent); color: var(--accent-ink); }
+#visitorDemoShortcutBtn { background: #fff1b8; color: #795800; }
 
 .app {
   width: min(1560px, calc(100% - 28px));
