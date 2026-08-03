@@ -1918,7 +1918,6 @@ async function fetchTikToolsProfilesByUserIds(userIds, apiKey) {
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "x-api-key": apiKey,
       accept: "application/json",
       "content-type": "application/json"
     },
@@ -1932,7 +1931,7 @@ async function fetchTikToolsProfilesByUserIds(userIds, apiKey) {
     throw new Error(`Tik.toolsユーザー変換APIが利用できません（HTTP ${response.status}）`);
   }
   if (!response.ok || (payload.status_code != null && payload.status_code !== 0)) {
-    throw new Error(payload.error || payload.message || `Tik.toolsユーザー変換失敗（HTTP ${response.status}）`);
+    throw new Error(payload.error || payload.message || payload.status_msg || payload.detail || `Tik.toolsユーザー変換失敗（HTTP ${response.status}）`);
   }
   const data = payload.data?.users || payload.data || payload.users || {};
   const profiles = new Map();
