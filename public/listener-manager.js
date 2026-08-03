@@ -12,6 +12,7 @@ el.loginForm.addEventListener("submit", async (event) => {
   await authenticate();
 });
 el.logout.addEventListener("click", logout);
+el.backfillAvatars.addEventListener("click", backfillAvatars);
 el.refresh.addEventListener("click", refreshAll);
 el.exportCsv.addEventListener("click", exportCsv);
 el.search.addEventListener("input", debounce(refreshListeners, 300));
@@ -62,6 +63,30 @@ function logout() {
 
 async function refreshAll() {
   await Promise.all([refreshSummary(), refreshListeners(), refreshRealtime()]);
+}
+
+async function backfillAvatars() {
+  const button = el.backfillAvatars;
+  button.disabled = true;
+  el.connectionStatus.textContent = "アイコンを取得中…";
+  el.connectionStatus.classList.remove("error");
+  try {
+    const response = await api("/api/listeners/avatars/backfill", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({limit:10})
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "アイコンを取得できませんでした");
+    el.connectionStatus.textContent = result.requested
+      ? `アイコン ${result.updated}人取得・${result.failed}人失敗`
+      : "未取得アイコンはありません";
+    await refreshAll();
+  } catch (error) {
+    showConnectionError(error);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function refreshSummary() {

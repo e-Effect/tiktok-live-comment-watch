@@ -1633,6 +1633,20 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/listeners/avatars/backfill" && request.method === "POST") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const body = await readBody(request);
+      sendJson(response, 200, await backfillListenerAvatars({
+        limit: Number(body.limit || 10),
+        offset: Number(body.offset || 0)
+      }));
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
   if (url.pathname === "/api/listeners/import" && request.method === "POST") {
     if (!requireListenerAdmin(request, response)) return;
     try {
@@ -1865,6 +1879,36 @@ async function restorePersistentSessions() {
     sessions.set(session.id, session);
     session.start();
   }
+}
+
+async function backfillListenerAvatars({ limit = 10, offset = 0 } = {}) {
+  const apiKey = String(globalThis.process?.env?.TIKTOOLS_API_KEY || "").trim();
+  if (!apiKey) throw new Error("Tik.tools APIキーが設定されていません");
+  const candidates = await eventStore.listenersMissingAvatars({ limit, offset });
+  if (!candidates.length) return { requested: 0, updated: 0, failed: 0, items: [] };
+  const { TikTokLive } = await import("@tiktool/live");
+  const items = [];
+  for (const candidate of candidates) {
+    try {
+      const profile = await TikTokLive.getUserProfile({ uniqueId: candidate.uniqueId, apiKey });
+      const avatarUrl = avatarUrlFromUser(profile);
+      if (!avatarUrl) throw new Error("プロフィール画像が見つかりません");
+      const updated = await eventStore.updateListenerAvatar(candidate.userId, {
+        uniqueId: profile.uniqueId || candidate.uniqueId,
+        nickname: profile.nickname || candidate.nickname,
+        avatarUrl
+      });
+      items.push({ userId: candidate.userId, uniqueId: candidate.uniqueId, ok: Boolean(updated) });
+    } catch (error) {
+      items.push({ userId: candidate.userId, uniqueId: candidate.uniqueId, ok: false, error: shortError(error) });
+    }
+  }
+  return {
+    requested: candidates.length,
+    updated: items.filter((item) => item.ok).length,
+    failed: items.filter((item) => !item.ok).length,
+    items
+  };
 }
 
 export { server };

@@ -108,3 +108,23 @@ test("does not import Count Pocket users as super fans", async () => {
 
   assert.deepEqual(result, { imported: 1, importedStamps: 0 });
 });
+
+test("stores a profile icon resolved for an existing listener", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /avatar_url = \$4/);
+      assert.deepEqual(values, ["listener-id", "listener", "Listener", "https://cdn.example/avatar.jpg"]);
+      return { rows: [{ user_id: "listener-id", avatar_url: values[3] }] };
+    }
+  };
+
+  const updated = await store.updateListenerAvatar("listener-id", {
+    uniqueId: "listener",
+    nickname: "Listener",
+    avatarUrl: "https://cdn.example/avatar.jpg"
+  });
+
+  assert.equal(updated.avatarUrl, "https://cdn.example/avatar.jpg");
+});
