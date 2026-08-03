@@ -165,3 +165,24 @@ test("stores avatar image bytes without replacing an existing cache", async () =
     mime: "image/webp"
   }), true);
 });
+
+test("preserves cached avatar bytes when a placeholder listener is merged", async () => {
+  const store = new EventStore();
+  const queries = [];
+  store.ready = true;
+  store.pool = {
+    async connect() {
+      return {
+        async query(sql) {
+          queries.push(sql);
+          return { rows: [] };
+        },
+        release() {}
+      };
+    }
+  };
+
+  assert.equal(await store.mergeListenerRecords("username:viewer", "123456"), true);
+  assert.match(queries[1], /avatar_data, avatar_mime/);
+  assert.match(queries[1], /avatar_data = COALESCE\(listeners\.avatar_data, EXCLUDED\.avatar_data\)/);
+});
