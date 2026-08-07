@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { isSilentWatcher, silentWatcherPresenceMode } from "./lib/silent-watchers.js";
@@ -126,7 +127,7 @@ class LiveSession extends EventEmitter {
       this.provider = connector.id;
       this.mode = "live";
       this.status = "connecting";
-      this.broadcast("status", this.snapshot(`${connector.label}でTikTok LIVEへ接続中です。`));
+      this.broadcastSummary(`${connector.label}でTikTok LIVEへ接続中です。`);
       const state = await this.connectLiveWithRetries(connector);
       this.roomId = String(state?.roomId || this.connection?.roomId || this.roomId || "");
       this.displayName = displayNameFromRoomInfo(state?.roomInfo || this.connection?.roomInfo, this.username);
@@ -134,7 +135,7 @@ class LiveSession extends EventEmitter {
       this.connectedAt = Date.now();
       this.lastEventAt = this.connectedAt;
       this.persistSession();
-      this.broadcast("status", this.snapshot(`LIVE接続を開始しました。RoomId: ${this.roomId || "取得済み"}`));
+      this.broadcastSummary(`LIVE接続を開始しました。RoomId: ${this.roomId || "取得済み"}`);
     } catch (error) {
       this.fail(`実接続失敗: ${diagnoseConnectError(error)}`, isRateLimitError(error) ? "rate_limited" : "");
     }
@@ -168,7 +169,7 @@ class LiveSession extends EventEmitter {
       this.connection = connection;
       this.isConnectingWithInitialData = Boolean(attempts[index].processInitialData);
       this.initialDataUntil = this.isConnectingWithInitialData ? Date.now() + 15000 : 0;
-      this.broadcast("status", this.snapshot(`TikTok LIVEへ接続中です。試行 ${index + 1}/${attempts.length}`));
+      this.broadcastSummary(`TikTok LIVEへ接続中です。試行 ${index + 1}/${attempts.length}`);
 
       try {
         const state = await connection.connect();
@@ -342,12 +343,15 @@ class LiveSession extends EventEmitter {
         this.viewerStats.peak = Math.max(this.viewerStats.peak, current);
         shouldBroadcast = true;
       }
-      const rankedCount = this.updateCurrentViewerRank(data, now);
-      if (rankedCount !== null) {
+      const rankedUpdate = this.updateCurrentViewerRank(data, now);
+      if (rankedUpdate !== null) {
         shouldBroadcast = true;
       }
       if (shouldBroadcast) {
-        this.broadcast("status", this.snapshot());
+        this.broadcastPresence(rankedUpdate?.users || [], {
+          replaceCurrentRanking: Boolean(rankedUpdate),
+          removedCurrentViewerIds: rankedUpdate?.removedUserIds || []
+        });
       }
     });
 
@@ -363,7 +367,7 @@ class LiveSession extends EventEmitter {
         const message = this.provider === "tiktools"
           ? "接続が切れました。サーバー側で自動再接続しています。"
           : "接続が切れました。";
-        this.broadcast("status", this.snapshot(message));
+        this.broadcastSummary(message);
       }
     });
 
@@ -372,11 +376,11 @@ class LiveSession extends EventEmitter {
       this.status = "live";
       this.connectedAt ||= Date.now();
       this.persistSession();
-      this.broadcast("status", this.snapshot("TikTok LIVEへ接続しています。"));
+      this.broadcastSummary("TikTok LIVEへ接続しています。");
     });
 
     connection.on(events.ERROR || "error", (error) => {
-      this.broadcast("status", this.snapshot(`接続エラー: ${diagnoseConnectError(error)}`));
+      this.broadcastSummary(`接続エラー: ${diagnoseConnectError(error)}`);
     });
   }
 
@@ -426,7 +430,7 @@ class LiveSession extends EventEmitter {
       at,
       source: this.currentEventSource()
     });
-    this.broadcast("status", this.snapshot());
+    this.broadcastPresence([user]);
   }
 
   recordVisit(user, at, source) {
@@ -446,7 +450,7 @@ class LiveSession extends EventEmitter {
       current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || at;
       current.previousVisitAt = summary.previousVisitAt || current.previousVisitAt || null;
       this.userStats.set(current.userId, current);
-      this.broadcast("status", this.snapshot());
+      this.broadcastPresence([current]);
     }).catch(() => {});
   }
 
@@ -460,7 +464,7 @@ class LiveSession extends EventEmitter {
     user.followStatusSource = "follow_event";
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
-    this.broadcast("status", this.snapshot());
+    this.broadcastPresence([user]);
   }
 
   addComment(comment) {
@@ -475,7 +479,11 @@ class LiveSession extends EventEmitter {
     current.lastSeenAt = comment.at;
     this.userStats.set(current.userId, current);
     this.emitNormalized({ ...comment, type: "comment" });
-    this.broadcast("comment", { comment, snapshot: this.snapshot() });
+    this.broadcast("comment", {
+      comment: this.decorateUserEvent(comment),
+      summary: this.summary(),
+      users: [this.realtimeUser(current)]
+    });
   }
 
   addGift(gift) {
@@ -533,7 +541,12 @@ class LiveSession extends EventEmitter {
     this.giftStats.set(giftKey, stat);
 
     this.emitNormalized({ ...normalizedGift, type: "gift" });
-    this.broadcast("gift", { gift: normalizedGift, snapshot: this.snapshot() });
+    this.broadcast("gift", {
+      gift: this.decorateUserEvent(normalizedGift),
+      summary: this.summary(),
+      users: [this.realtimeUser(user)],
+      topGifts: this.currentTopGifts()
+    });
   }
 
   addShare(share) {
@@ -547,7 +560,11 @@ class LiveSession extends EventEmitter {
     user.lastSeenAt = share.at;
     this.userStats.set(user.userId, user);
     this.emitNormalized({ ...share, type: "share" });
-    this.broadcast("share", { share, snapshot: this.snapshot() });
+    this.broadcast("share", {
+      share: this.decorateUserEvent(share),
+      summary: this.summary(),
+      users: [this.realtimeUser(user)]
+    });
   }
 
   emitNormalized(event) {
@@ -618,6 +635,10 @@ class LiveSession extends EventEmitter {
     const { hasPayload, entries } = rankedViewerEntries(data);
     if (!hasPayload) return null;
 
+    const previousRanks = new Map(
+      [...this.currentViewerIds].map((userId) => [userId, this.userStats.get(userId)?.currentViewerRank ?? null])
+    );
+
     for (const user of this.userStats.values()) {
       user.isCurrentlyRanked = false;
       user.currentViewerRank = null;
@@ -640,7 +661,60 @@ class LiveSession extends EventEmitter {
     this.currentViewerRankUpdatedAt = at;
     this.viewerStats.currentRanked = this.currentViewerIds.size;
     this.viewerStats.rankUpdatedAt = at;
-    return this.currentViewerIds.size;
+    const users = [...this.currentViewerIds]
+      .map((userId) => this.userStats.get(userId))
+      .filter((user) => user && previousRanks.get(user.userId) !== user.currentViewerRank);
+    const removedUserIds = [...previousRanks.keys()].filter((userId) => !this.currentViewerIds.has(userId));
+    return { count: this.currentViewerIds.size, users, removedUserIds };
+  }
+
+  summary(message = "") {
+    this.touch();
+    if (message) this.notice = message;
+    this.updateEstimatedWatch();
+    const users = [...this.userStats.values()];
+    return {
+      id: this.id,
+      username: this.username,
+      displayName: this.displayName,
+      roomId: this.roomId,
+      provider: this.provider,
+      mode: this.mode,
+      status: this.status,
+      errorCode: this.errorCode,
+      message: message || this.notice,
+      startedAt: this.startedAt,
+      connectedAt: this.connectedAt,
+      lastEventAt: this.lastEventAt,
+      stoppedAt: this.stoppedAt,
+      elapsedSeconds: Math.floor(((this.stoppedAt || Date.now()) - this.startedAt) / 1000),
+      commentCount: this.commentCount,
+      initialCommentCount: this.initialCommentCount,
+      giftCount: this.giftCount,
+      initialGiftCount: this.initialGiftCount,
+      initialEventCount: this.initialCommentCount + this.initialGiftCount,
+      giftDiamondTotal: this.giftDiamondTotal,
+      shareCount: this.shareCount,
+      followedTodayCount: users.filter((user) => user.followedToday).length,
+      heartMeStats: summarizeHeartMe(users),
+      followStats: summarizeFollowStatus(users),
+      viewerStats: { ...this.viewerStats }
+    };
+  }
+
+  realtimeUser(user) {
+    const silent = isSilentWatcher(user);
+    return {
+      ...user,
+      isSilentWatcher: silent,
+      presenceMode: silent ? silentWatcherPresenceMode(user) : ""
+    };
+  }
+
+  currentTopGifts() {
+    return [...this.giftStats.values()]
+      .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
+      .slice(0, 30);
   }
 
   snapshot(message = "") {
@@ -672,9 +746,7 @@ class LiveSession extends EventEmitter {
       .filter((user) => user.hasJoined)
       .sort((a, b) => b.firstJoinAt - a.firstJoinAt || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 200);
-    const topGifts = [...this.giftStats.values()]
-      .sort((a, b) => b.diamonds - a.diamonds || b.count - a.count || b.lastGiftAt - a.lastGiftAt)
-      .slice(0, 30);
+    const topGifts = this.currentTopGifts();
     const followedTodayCount = users.filter((user) => user.followedToday).length;
     const heartMeStats = summarizeHeartMe(users);
     const followStats = summarizeFollowStatus(users);
@@ -777,6 +849,19 @@ class LiveSession extends EventEmitter {
     this.emit("event", { type, payload });
   }
 
+  broadcastSummary(message = "") {
+    this.broadcast("status", { summary: this.summary(message) });
+  }
+
+  broadcastPresence(users = [], options = {}) {
+    this.broadcast("presence", {
+      summary: this.summary(),
+      users: users.filter(Boolean).map((user) => this.realtimeUser(user)),
+      replaceCurrentRanking: Boolean(options.replaceCurrentRanking),
+      removedCurrentViewerIds: options.removedCurrentViewerIds || []
+    });
+  }
+
   currentEventSource() {
     return this.isConnectingWithInitialData || Date.now() < this.initialDataUntil ? "initial" : "live";
   }
@@ -794,7 +879,7 @@ class LiveSession extends EventEmitter {
     }
     this.stoppedAt = Date.now();
     this.persistSession({ autoResume: false });
-    this.broadcast("status", this.snapshot(message));
+    this.broadcastSummary(message);
   }
 
   stop(message = "停止しました。") {
@@ -805,7 +890,7 @@ class LiveSession extends EventEmitter {
       Promise.resolve(this.connection.disconnect()).catch(() => {});
     }
     this.persistSession({ autoResume: false });
-    this.broadcast("status", this.snapshot(message));
+    this.broadcastSummary(message);
   }
 
   toCsv() {
@@ -1310,11 +1395,17 @@ async function readBody(request) {
 }
 
 function sendJson(response, status, body) {
+  const json = Buffer.from(JSON.stringify(body));
+  const acceptsGzip = /(?:^|,)\s*gzip\s*(?:,|$)/i.test(String(response.req?.headers?.["accept-encoding"] || ""));
+  const payload = acceptsGzip && json.length >= 512 ? gzipSync(json, { level: 6 }) : json;
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store"
+    "Cache-Control": "no-store",
+    "Content-Length": payload.length,
+    Vary: "Accept-Encoding",
+    ...(payload !== json ? { "Content-Encoding": "gzip" } : {})
   });
-  response.end(JSON.stringify(body));
+  response.end(payload);
 }
 
 function isAuthorizedListenerRequest(request) {
@@ -1795,15 +1886,29 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "GET" && action === "events") {
       session.touch();
+      const acceptsGzip = /(?:^|,)\s*gzip\s*(?:,|$)/i.test(String(request.headers["accept-encoding"] || ""));
       response.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-store",
-        Connection: "keep-alive"
+        Connection: "keep-alive",
+        Vary: "Accept-Encoding",
+        "X-Accel-Buffering": "no",
+        ...(acceptsGzip ? { "Content-Encoding": "gzip" } : {})
       });
-      const send = (event) => response.write(`event: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
-      send({ type: "status", payload: session.snapshot() });
+      const stream = acceptsGzip
+        ? createGzip({ flush: zlibConstants.Z_SYNC_FLUSH })
+        : response;
+      if (acceptsGzip) stream.pipe(response);
+      const send = (event) => {
+        stream.write(`event: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+        if (acceptsGzip) stream.flush(zlibConstants.Z_SYNC_FLUSH);
+      };
+      send({ type: "snapshot", payload: session.snapshot() });
       session.on("event", send);
-      request.on("close", () => session.off("event", send));
+      request.on("close", () => {
+        session.off("event", send);
+        if (acceptsGzip && !stream.destroyed) stream.end();
+      });
       return;
     }
 
