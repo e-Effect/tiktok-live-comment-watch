@@ -1,0 +1,5 @@
+{
+  "endpoint": "https://tiktok-live-comment-watch.onrender.com/api/collector/events",
+  "key": "REPLACE_WITH_COLLECTOR_KEY",
+  "streamUsername": "mentalist_k"
+}

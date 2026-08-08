@@ -16,6 +16,7 @@ import {
 } from "./lib/heart-me.js";
 import { LiveCueForwarder } from "./lib/livecue-forwarder.js";
 import { liveProviderInfo, loadLiveProvider } from "./lib/live-provider.js";
+import { normalizeCollectorEvent } from "./lib/external-collector.js";
 
 if (!globalThis.process) {
   globalThis.process = { env: {} };
@@ -29,7 +30,12 @@ const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 
 let connectionPauseUntil = 0;
 const TIKTOOLS_SESSION_COOKIE = String(globalThis.process?.env?.TIKTOOLS_SESSION_COOKIE || "").trim();
 const LISTENER_ADMIN_KEY = String(globalThis.process?.env?.LISTENER_ADMIN_KEY || "").trim();
-const providerInfo = liveProviderInfo(globalThis.process?.env || {});
+const COLLECTOR_INGEST_KEY = String(globalThis.process?.env?.COLLECTOR_INGEST_KEY || "").trim();
+const EXTERNAL_COLLECTOR_ENABLED = String(globalThis.process?.env?.LIVE_SOURCE || "").toLowerCase() === "collector"
+  && Boolean(COLLECTOR_INGEST_KEY);
+const providerInfo = EXTERNAL_COLLECTOR_ENABLED
+  ? { id: "tikfinity", label: "TikFinity (note PC)", mode: "external", paidApiReady: false }
+  : liveProviderInfo(globalThis.process?.env || {});
 const eventStore = new EventStore({
   connectionString: globalThis.process?.env?.DATABASE_URL || "",
   ssl: String(globalThis.process?.env?.DATABASE_SSL || "").toLowerCase() === "false" ? false : undefined
@@ -114,6 +120,9 @@ class LiveSession extends EventEmitter {
     this.lastAccessAt = Date.now();
     this.initialDataUntil = 0;
     this.isConnectingWithInitialData = false;
+    this.collectorBridge = null;
+    this.collectorRecentIds = new Map();
+    this.lastCollectorAt = null;
   }
 
   async start() {
@@ -1408,14 +1417,18 @@ function sendJson(response, status, body) {
   response.end(payload);
 }
 
-function isAuthorizedListenerRequest(request) {
-  if (!LISTENER_ADMIN_KEY) return false;
+function isAuthorizedWithKey(request, expectedKey) {
+  if (!expectedKey) return false;
   const authorization = String(request.headers.authorization || "");
   const supplied = authorization.replace(/^Bearer\s+/i, "").trim();
   if (!supplied) return false;
-  const expectedBuffer = Buffer.from(LISTENER_ADMIN_KEY);
+  const expectedBuffer = Buffer.from(expectedKey);
   const suppliedBuffer = Buffer.from(supplied);
   return expectedBuffer.length === suppliedBuffer.length && timingSafeEqual(expectedBuffer, suppliedBuffer);
+}
+
+function isAuthorizedListenerRequest(request) {
+  return isAuthorizedWithKey(request, LISTENER_ADMIN_KEY);
 }
 
 function requireListenerAdmin(request, response) {
@@ -1428,6 +1441,76 @@ function requireListenerAdmin(request, response) {
     return false;
   }
   return true;
+}
+
+function findCollectorSession(username, { activeOnly = false } = {}) {
+  return [...sessions.values()]
+    .filter((session) => session.username.toLowerCase() === username.toLowerCase())
+    .filter((session) => !activeOnly || (!session.stoppedAt && session.status !== "ended" && session.status !== "stopped"))
+    .sort((left, right) => {
+      const leftCollector = left.mode === "collector" ? 1 : 0;
+      const rightCollector = right.mode === "collector" ? 1 : 0;
+      return rightCollector - leftCollector || Number(right.startedAt || 0) - Number(left.startedAt || 0);
+    })[0] || null;
+}
+
+function prepareCollectorSession(session) {
+  if (!session.collectorBridge) {
+    session.collectorBridge = new EventEmitter();
+    session.attachLiveHandlers(session.collectorBridge, {});
+  }
+  if (session.connection) {
+    Promise.resolve(session.connection.disconnect?.()).catch(() => {});
+    session.connection = null;
+  }
+  if (session.stoppedAt) session.startedAt = Date.now();
+  session.provider = "tikfinity";
+  session.mode = "collector";
+  session.status = "waiting";
+  session.stoppedAt = null;
+  session.errorCode = "";
+  session.notice = "note PCのTikFinityコレクターを待っています。";
+  session.persistSession();
+  return session;
+}
+
+function ensureCollectorSession(username) {
+  const existing = findCollectorSession(username, { activeOnly: true });
+  if (existing) {
+    if (existing.mode !== "collector" || !existing.collectorBridge) prepareCollectorSession(existing);
+    return existing;
+  }
+
+  const session = prepareCollectorSession(new LiveSession(username));
+  sessions.set(session.id, session);
+  return session;
+}
+
+function activateCollectorSession(session) {
+  if (session.mode !== "collector" || !session.collectorBridge) prepareCollectorSession(session);
+  const wasLive = session.status === "live";
+  session.status = "live";
+  session.stoppedAt = null;
+  session.connectedAt ||= Date.now();
+  session.lastCollectorAt = Date.now();
+  session.notice = "note PCのTikFinityからLIVEイベントを受信中です。";
+  if (!wasLive) session.broadcastSummary(session.notice);
+}
+
+function isDuplicateCollectorEvent(session, key) {
+  if (!key) return false;
+  const now = Date.now();
+  const previous = session.collectorRecentIds.get(key);
+  session.collectorRecentIds.set(key, now);
+  if (session.collectorRecentIds.size > 5000) {
+    for (const [storedKey, storedAt] of session.collectorRecentIds) {
+      if (storedAt < now - 1000 * 60 * 30 || session.collectorRecentIds.size > 4000) {
+        session.collectorRecentIds.delete(storedKey);
+      }
+      if (session.collectorRecentIds.size <= 4000) break;
+    }
+  }
+  return Boolean(previous && previous > now - 1000 * 60 * 30);
 }
 
 async function discoverCreatorCandidates(params) {
@@ -1655,6 +1738,57 @@ async function serveStatic(response, urlPath) {
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
+  if (request.method === "POST" && url.pathname === "/api/collector/events") {
+    if (!EXTERNAL_COLLECTOR_ENABLED) {
+      sendJson(response, 503, { error: "外部コレクターが設定されていません。" });
+      return;
+    }
+    if (!isAuthorizedWithKey(request, COLLECTOR_INGEST_KEY)) {
+      sendJson(response, 401, { error: "コレクター認証に失敗しました。" });
+      return;
+    }
+
+    try {
+      const body = await readBody(request);
+      const username = normalizeTikTokUsername(body.streamUsername || body.username);
+      if (!isValidUsername(username)) {
+        sendJson(response, 400, { error: "配信者のTikTok IDを確認してください。" });
+        return;
+      }
+
+      const incoming = Array.isArray(body.events) ? body.events.slice(0, 250) : [];
+      const session = ensureCollectorSession(username);
+      let accepted = 0;
+      let dropped = 0;
+      for (const raw of incoming) {
+        const normalized = normalizeCollectorEvent(raw);
+        if (!normalized || isDuplicateCollectorEvent(session, normalized.key)) {
+          dropped += 1;
+          continue;
+        }
+        activateCollectorSession(session);
+        session.collectorBridge.emit(normalized.type, normalized.data);
+        accepted += 1;
+      }
+      session.lastCollectorAt = Date.now();
+      if (accepted === 0 && body.heartbeat) {
+        session.broadcastSummary("note PCのTikFinityコレクターから待機信号を受信しました。");
+      }
+      session.persistSession();
+      sendJson(response, 202, {
+        ok: true,
+        sessionId: session.id,
+        status: session.status,
+        accepted,
+        dropped,
+        lastCollectorAt: session.lastCollectorAt
+      });
+    } catch (error) {
+      sendJson(response, 400, { error: shortError(error) });
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/session") {
     try {
       const body = await readBody(request);
@@ -1663,7 +1797,7 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: "TikTok IDは2から32文字の英数字、_、.で入力してください。" });
         return;
       }
-      if (connectionPauseUntil > Date.now()) {
+      if (!EXTERNAL_COLLECTOR_ENABLED && connectionPauseUntil > Date.now()) {
         sendJson(response, 429, {
           error: `TikTok側の接続回数制限中です。${new Date(connectionPauseUntil).toLocaleTimeString("ja-JP")}頃まで新しい接続を止めています。`,
           errorCode: "rate_limited",
@@ -1671,11 +1805,15 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
-      const session = new LiveSession(username);
+      const existing = EXTERNAL_COLLECTOR_ENABLED ? findCollectorSession(username, { activeOnly: true }) : null;
+      const session = existing || new LiveSession(username);
       sessions.set(session.id, session);
+      if (EXTERNAL_COLLECTOR_ENABLED && (!existing || session.mode !== "collector" || !session.collectorBridge)) {
+        prepareCollectorSession(session);
+      }
       await eventStore.saveSession(session);
-      sendJson(response, 201, { id: session.id });
-      session.start();
+      sendJson(response, existing ? 200 : 201, { id: session.id });
+      if (!EXTERNAL_COLLECTOR_ENABLED) session.start();
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -1688,6 +1826,11 @@ const server = createServer(async (request, response) => {
       sessions: sessions.size,
       uptimeSeconds: Math.floor(getUptimeSeconds()),
       provider: providerInfo,
+      collector: {
+        enabled: EXTERNAL_COLLECTOR_ENABLED,
+        connected: [...sessions.values()].some((session) => session.mode === "collector" && session.status === "live"),
+        lastEventAt: Math.max(0, ...[...sessions.values()].map((session) => Number(session.lastCollectorAt || 0))) || null
+      },
       database: eventStore.status(),
       listenerManagement: {
         configured: Boolean(LISTENER_ADMIN_KEY),
@@ -1985,7 +2128,7 @@ server.listen(PORT, () => {
   console.log(`TikTok LIVE app: http://localhost:${PORT}`);
 });
 
-if (providerInfo.paidApiReady && eventStore.status().ready) {
+if ((EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady) && eventStore.status().ready) {
   restorePersistentSessions().catch((error) => {
     console.error(`Session restore failed: ${shortError(error)}`);
   });
@@ -2022,7 +2165,11 @@ async function restorePersistentSessions() {
       roomId: item.roomId
     });
     sessions.set(session.id, session);
-    session.start();
+    if (EXTERNAL_COLLECTOR_ENABLED) {
+      prepareCollectorSession(session);
+    } else {
+      session.start();
+    }
   }
 }
 

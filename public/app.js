@@ -236,14 +236,28 @@ async function startSession(options = {}) {
 async function restoreSavedSessions() {
   const savedSessions = readSavedSessions();
   if (!savedSessions.length) return;
+  let collectorEnabled = false;
+  try {
+    const health = await (await fetch("/api/health", { cache: "no-store" })).json();
+    collectorEnabled = Boolean(health.collector?.enabled);
+  } catch {}
 
   for (const saved of savedSessions) {
     if (!saved?.id || sessions.has(saved.id)) continue;
     try {
-      const response = await fetch(`/api/session/${saved.id}/snapshot`, { cache: "no-store" });
+      let sessionId = saved.id;
+      if (collectorEnabled && saved.username) {
+        const activeResponse = await fetch("/api/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: saved.username })
+        });
+        if (activeResponse.ok) sessionId = (await activeResponse.json()).id || sessionId;
+      }
+      const response = await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" });
       if (!response.ok) continue;
       const snapshot = await response.json();
-      activateSession(saved.id, saved.username || snapshot.username || "", {
+      activateSession(sessionId, saved.username || snapshot.username || "", {
         select: saved.id === selectedSessionId || !selectedSessionId
       });
       renderSnapshot(snapshot);
@@ -1740,7 +1754,7 @@ async function refreshServerState() {
     const response = await fetch("/api/health", { cache: "no-store" });
     const body = await response.json();
     if (!response.ok || !body.ok) throw new Error("health");
-    const provider = body.provider?.paidApiReady ? "Tik.tools" : "標準接続";
+    const provider = body.provider?.label || (body.provider?.paidApiReady ? "Tik.tools" : "標準接続");
     const storage = body.database?.ready ? "長期保存" : "一時保存";
     serverState.textContent = `サーバー ${formatDuration(body.uptimeSeconds)}・${formatNumber(body.sessions)}接続・${provider}・${storage}`;
   } catch {

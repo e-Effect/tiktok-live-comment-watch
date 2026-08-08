@@ -13,6 +13,10 @@ test("detects localized Heart Me gifts and remembers a known gift id", () => {
   assert.equal(isHeartMeGift({ giftName: "Rose", giftId: 5655 }), false);
 });
 
+test("accepts a Set of remembered Heart Me gift ids", () => {
+  assert.equal(isHeartMeGift({ giftId: "heart-1" }, {}, new Set(["heart-1"])), true);
+});
+
 test("detects an active fan from Tik.tools badge text", () => {
   assert.deepEqual(heartMeStateFromUser({
     badges: ["Super Fan Lv.7"]
