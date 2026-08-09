@@ -49,6 +49,14 @@ test("visit history counts distinct live room ids instead of re-entries", async 
           }]
         };
       }
+      if (sql.includes("AS \"pastCount\"") && sql.includes("is_heart_me")) {
+        return {
+          rows: [{
+            pastCount: "2",
+            lastAt: new Date("2026-07-20T00:00:00Z")
+          }]
+        };
+      }
       return { rows: [] };
     }
   };
@@ -65,14 +73,64 @@ test("visit history counts distinct live room ids instead of re-entries", async 
 
   assert.equal(summary.visitCount, 3);
   assert.equal(summary.previousVisitAt, Date.parse("2026-07-20T00:00:00Z"));
+  assert.equal(summary.heartMeHistoryKnown, true);
+  assert.equal(summary.pastHeartMeGiftCount, 2);
+  assert.equal(summary.lastPastHeartMeAt, Date.parse("2026-07-20T00:00:00Z"));
   assert.match(calls[0].sql, /ON CONFLICT \(session_id, user_id\)/);
   assert.match(calls[1].sql, /FILTER/);
   assert.match(calls[1].sql, /COALESCE\(NULLIF\(s\.room_id, ''\), v\.session_id::text\)/);
   assert.deepEqual(calls[1].values, ["streamer", "viewer-id", "session-id"]);
-  assert.match(calls[2].sql, /latest_unique_id/);
-  assert.match(calls[2].sql, /avatar_url/);
-  assert.equal(calls[2].values[1], "");
-  assert.equal(calls[2].values[3], "");
+  assert.match(calls[2].sql, /is_heart_me = TRUE/);
+  assert.deepEqual(calls[2].values, ["streamer", "viewer-id", "session-id"]);
+  assert.match(calls[3].sql, /latest_unique_id/);
+  assert.match(calls[3].sql, /avatar_url/);
+  assert.equal(calls[3].values[1], "");
+  assert.equal(calls[3].values[3], "");
+});
+
+test("stores and reads Heart Me gift history from past live rooms", async () => {
+  const store = new EventStore();
+  const calls = [];
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (sql.includes("INSERT INTO live_events")) return { rows: [] };
+      return {
+        rows: [{
+          pastCount: "7",
+          lastAt: new Date("2026-08-01T12:00:00Z")
+        }]
+      };
+    }
+  };
+
+  const stored = await store.recordEvent({ id: "session-id", username: "streamer" }, {
+    id: "gift-event",
+    type: "gift",
+    at: Date.parse("2026-08-09T12:00:00Z"),
+    userId: "viewer-id",
+    giftName: "ハートミー",
+    repeatCount: 1,
+    isHeartMe: true
+  });
+  assert.equal(stored, true);
+  assert.match(calls[0].sql, /source, is_heart_me, payload/);
+  assert.equal(calls[0].values[15], true);
+
+  const history = await store.heartMeHistory({
+    sessionId: "session-id",
+    roomId: "room-id",
+    username: "streamer",
+    userId: "viewer-id"
+  });
+  assert.deepEqual(history, {
+    known: true,
+    pastCount: 7,
+    lastAt: Date.parse("2026-08-01T12:00:00Z")
+  });
+  assert.match(calls[1].sql, /COALESCE\(NULLIF\(s.room_id, ''\), e.session_id::text\) <> \$3/);
+  assert.deepEqual(calls[1].values, ["streamer", "viewer-id", "room-id"]);
 });
 
 test("clears only unedited Count Pocket super-fan imports", async () => {

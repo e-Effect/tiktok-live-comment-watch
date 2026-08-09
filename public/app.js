@@ -2039,7 +2039,10 @@ function renderVisitorHistory(visitors) {
   visitorHistory.innerHTML = demoNotice + visitors.map((user) => {
     const visits = Number(user.visitCount || 0);
     const entryEvents = Number(user.entryEventCount || 0);
-    const visitLabel = visits > 1 ? `再訪・累計${formatNumber(visits)}回目` : "初見";
+    const previousVisit = user.previousVisitAt ? formatVisitDate(user.previousVisitAt) : "";
+    const visitLabel = visits > 1
+      ? `${formatNumber(visits)}回目${previousVisit ? `・${previousVisit}` : ""}`
+      : "初見";
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
       <div class="user-row visitor-row ${visits === 1 ? "first-visit-row" : ""}">
@@ -2250,21 +2253,25 @@ function renderDecoratedName(user) {
 }
 
 function heartMeMark(user) {
-  const status = user.heartMeStatus || "unknown";
+  const membershipStatus = user.heartMeStatus || "unknown";
+  const historyStatus = user.heartMeHistoryStatus || "unknown";
   const level = Number(user.heartMeLevel || 0);
-  const className = String(status).replaceAll("_", "-");
+  const status = membershipStatus === "inactive"
+    ? "inactive"
+    : historyStatus === "first_ever"
+      ? "new-today"
+      : historyStatus === "returning"
+        ? "active"
+        : "unknown";
   const titleMap = {
-    new_today: user.heartMeStatusSource === "heart_me_gift_new"
-      ? "この配信で初めてハートミー送信"
-      : "この配信でハートミー送信（初回か再開か未確認）",
-    active: "ハートミー有効",
-    inactive: "ハートミー凍結/休止",
-    none: "ハートミー未加入",
-    unknown: "ハートミー未確認"
+    "new-today": "全期間で初めてハートミー送信",
+    active: "過去の配信でもハートミー送信記録あり",
+    inactive: "ハートミー休止・凍結",
+    unknown: "ハートミー送信履歴未確認"
   };
-  const title = `${titleMap[status] || titleMap.unknown}${level > 0 ? ` Lv.${level}` : ""}`;
-  const symbol = status === "none" || status === "unknown" ? "♡" : "♥";
-  return `<span class="heart-mark heart-${className}" title="${escapeHtml(title)}">${symbol}</span>`;
+  const title = `${titleMap[status]}${level > 0 ? ` Lv.${level}` : ""}`;
+  const symbol = status === "unknown" ? "♡" : "♥";
+  return `<span class="heart-mark heart-${status}" title="${escapeHtml(title)}">${symbol}</span>`;
 }
 
 function followStatusMark(user) {

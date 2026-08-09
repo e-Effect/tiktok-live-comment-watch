@@ -101,6 +101,7 @@ class LiveSession extends EventEmitter {
     this.displayNameIndex = new Map();
     this.giftStats = new Map();
     this.heartMeGiftIds = new Set();
+    this.heartMeHistoryLookups = new Map();
     this.viewerStats = {
       current: 0,
       peak: 0,
@@ -234,14 +235,20 @@ class LiveSession extends EventEmitter {
       });
     });
 
-    connection.on(events.GIFT || "gift", (data) => {
+    connection.on(events.GIFT || "gift", async (data) => {
       const giftType = Number(data.giftType ?? data.giftDetails?.giftType ?? data.extendedGiftInfo?.giftType ?? 0);
       if (giftType === 1 && data.repeatEnd === false) return;
       const gift = parseGiftEvent(data, this.heartMeGiftIds);
       gift.source = this.currentEventSource();
       const previousUser = this.userStats.get(gift.userId);
       gift.previousHeartMeStatus = previousUser?.heartMeStatus || null;
-      if (gift.isHeartMe && gift.giftId) this.heartMeGiftIds.add(String(gift.giftId));
+      if (gift.isHeartMe) {
+        if (gift.giftId) this.heartMeGiftIds.add(String(gift.giftId));
+        const history = await this.heartMeHistoryFor(gift.userId);
+        gift.heartMeHistoryKnown = history.known;
+        gift.pastHeartMeGiftCount = history.pastCount;
+        gift.lastPastHeartMeAt = history.lastAt;
+      }
       this.markSeen({ userId: gift.userId, uniqueId: gift.uniqueId, nickname: gift.nickname, avatarUrl: gift.avatarUrl, signals: gift.signals }, gift.at, "gift");
       this.addGift(gift);
     });
@@ -323,14 +330,16 @@ class LiveSession extends EventEmitter {
       });
     });
 
-    connection.on(events.SUPER_FAN || "superFan", (data) => {
+    connection.on(events.SUPER_FAN || "superFan", async (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
       this.markSeen(person, at, "heart_me");
+      const history = await this.heartMeHistoryFor(person.userId);
       this.markHeartMe(person, at, {
         status: "new_today",
         level: heartMeLevelFromEvent(data),
-        source: "super_fan_event"
+        source: "super_fan_event",
+        history
       });
     });
 
@@ -417,7 +426,7 @@ class LiveSession extends EventEmitter {
     this.userStats.set(user.userId, user);
   }
 
-  markHeartMe(person, at, { status, level = 0, source = "" } = {}) {
+  markHeartMe(person, at, { status, level = 0, source = "", history = null } = {}) {
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     const resolvedStatus = status === "new_today"
       ? nextHeartMeStatusForGift(user.heartMeStatus)
@@ -426,6 +435,12 @@ class LiveSession extends EventEmitter {
     if (status === "new_today") {
       user.heartMeToday = true;
       user.lastHeartMeAt = at;
+      user.heartMeHistoryKnown = Boolean(history?.known);
+      user.pastHeartMeGiftCount = Math.max(0, Number(history?.pastCount || 0));
+      user.lastPastHeartMeAt = history?.lastAt || user.lastPastHeartMeAt || null;
+      user.heartMeHistoryStatus = history?.known
+        ? user.pastHeartMeGiftCount > 0 ? "returning" : "first_ever"
+        : user.heartMeHistoryStatus || "unknown";
     }
     user.heartMeStatusSource = source || user.heartMeStatusSource;
     user.heartMeStatusAt = at;
@@ -438,6 +453,8 @@ class LiveSession extends EventEmitter {
       uniqueId: person.uniqueId || user.uniqueId || "",
       nickname: user.nickname,
       avatarUrl: person.avatarUrl || user.avatarUrl || "",
+      isHeartMe: status === "new_today",
+      repeatCount: status === "new_today" ? 1 : 0,
       at,
       source: this.currentEventSource()
     });
@@ -461,9 +478,31 @@ class LiveSession extends EventEmitter {
       current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || at;
       current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || at;
       current.previousVisitAt = summary.previousVisitAt || current.previousVisitAt || null;
+      current.heartMeHistoryKnown = Boolean(summary.heartMeHistoryKnown);
+      current.pastHeartMeGiftCount = Math.max(0, Number(summary.pastHeartMeGiftCount || 0));
+      current.lastPastHeartMeAt = summary.lastPastHeartMeAt || current.lastPastHeartMeAt || null;
+      if (current.pastHeartMeGiftCount > 0) current.heartMeHistoryStatus = "returning";
       this.userStats.set(current.userId, current);
       this.broadcastPresence([current]);
     }).catch(() => {});
+  }
+
+  async heartMeHistoryFor(userId) {
+    const key = String(userId || "");
+    if (!key) return { known: false, pastCount: 0, lastAt: null };
+    let lookup = this.heartMeHistoryLookups.get(key);
+    if (!lookup) {
+      lookup = eventStore.heartMeHistory({
+        sessionId: this.id,
+        roomId: this.roomId,
+        username: this.username,
+        userId: key
+      });
+      this.heartMeHistoryLookups.set(key, lookup);
+    }
+    const history = await lookup;
+    if (!history.known) this.heartMeHistoryLookups.delete(key);
+    return history;
   }
 
   markFollowedToday(person, at) {
@@ -524,6 +563,12 @@ class LiveSession extends EventEmitter {
       user.heartMeGiftCount = Number(user.heartMeGiftCount || 0) + repeatCount;
       user.heartMeToday = true;
       user.lastHeartMeAt = gift.at;
+      user.heartMeHistoryKnown = Boolean(gift.heartMeHistoryKnown);
+      user.pastHeartMeGiftCount = Math.max(0, Number(gift.pastHeartMeGiftCount || 0));
+      user.lastPastHeartMeAt = gift.lastPastHeartMeAt || user.lastPastHeartMeAt || null;
+      user.heartMeHistoryStatus = gift.heartMeHistoryKnown
+        ? user.pastHeartMeGiftCount > 0 ? "returning" : "first_ever"
+        : user.heartMeHistoryStatus || "unknown";
       user.heartMeStatus = nextHeartMeStatusForGift(gift.previousHeartMeStatus);
       user.heartMeStatusSource = gift.previousHeartMeStatus === "none"
         ? "heart_me_gift_new"
@@ -634,6 +679,10 @@ class LiveSession extends EventEmitter {
       heartMeToday: false,
       heartMeGiftCount: 0,
       lastHeartMeAt: null,
+      heartMeHistoryKnown: false,
+      heartMeHistoryStatus: "unknown",
+      pastHeartMeGiftCount: 0,
+      lastPastHeartMeAt: null,
       isCurrentlyRanked: false,
       currentViewerRank: null,
       currentViewerRankedAt: null
@@ -1191,6 +1240,10 @@ function userDisplayState(user) {
     heartMeToday: Boolean(user.heartMeToday),
     heartMeGiftCount: Number(user.heartMeGiftCount || 0),
     lastHeartMeAt: user.lastHeartMeAt,
+    heartMeHistoryKnown: Boolean(user.heartMeHistoryKnown),
+    heartMeHistoryStatus: user.heartMeHistoryStatus || "unknown",
+    pastHeartMeGiftCount: Number(user.pastHeartMeGiftCount || 0),
+    lastPastHeartMeAt: user.lastPastHeartMeAt,
     visitCount: Number(user.visitCount || 0),
     firstVisitAt: user.firstVisitAt,
     lastVisitAt: user.lastVisitAt,
