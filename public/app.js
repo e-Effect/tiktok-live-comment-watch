@@ -1,5 +1,12 @@
 const form = document.querySelector("#connectForm");
 const usernameInput = document.querySelector("#username");
+const previewStartBtn = document.querySelector("#previewStartBtn");
+const preflightTestBtn = document.querySelector("#preflightTestBtn");
+const previewNotice = document.querySelector("#previewNotice");
+const previewKeyDialog = document.querySelector("#previewKeyDialog");
+const previewKeyForm = document.querySelector("#previewKeyForm");
+const previewAdminKeyInput = document.querySelector("#previewAdminKey");
+const previewKeyCancelBtn = document.querySelector("#previewKeyCancelBtn");
 const stopBtn = document.querySelector("#stopBtn");
 const exportLink = document.querySelector("#exportLink");
 const statusDot = document.querySelector("#statusDot");
@@ -89,6 +96,7 @@ const CANDIDATES_KEY = "tiktok-live-creator-candidates";
 const FIXED_ACCOUNT_KEY = "tiktok-live-fixed-account";
 const SINGLE_MODE_KEY = "tiktok-live-single-mode";
 const FONT_SIZE_KEY = "tiktok-live-font-size-level";
+const PREVIEW_ADMIN_KEY = "tiktok-listener-admin-key";
 const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
 const PANEL_SIZE_OPTIONS = ["small", "tall", "medium", "large", "wide"];
@@ -178,41 +186,60 @@ giftRankingRange?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRefresh?.addEventListener("click", () => refreshTargetGiftRanking());
 visitorDemoBtn?.addEventListener("click", toggleVisitorDemo);
 visitorDemoShortcutBtn?.addEventListener("click", showVisitorDemo);
+previewStartBtn?.addEventListener("click", () => startSession({ preview: true }));
+preflightTestBtn?.addEventListener("click", () => startSession({ preview: true, demo: true }));
 
 async function startSession(options = {}) {
+  const preview = options.preview === true;
   setBusy(true);
-  setStatus("connecting", "接続を準備しています。", "追加中");
+  setStatus("connecting", preview ? "保存しない確認モードを準備しています。" : "接続を準備しています。", preview ? "確認準備中" : "追加中");
 
-  const username = cleanUsername(options.username ?? usernameInput.value);
+  const username = cleanUsername(options.username ?? usernameInput.value)
+    || (preview ? cleanUsername(sessions.get(selectedSessionId)?.username || localStorage.getItem(FIXED_ACCOUNT_KEY) || "preview_test") : "");
   if (!username) {
     setStatus("stopped", "TikTok IDを入力してください。", "入力待ち");
     setBusy(false);
     return;
   }
   const cooldown = readRateLimitCooldown();
-  if (cooldown.active) {
+  if (!preview && cooldown.active) {
     setStatus("stopped", `TikTok側の接続制限中です。${formatClock(cooldown.until)}頃まで新しい接続を止めます。`, "制限中");
     setBusy(false);
     return;
   }
-  const existing = findSessionByUsername(username);
+  const existing = findSessionByUsername(username, { preview });
   if (existing) {
     selectSession(existing.id);
-    setBusy(false);
-    return;
+    try {
+      if (preview && options.demo) {
+        const adminKey = await getPreviewAdminKey();
+        if (!adminKey) throw new Error("保存しない確認モードには管理キーが必要です。");
+        await requestPreviewDemo(existing.id, adminKey);
+      }
+    } catch (error) {
+      setStatus("stopped", error.message, "テスト失敗");
+    } finally {
+      setBusy(false);
+    }
+    return existing.id;
   }
   const maxSessions = isSingleMode() ? 1 : MAX_ACTIVE_SESSIONS;
-  if (activeSessionCount() >= maxSessions) {
+  if (!preview && activeSessionCount() >= maxSessions) {
     setStatus("stopped", `同時監視は最大${maxSessions}件までです。不要な配信を停止してから追加してください。`, "追加停止");
     setBusy(false);
     return;
   }
 
   try {
+    const adminKey = preview ? await getPreviewAdminKey() : "";
+    if (preview && !adminKey) throw new Error("保存しない確認モードには管理キーが必要です。");
     const response = await fetch("/api/session", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username })
+      headers: {
+        "Content-Type": "application/json",
+        ...(preview ? { Authorization: `Bearer ${adminKey}` } : {})
+      },
+      body: JSON.stringify({ username, preview })
     });
     const body = await response.json();
     if (!response.ok) {
@@ -222,15 +249,67 @@ async function startSession(options = {}) {
       throw new Error(body.error || "接続を開始できませんでした。");
     }
 
-    activateSession(body.id, username, { select: true });
-    rememberRecentId(username);
-    refreshRecentProfile(username);
+    activateSession(body.id, username, { select: true, preview: Boolean(body.preview) });
+    if (!preview) {
+      rememberRecentId(username);
+      refreshRecentProfile(username);
+    }
     usernameInput.value = "";
+    if (preview && options.demo) {
+      await requestPreviewDemo(body.id, adminKey);
+    }
+    return body.id;
   } catch (error) {
+    if (preview && /管理キー/.test(String(error.message || ""))) localStorage.removeItem(PREVIEW_ADMIN_KEY);
     setStatus("stopped", error.message, "未接続");
+    return null;
   } finally {
     setBusy(false);
   }
+}
+
+function getPreviewAdminKey() {
+  const saved = String(localStorage.getItem(PREVIEW_ADMIN_KEY) || "").trim();
+  if (saved) return saved;
+  if (!previewKeyDialog || !previewKeyForm || !previewAdminKeyInput) return "";
+  previewKeyDialog.hidden = false;
+  document.body.classList.add("preview-key-open");
+  previewAdminKeyInput.value = "";
+  previewAdminKeyInput.focus();
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = (value) => {
+      if (finished) return;
+      finished = true;
+      previewKeyDialog.hidden = true;
+      document.body.classList.remove("preview-key-open");
+      previewKeyForm.removeEventListener("submit", submit);
+      previewKeyCancelBtn?.removeEventListener("click", cancel);
+      const key = String(value || "").trim();
+      if (key) localStorage.setItem(PREVIEW_ADMIN_KEY, key);
+      resolve(key);
+    };
+    const submit = (event) => {
+      event.preventDefault();
+      finish(previewAdminKeyInput.value);
+    };
+    const cancel = () => finish("");
+    previewKeyForm.addEventListener("submit", submit);
+    previewKeyCancelBtn?.addEventListener("click", cancel);
+  });
+}
+
+async function requestPreviewDemo(sessionId, adminKey) {
+  const response = await fetch(`/api/session/${sessionId}/demo`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${adminKey}` }
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    if (response.status === 401) localStorage.removeItem(PREVIEW_ADMIN_KEY);
+    throw new Error(body.error || "配信前テストを表示できませんでした。");
+  }
+  renderSnapshot(body);
 }
 
 async function restoreSavedSessions() {
@@ -278,7 +357,8 @@ function activateSession(sessionId, username, options = {}) {
     username: cleanUsername(username || existing.username || ""),
     snapshot: existing.snapshot || null,
     userCache: existing.userCache || new Map(),
-    createdAt: existing.createdAt || Date.now()
+    createdAt: existing.createdAt || Date.now(),
+    preview: options.preview ?? existing.preview ?? false
   };
   sessions.set(sessionId, session);
   if (options.select !== false) {
@@ -407,9 +487,12 @@ function selectSession(sessionId, options = {}) {
   refreshTargetGiftRanking();
 }
 
-function findSessionByUsername(username) {
+function findSessionByUsername(username, { preview = false } = {}) {
   const cleaned = cleanUsername(username).toLowerCase();
-  return [...sessions.values()].find((session) => session.username.toLowerCase() === cleaned);
+  return [...sessions.values()].find((session) => (
+    session.username.toLowerCase() === cleaned
+    && Boolean(session.preview || session.snapshot?.preview) === preview
+  ));
 }
 
 function activeSessionCount() {
@@ -444,17 +527,18 @@ function setRateLimitCooldown(message = "", retryAt = 0) {
 }
 
 function saveActiveSessions() {
-  const items = [...sessions.values()].map((session) => ({
+  const persistentSessions = [...sessions.values()].filter((session) => !session.preview && !session.snapshot?.preview);
+  const selected = persistentSessions.find((session) => session.id === selectedSessionId) || persistentSessions[0];
+  const items = persistentSessions.map((session) => ({
     id: session.id,
     username: session.username || session.snapshot?.username || "",
-    selected: session.id === selectedSessionId,
+    selected: session.id === selected?.id,
     savedAt: Date.now()
   }));
   localStorage.setItem(SESSIONS_KEY, JSON.stringify(items));
-  if (selectedSessionId) {
-    const selected = sessions.get(selectedSessionId);
+  if (selected) {
     localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({
-      id: selectedSessionId,
+      id: selected.id,
       username: selected?.username || "",
       savedAt: Date.now()
     }));
@@ -1401,6 +1485,8 @@ function saveCurrentLayoutOrder() {
 
 function setBusy(isBusy) {
   form.querySelector("button[type='submit']").disabled = isBusy;
+  if (previewStartBtn) previewStartBtn.disabled = isBusy;
+  if (preflightTestBtn) preflightTestBtn.disabled = isBusy;
   usernameInput.disabled = isBusy;
 }
 
@@ -1554,12 +1640,13 @@ function renderSnapshot(snapshot, options = {}) {
     createdAt: Date.now()
   };
   session.username = snapshot.username || session.username;
+  session.preview = Boolean(snapshot.preview);
   session.snapshot = snapshot;
   if (!options.preserveUserCache) seedSessionUserCache(session, snapshot);
   sessions.set(snapshot.id, session);
 
   if (!selectedSessionId) selectedSessionId = snapshot.id;
-  if (snapshot.username) {
+  if (snapshot.username && !snapshot.preview) {
     rememberRecentId(snapshot.username, snapshot.displayName, { moveToTop: false });
   }
   if (!shouldKeepSessionConnected(snapshot)) {
@@ -1577,6 +1664,7 @@ function renderSelectedSession() {
   const snapshot = selected?.snapshot;
   updateSelectedControls();
   if (!snapshot) {
+    if (previewNotice) previewNotice.hidden = true;
     setStatus("stopped", sessions.size ? "配信を選択してください。" : "未接続", sessions.size ? "選択待ち" : "待機中");
     renderActiveStreamer(selected, null);
     renderConnectionDetails(null);
@@ -1655,10 +1743,11 @@ function renderActiveStreamer(selected, snapshot) {
     activeStreamerId.textContent = "-";
     return;
   }
+  if (previewNotice) previewNotice.hidden = !snapshot?.preview;
   const username = snapshot?.username || selected.username || "";
   const displayName = snapshot?.displayName || username || "読み込み中";
   const isLive = snapshot?.status === "live";
-  activeStreamerState.textContent = isLive ? "接続中" : "選択中";
+  activeStreamerState.textContent = snapshot?.preview ? "保存なし" : isLive ? "接続中" : "選択中";
   activeStreamerState.classList.toggle("live", isLive);
   activeStreamerName.textContent = displayName;
   activeStreamerId.textContent = username ? `@${username}` : "-";
@@ -1669,7 +1758,7 @@ function updateSelectedControls() {
   const snapshot = selected?.snapshot;
   const canStop = Boolean(selected && shouldKeepSessionConnected(snapshot));
   stopBtn.disabled = !canStop;
-  if (selected) {
+  if (selected && !selected.preview && !snapshot?.preview) {
     exportLink.href = `/api/session/${selected.id}/export.csv`;
     exportLink.classList.remove("disabled");
     exportLink.removeAttribute("aria-disabled");
@@ -1693,6 +1782,7 @@ function renderSessionCards() {
       ? snapshot.displayName
       : `@${session.username}`;
     const isSelected = session.id === selectedSessionId;
+    const previewLabel = session.preview || snapshot?.preview ? "保存なし・" : "";
     return `
       <button type="button" class="session-card ${isSelected ? "selected" : ""}" data-session-id="${escapeHtml(session.id)}">
         <span class="session-title">${escapeHtml(name)}</span>
@@ -1701,7 +1791,7 @@ function renderSessionCards() {
           <strong>${formatNumber(snapshot?.commentCount || 0)}</strong> コメント
           <strong>${formatNumber(snapshot?.giftCount || 0)}</strong> ギフト
         </span>
-        <span class="session-state">${escapeHtml(modeLabel(snapshot || { mode: "connecting" }))}</span>
+        <span class="session-state">${escapeHtml(previewLabel + modeLabel(snapshot || { mode: "connecting" }))}</span>
       </button>
     `;
   }).join("");
@@ -2192,6 +2282,7 @@ function todayFollowMark(user) {
 }
 
 function modeLabel(snapshot) {
+  if (snapshot?.preview) return snapshot?.status === "live" ? "確認中" : "確認待機";
   if (snapshot?.errorCode === "rate_limited") return "制限中";
   if (snapshot?.status === "ended") return "終了";
   if (snapshot?.mode === "live") return snapshot?.provider === "tiktools" ? "Tik.tools" : "実接続";
@@ -2200,6 +2291,7 @@ function modeLabel(snapshot) {
 }
 
 function statusMessage(snapshot) {
+  if (snapshot.preview) return `${snapshot.username} を保存せず確認中です。`;
   if (snapshot.status === "live") return `${snapshot.username} のLIVEを計測中です。`;
   if (snapshot.status === "ended") return "LIVEが終了しました。";
   if (snapshot.status === "stopped") return "停止しました。";

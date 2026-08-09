@@ -21,15 +21,28 @@
         <input id="username" name="username" list="recentIds" autocomplete="off" placeholder="@TikTok ID" aria-label="TikTok ID" required>
         <datalist id="recentIds"></datalist>
         <button type="submit">追加</button>
+        <button id="previewStartBtn" type="button">保存せず確認</button>
       </form>
       <div class="top-actions">
         <a href="/listener-manager.html">リスナー台帳</a>
+        <button id="preflightTestBtn" type="button">配信前テスト</button>
         <button id="visitorDemoShortcutBtn" type="button">初見デモ</button>
         <button id="stopBtn" type="button" disabled>停止</button>
         <a id="exportLink" class="disabled" aria-disabled="true">CSV</a>
         <button id="settingsOpenBtn" type="button" aria-controls="settingsPanel" aria-expanded="false">設定</button>
       </div>
     </header>
+    <div id="previewKeyDialog" class="preview-key-dialog" hidden>
+      <form id="previewKeyForm" class="preview-key-card" role="dialog" aria-modal="true" aria-labelledby="previewKeyTitle">
+        <h2 id="previewKeyTitle">保存しない確認モード</h2>
+        <p>リスナー台帳と同じ管理キーを入力してください。一度入力すると次回から省略できます。</p>
+        <label>管理キー<input id="previewAdminKey" type="password" inputmode="numeric" autocomplete="current-password" required></label>
+        <div>
+          <button id="previewKeyCancelBtn" type="button">キャンセル</button>
+          <button type="submit">確認を開始</button>
+        </div>
+      </form>
+    </div>
     <div id="settingsBackdrop" class="settings-backdrop" hidden></div>
     <main class="app">
       <aside id="settingsPanel" class="panel settings-panel" aria-label="設定" aria-hidden="true">
@@ -159,6 +172,10 @@
       </aside>
 
       <section class="dashboard" aria-live="polite">
+        <div id="previewNotice" class="preview-notice" hidden>
+          <strong>保存しない確認モード</strong>
+          <span>この間のコメント・入室・ギフトは履歴、集計、印刷連携へ保存されません。確認後は「停止」を押してください。</span>
+        </div>
         <div class="status">
           <span id="statusDot"></span>
           <span id="statusText">未接続</span>

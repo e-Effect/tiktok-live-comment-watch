@@ -33,6 +33,8 @@ const LISTENER_ADMIN_KEY = String(globalThis.process?.env?.LISTENER_ADMIN_KEY ||
 const COLLECTOR_INGEST_KEY = String(globalThis.process?.env?.COLLECTOR_INGEST_KEY || "").trim();
 const EXTERNAL_COLLECTOR_ENABLED = String(globalThis.process?.env?.LIVE_SOURCE || "").toLowerCase() === "collector"
   && Boolean(COLLECTOR_INGEST_KEY);
+const COLLECTOR_PREVIEW_TTL_MS = 1000 * 60 * 60 * 3;
+let collectorPreviewSessionId = null;
 const providerInfo = EXTERNAL_COLLECTOR_ENABLED
   ? { id: "tikfinity", label: "TikFinity (note PC)", mode: "external", paidApiReady: false }
   : liveProviderInfo(globalThis.process?.env || {});
@@ -123,6 +125,8 @@ class LiveSession extends EventEmitter {
     this.collectorBridge = null;
     this.collectorRecentIds = new Map();
     this.lastCollectorAt = null;
+    this.recordingEnabled = options.recordingEnabled !== false;
+    this.previewExpiresAt = this.recordingEnabled ? null : Date.now() + COLLECTOR_PREVIEW_TTL_MS;
   }
 
   async start() {
@@ -443,6 +447,7 @@ class LiveSession extends EventEmitter {
   }
 
   recordVisit(user, at, source) {
+    if (!this.recordingEnabled) return;
     eventStore.recordVisit(this, {
       userId: user.userId,
       uniqueId: user.uniqueId || "",
@@ -577,6 +582,7 @@ class LiveSession extends EventEmitter {
   }
 
   emitNormalized(event) {
+    if (!this.recordingEnabled) return;
     eventStore.recordEvent(this, event)
       .then(() => cacheListenerAvatar(event.userId, event.avatarUrl))
       .catch(() => {});
@@ -584,6 +590,7 @@ class LiveSession extends EventEmitter {
   }
 
   persistSession(options) {
+    if (!this.recordingEnabled) return;
     eventStore.saveSession(this, options).catch(() => {});
   }
 
@@ -795,7 +802,10 @@ class LiveSession extends EventEmitter {
       followedTodayCount,
       heartMeStats,
       followStats,
-      viewerStats: this.viewerStats
+      viewerStats: this.viewerStats,
+      recordingEnabled: this.recordingEnabled,
+      preview: !this.recordingEnabled,
+      previewExpiresAt: this.previewExpiresAt
     };
   }
 
@@ -1443,9 +1453,10 @@ function requireListenerAdmin(request, response) {
   return true;
 }
 
-function findCollectorSession(username, { activeOnly = false } = {}) {
+function findCollectorSession(username, { activeOnly = false, recordingEnabled = true } = {}) {
   return [...sessions.values()]
     .filter((session) => session.username.toLowerCase() === username.toLowerCase())
+    .filter((session) => session.recordingEnabled === recordingEnabled)
     .filter((session) => !activeOnly || (!session.stoppedAt && session.status !== "ended" && session.status !== "stopped"))
     .sort((left, right) => {
       const leftCollector = left.mode === "collector" ? 1 : 0;
@@ -1469,7 +1480,9 @@ function prepareCollectorSession(session) {
   session.status = "waiting";
   session.stoppedAt = null;
   session.errorCode = "";
-  session.notice = "note PCのTikFinityコレクターを待っています。";
+  session.notice = session.recordingEnabled
+    ? "note PCのTikFinityコレクターを待っています。"
+    : "保存しない確認モードです。受信内容はデータベースへ記録されません。";
   session.persistSession();
   return session;
 }
@@ -1493,8 +1506,75 @@ function activateCollectorSession(session) {
   session.stoppedAt = null;
   session.connectedAt ||= Date.now();
   session.lastCollectorAt = Date.now();
-  session.notice = "note PCのTikFinityからLIVEイベントを受信中です。";
+  session.notice = session.recordingEnabled
+    ? "note PCのTikFinityからLIVEイベントを受信中です。"
+    : "保存しない確認モードでTikFinityのイベントを受信中です。";
   if (!wasLive) session.broadcastSummary(session.notice);
+}
+
+function activeCollectorPreviewSession() {
+  if (!collectorPreviewSessionId) return null;
+  const session = sessions.get(collectorPreviewSessionId);
+  if (!session || session.recordingEnabled || session.stoppedAt || Number(session.previewExpiresAt || 0) <= Date.now()) {
+    if (session && !session.stoppedAt) session.stop("保存しない確認モードの有効時間が終了しました。");
+    collectorPreviewSessionId = null;
+    return null;
+  }
+  return session;
+}
+
+function startCollectorPreviewSession(username) {
+  const previous = activeCollectorPreviewSession();
+  if (previous) previous.stop("別の保存しない確認モードへ切り替えました。");
+  const session = prepareCollectorSession(new LiveSession(username, { recordingEnabled: false }));
+  session.previewExpiresAt = Date.now() + COLLECTOR_PREVIEW_TTL_MS;
+  sessions.set(session.id, session);
+  collectorPreviewSessionId = session.id;
+  return session;
+}
+
+function addPreviewDemoEvents(session) {
+  if (!session || session.recordingEnabled) return false;
+  activateCollectorSession(session);
+  const at = Date.now();
+  const person = {
+    userId: `preview-${randomUUID()}`,
+    uniqueId: "demo_listener",
+    nickname: "テスト視聴者",
+    avatarUrl: "",
+    signals: null
+  };
+  session.markSeen(person, at, "member", { entryEvent: true });
+  session.addComment({
+    id: randomUUID(),
+    ...person,
+    text: "配信前テストのコメントです",
+    at: at + 1,
+    source: "preview"
+  });
+  session.addGift({
+    id: randomUUID(),
+    ...person,
+    giftId: "preview-rose",
+    giftName: "テストのバラ",
+    repeatCount: 3,
+    diamondCount: 1,
+    isHeartMe: false,
+    at: at + 2,
+    source: "preview"
+  });
+  session.addShare({
+    id: randomUUID(),
+    ...person,
+    label: "テストシェア",
+    at: at + 3,
+    source: "preview"
+  });
+  session.viewerStats.current = 1;
+  session.viewerStats.peak = Math.max(1, session.viewerStats.peak);
+  session.broadcastPresence([session.userStats.get(person.userId)]);
+  session.broadcastSummary("配信前テストを表示しました。データベース・印刷・外部連携には保存されません。");
+  return true;
 }
 
 function isDuplicateCollectorEvent(session, key) {
@@ -1757,7 +1837,9 @@ const server = createServer(async (request, response) => {
       }
 
       const incoming = Array.isArray(body.events) ? body.events.slice(0, 250) : [];
-      const session = ensureCollectorSession(username);
+      const session = incoming.length > 0
+        ? activeCollectorPreviewSession() || ensureCollectorSession(username)
+        : ensureCollectorSession(username);
       let accepted = 0;
       let dropped = 0;
       for (const raw of incoming) {
@@ -1778,6 +1860,7 @@ const server = createServer(async (request, response) => {
       sendJson(response, 202, {
         ok: true,
         sessionId: session.id,
+        preview: !session.recordingEnabled,
         status: session.status,
         accepted,
         dropped,
@@ -1797,6 +1880,8 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: "TikTok IDは2から32文字の英数字、_、.で入力してください。" });
         return;
       }
+      const preview = body.preview === true;
+      if (preview && !requireListenerAdmin(request, response)) return;
       if (!EXTERNAL_COLLECTOR_ENABLED && connectionPauseUntil > Date.now()) {
         sendJson(response, 429, {
           error: `TikTok側の接続回数制限中です。${new Date(connectionPauseUntil).toLocaleTimeString("ja-JP")}頃まで新しい接続を止めています。`,
@@ -1805,15 +1890,19 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
-      const existing = EXTERNAL_COLLECTOR_ENABLED ? findCollectorSession(username, { activeOnly: true }) : null;
-      const session = existing || new LiveSession(username);
+      const existing = EXTERNAL_COLLECTOR_ENABLED && !preview
+        ? findCollectorSession(username, { activeOnly: true, recordingEnabled: true })
+        : null;
+      const session = preview
+        ? startCollectorPreviewSession(username)
+        : existing || new LiveSession(username);
       sessions.set(session.id, session);
-      if (EXTERNAL_COLLECTOR_ENABLED && (!existing || session.mode !== "collector" || !session.collectorBridge)) {
+      if (EXTERNAL_COLLECTOR_ENABLED && !preview && (!existing || session.mode !== "collector" || !session.collectorBridge)) {
         prepareCollectorSession(session);
       }
-      await eventStore.saveSession(session);
-      sendJson(response, existing ? 200 : 201, { id: session.id });
-      if (!EXTERNAL_COLLECTOR_ENABLED) session.start();
+      if (session.recordingEnabled) await eventStore.saveSession(session);
+      sendJson(response, existing ? 200 : 201, { id: session.id, preview: !session.recordingEnabled });
+      if (!EXTERNAL_COLLECTOR_ENABLED && !preview) session.start();
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -1828,8 +1917,10 @@ const server = createServer(async (request, response) => {
       provider: providerInfo,
       collector: {
         enabled: EXTERNAL_COLLECTOR_ENABLED,
-        connected: [...sessions.values()].some((session) => session.mode === "collector" && session.status === "live"),
-        lastEventAt: Math.max(0, ...[...sessions.values()].map((session) => Number(session.lastCollectorAt || 0))) || null
+        connected: [...sessions.values()].some((session) => session.recordingEnabled && session.mode === "collector" && session.status === "live"),
+        lastEventAt: Math.max(0, ...[...sessions.values()].map((session) => Number(session.lastCollectorAt || 0))) || null,
+        previewActive: Boolean(activeCollectorPreviewSession()),
+        previewUsername: activeCollectorPreviewSession()?.username || ""
       },
       database: eventStore.status(),
       listenerManagement: {
@@ -2069,7 +2160,7 @@ const server = createServer(async (request, response) => {
         ? requestedRange
         : "session";
       try {
-        const persistent = eventStore.status().ready;
+        const persistent = session.recordingEnabled && eventStore.status().ready;
         const ranking = persistent
           ? await eventStore.giftRanking({
               sessionId: session.id,
@@ -2106,9 +2197,25 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && action === "demo") {
+      if (!requireListenerAdmin(request, response)) return;
+      if (session.recordingEnabled) {
+        sendJson(response, 409, { error: "通常記録中の配信にはテストデータを追加できません。" });
+        return;
+      }
+      addPreviewDemoEvents(session);
+      sendJson(response, 200, session.snapshot());
+      return;
+    }
+
     if (request.method === "POST" && action === "stop") {
       session.stop();
-      sendJson(response, 200, session.snapshot());
+      if (collectorPreviewSessionId === session.id) collectorPreviewSessionId = null;
+      const stoppedSnapshot = session.snapshot();
+      sendJson(response, 200, stoppedSnapshot);
+      if (!session.recordingEnabled) {
+        setTimeout(() => sessions.delete(session.id), 1000).unref?.();
+      }
       return;
     }
   }
