@@ -33,7 +33,6 @@ const LISTENER_ADMIN_KEY = String(globalThis.process?.env?.LISTENER_ADMIN_KEY ||
 const COLLECTOR_INGEST_KEY = String(globalThis.process?.env?.COLLECTOR_INGEST_KEY || "").trim();
 const EXTERNAL_COLLECTOR_ENABLED = String(globalThis.process?.env?.LIVE_SOURCE || "").toLowerCase() === "collector"
   && Boolean(COLLECTOR_INGEST_KEY);
-const COLLECTOR_PREVIEW_TTL_MS = 1000 * 60 * 60 * 3;
 let collectorPreviewSessionId = null;
 const providerInfo = EXTERNAL_COLLECTOR_ENABLED
   ? { id: "tikfinity", label: "TikFinity (note PC)", mode: "external", paidApiReady: false }
@@ -126,7 +125,6 @@ class LiveSession extends EventEmitter {
     this.collectorRecentIds = new Map();
     this.lastCollectorAt = null;
     this.recordingEnabled = options.recordingEnabled !== false;
-    this.previewExpiresAt = this.recordingEnabled ? null : Date.now() + COLLECTOR_PREVIEW_TTL_MS;
   }
 
   async start() {
@@ -804,8 +802,7 @@ class LiveSession extends EventEmitter {
       followStats,
       viewerStats: this.viewerStats,
       recordingEnabled: this.recordingEnabled,
-      preview: !this.recordingEnabled,
-      previewExpiresAt: this.previewExpiresAt
+      preview: !this.recordingEnabled
     };
   }
 
@@ -1515,8 +1512,7 @@ function activateCollectorSession(session) {
 function activeCollectorPreviewSession() {
   if (!collectorPreviewSessionId) return null;
   const session = sessions.get(collectorPreviewSessionId);
-  if (!session || session.recordingEnabled || session.stoppedAt || Number(session.previewExpiresAt || 0) <= Date.now()) {
-    if (session && !session.stoppedAt) session.stop("保存しない確認モードの有効時間が終了しました。");
+  if (!session || session.recordingEnabled || session.stoppedAt) {
     collectorPreviewSessionId = null;
     return null;
   }
@@ -1527,7 +1523,6 @@ function startCollectorPreviewSession(username) {
   const previous = activeCollectorPreviewSession();
   if (previous) previous.stop("別の保存しない確認モードへ切り替えました。");
   const session = prepareCollectorSession(new LiveSession(username, { recordingEnabled: false }));
-  session.previewExpiresAt = Date.now() + COLLECTOR_PREVIEW_TTL_MS;
   sessions.set(session.id, session);
   collectorPreviewSessionId = session.id;
   return session;
