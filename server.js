@@ -27,7 +27,9 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
+const DATABASE_RETRY_MS = Number(globalThis.process?.env?.DATABASE_RETRY_MS || 15000);
 let connectionPauseUntil = 0;
+let databaseRecoveryPending = false;
 const TIKTOOLS_SESSION_COOKIE = String(globalThis.process?.env?.TIKTOOLS_SESSION_COOKIE || "").trim();
 const LISTENER_ADMIN_KEY = String(globalThis.process?.env?.LISTENER_ADMIN_KEY || "").trim();
 const COLLECTOR_INGEST_KEY = String(globalThis.process?.env?.COLLECTOR_INGEST_KEY || "").trim();
@@ -126,6 +128,9 @@ class LiveSession extends EventEmitter {
     this.collectorRecentIds = new Map();
     this.lastCollectorAt = null;
     this.recordingEnabled = options.recordingEnabled !== false;
+    this.pendingVisitChecks = new Map();
+    this.pendingDatabaseEvents = [];
+    this.databaseFlushPromise = null;
   }
 
   async start() {
@@ -413,7 +418,9 @@ class LiveSession extends EventEmitter {
       user.hasJoined = true;
       user.firstJoinAt = at;
       user.lastJoinAt = at;
-      user.visitCount = Math.max(1, Number(user.visitCount || 0));
+      user.visitHistoryKnown = false;
+      user.visitHistoryStatus = this.recordingEnabled ? "checking" : "unknown";
+      user.visitCount = 0;
       user.visitSource = presenceSource;
       user.entryEventCount = entryEvent ? 1 : Number(user.entryEventCount || 0);
       this.viewerStats.knownJoins += 1;
@@ -463,28 +470,60 @@ class LiveSession extends EventEmitter {
 
   recordVisit(user, at, source) {
     if (!this.recordingEnabled) return;
-    eventStore.recordVisit(this, {
-      userId: user.userId,
-      uniqueId: user.uniqueId || "",
-      nickname: user.nickname,
-      avatarUrl: user.avatarUrl || "",
-      at,
-      source
-    }).then((summary) => {
-      if (!summary) return;
-      const current = this.userStats.get(user.userId);
-      if (!current) return;
-      current.visitCount = Math.max(1, Number(summary.visitCount || current.visitCount || 1));
-      current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || at;
-      current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || at;
+    this.pendingVisitChecks.set(user.userId, {
+      running: false,
+      visit: {
+        userId: user.userId,
+        uniqueId: user.uniqueId || "",
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl || "",
+        at,
+        source
+      }
+    });
+    this.runVisitCheck(user.userId).catch(() => {});
+  }
+
+  async runVisitCheck(userId) {
+    const pending = this.pendingVisitChecks.get(userId);
+    if (!pending || pending.running || !this.recordingEnabled) return false;
+    pending.running = true;
+    try {
+      const summary = await eventStore.recordVisit(this, pending.visit);
+      const current = this.userStats.get(userId);
+      if (!current) {
+        this.pendingVisitChecks.delete(userId);
+        return false;
+      }
+      if (!summary?.visitHistoryKnown) {
+        current.visitHistoryKnown = false;
+        current.visitHistoryStatus = "unknown";
+        current.visitCount = 0;
+        this.userStats.set(current.userId, current);
+        this.broadcastPresence([current]);
+        return false;
+      }
+      current.visitHistoryKnown = true;
+      current.visitHistoryStatus = Number(summary.visitCount || 0) === 1 ? "first" : "returning";
+      current.visitCount = Math.max(1, Number(summary.visitCount || 1));
+      current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || pending.visit.at;
+      current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || pending.visit.at;
       current.previousVisitAt = summary.previousVisitAt || current.previousVisitAt || null;
       current.heartMeHistoryKnown = Boolean(summary.heartMeHistoryKnown);
       current.pastHeartMeGiftCount = Math.max(0, Number(summary.pastHeartMeGiftCount || 0));
       current.lastPastHeartMeAt = summary.lastPastHeartMeAt || current.lastPastHeartMeAt || null;
       if (current.pastHeartMeGiftCount > 0) current.heartMeHistoryStatus = "returning";
+      this.pendingVisitChecks.delete(userId);
       this.userStats.set(current.userId, current);
       this.broadcastPresence([current]);
-    }).catch(() => {});
+      return true;
+    } finally {
+      pending.running = false;
+    }
+  }
+
+  async retryPendingVisits() {
+    await Promise.all([...this.pendingVisitChecks.keys()].map((userId) => this.runVisitCheck(userId).catch(() => false)));
   }
 
   async heartMeHistoryFor(userId) {
@@ -626,10 +665,43 @@ class LiveSession extends EventEmitter {
 
   emitNormalized(event) {
     if (!this.recordingEnabled) return;
-    eventStore.recordEvent(this, event)
-      .then(() => cacheListenerAvatar(event.userId, event.avatarUrl))
-      .catch(() => {});
+    if (!eventStore.status().ready) {
+      this.queueDatabaseEvent(event);
+    } else {
+      eventStore.recordEvent(this, event)
+        .then((stored) => {
+          if (!stored) this.queueDatabaseEvent(event);
+          else cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
+        })
+        .catch(() => this.queueDatabaseEvent(event));
+    }
     liveCue.publish(event);
+  }
+
+  queueDatabaseEvent(event) {
+    const key = `${event?.type || ""}:${event?.id || ""}`;
+    if (key !== ":" && this.pendingDatabaseEvents.some((item) => item.key === key)) return;
+    this.pendingDatabaseEvents.push({ key, event: { ...event } });
+    if (this.pendingDatabaseEvents.length > 10000) this.pendingDatabaseEvents.shift();
+  }
+
+  async flushPendingDatabaseEvents() {
+    if (this.databaseFlushPromise) return this.databaseFlushPromise;
+    this.databaseFlushPromise = (async () => {
+      while (this.pendingDatabaseEvents.length && eventStore.status().ready) {
+        const pending = this.pendingDatabaseEvents[0];
+        const stored = await eventStore.recordEvent(this, pending.event);
+        if (!stored) break;
+        this.pendingDatabaseEvents.shift();
+        cacheListenerAvatar(pending.event.userId, pending.event.avatarUrl).catch(() => {});
+      }
+      return this.pendingDatabaseEvents.length === 0;
+    })();
+    try {
+      return await this.databaseFlushPromise;
+    } finally {
+      this.databaseFlushPromise = null;
+    }
   }
 
   persistSession(options) {
@@ -659,6 +731,8 @@ class LiveSession extends EventEmitter {
       firstJoinAt: null,
       lastJoinAt: null,
       entryEventCount: 0,
+      visitHistoryKnown: false,
+      visitHistoryStatus: "unknown",
       visitCount: 0,
       visitSource: "",
       firstVisitAt: null,
@@ -1244,6 +1318,8 @@ function userDisplayState(user) {
     heartMeHistoryStatus: user.heartMeHistoryStatus || "unknown",
     pastHeartMeGiftCount: Number(user.pastHeartMeGiftCount || 0),
     lastPastHeartMeAt: user.lastPastHeartMeAt,
+    visitHistoryKnown: Boolean(user.visitHistoryKnown),
+    visitHistoryStatus: user.visitHistoryStatus || "unknown",
     visitCount: Number(user.visitCount || 0),
     firstVisitAt: user.firstVisitAt,
     lastVisitAt: user.lastVisitAt,
@@ -1907,6 +1983,7 @@ const server = createServer(async (request, response) => {
       session.persistSession();
       sendJson(response, 202, {
         ok: true,
+        durable: incoming.length === 0 || eventStore.status().ready,
         sessionId: session.id,
         preview: !session.recordingEnabled,
         status: session.status,
@@ -1970,7 +2047,11 @@ const server = createServer(async (request, response) => {
         previewActive: Boolean(activeCollectorPreviewSession()),
         previewUsername: activeCollectorPreviewSession()?.username || ""
       },
-      database: eventStore.status(),
+      database: {
+        ...eventStore.status(),
+        queuedEvents: [...sessions.values()].reduce((total, session) => total + session.pendingDatabaseEvents.length, 0),
+        pendingVisitChecks: [...sessions.values()].reduce((total, session) => total + session.pendingVisitChecks.size, 0)
+      },
       listenerManagement: {
         configured: Boolean(LISTENER_ADMIN_KEY),
         ready: Boolean(LISTENER_ADMIN_KEY && eventStore.status().ready)
@@ -2290,6 +2371,10 @@ if ((EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady) && eventStore.stat
 }
 
 setInterval(() => {
+  maintainDatabaseConnection().catch(() => {});
+}, DATABASE_RETRY_MS).unref?.();
+
+setInterval(() => {
   const now = Date.now();
   for (const [id, session] of sessions) {
     if (session.stoppedAt && session.stoppedAt + SESSION_TTL_MS < now) {
@@ -2313,6 +2398,7 @@ async function restorePersistentSessions() {
   for (const item of saved) {
     const username = normalizeTikTokUsername(item.username);
     if (!isValidUsername(username) || restoredUsernames.has(username.toLowerCase())) continue;
+    if ([...sessions.values()].some((session) => session.recordingEnabled && session.username.toLowerCase() === username.toLowerCase())) continue;
     restoredUsernames.add(username.toLowerCase());
     const session = new LiveSession(username, {
       id: item.id,
@@ -2325,6 +2411,30 @@ async function restorePersistentSessions() {
     } else {
       session.start();
     }
+  }
+}
+
+async function maintainDatabaseConnection() {
+  if (databaseRecoveryPending) return false;
+  databaseRecoveryPending = true;
+  const wasReady = eventStore.status().ready;
+  try {
+    const ready = await eventStore.ensureReady();
+    if (!ready) return false;
+    if (!wasReady && (EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady)) {
+      await restorePersistentSessions();
+    }
+    for (const session of sessions.values()) {
+      if (!session.recordingEnabled) continue;
+      if (!wasReady || session.pendingDatabaseEvents.length || session.pendingVisitChecks.size) {
+        await eventStore.saveSession(session);
+      }
+      await session.retryPendingVisits();
+      await session.flushPendingDatabaseEvents();
+    }
+    return true;
+  } finally {
+    databaseRecoveryPending = false;
   }
 }
 

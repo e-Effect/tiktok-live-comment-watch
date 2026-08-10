@@ -9,6 +9,14 @@ test("visitor history shows visit count and previous visit date without legacy w
   assert.match(clientSource, /`\$\{formatNumber\(visits\)\}回目\$\{previousVisit \? `・\$\{previousVisit\}` : ""\}`/);
 });
 
+test("only confirmed first visits receive the yellow first-time style", () => {
+  assert.match(clientSource, /comment\.visitHistoryKnown\s*&&\s*Number\(comment\.visitCount \|\| 0\) === 1/);
+  assert.match(clientSource, /historyKnown\s*&&\s*visits === 1 \? "first-visit-row"/);
+  assert.match(clientSource, /履歴確認中/);
+  assert.match(clientSource, /履歴未確認/);
+  assert.match(clientSource, /refreshEventDisplayState\(snapshot\.comments, cache\)/);
+});
+
 test("Heart Me colors are based on saved cross-live history", () => {
   assert.match(clientSource, /membershipStatus === "inactive"/);
   assert.match(clientSource, /historyStatus === "first_ever"/);

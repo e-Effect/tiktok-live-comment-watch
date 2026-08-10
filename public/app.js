@@ -1614,6 +1614,32 @@ function rebuildRealtimeLists(snapshot, cache) {
     .sort((a, b) => Number(b.firstJoinAt || 0) - Number(a.firstJoinAt || 0)
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 200);
+  snapshot.comments = refreshEventDisplayState(snapshot.comments, cache);
+  snapshot.gifts = refreshEventDisplayState(snapshot.gifts, cache);
+  snapshot.shares = refreshEventDisplayState(snapshot.shares, cache);
+}
+
+function refreshEventDisplayState(events, cache) {
+  return (events || []).map((event) => {
+    const user = cache.get(String(event?.userId || ""));
+    if (!user) return event;
+    return {
+      ...event,
+      followedToday: Boolean(user.followedToday),
+      isFollowingHost: user.isFollowingHost,
+      followStatus: user.followStatus,
+      heartMeStatus: user.heartMeStatus,
+      heartMeStatusSource: user.heartMeStatusSource,
+      heartMeLevel: user.heartMeLevel,
+      heartMeHistoryStatus: user.heartMeHistoryStatus,
+      visitHistoryKnown: Boolean(user.visitHistoryKnown),
+      visitHistoryStatus: user.visitHistoryStatus || "unknown",
+      visitCount: Number(user.visitCount || 0),
+      firstVisitAt: user.firstVisitAt,
+      lastVisitAt: user.lastVisitAt,
+      previousVisitAt: user.previousVisitAt
+    };
+  });
 }
 
 function updateCachedWatchTimes(session) {
@@ -1920,10 +1946,14 @@ function renderComments(comments) {
 }
 
 function commentVisitClass(comment) {
-  return Number(comment.visitCount || 0) === 1 ? "first-visit-comment" : "";
+  return comment.visitHistoryKnown && Number(comment.visitCount || 0) === 1 ? "first-visit-comment" : "";
 }
 
 function commentVisitMeta(comment) {
+  if (!comment.visitHistoryKnown) {
+    const label = comment.visitHistoryStatus === "checking" ? "履歴確認中" : "履歴未確認";
+    return `<span class="comment-visit-meta">${label}</span>`;
+  }
   const count = Number(comment.visitCount || 0);
   if (count <= 0) return "";
   if (count === 1) return `<span class="comment-visit-meta first">初見</span>`;
@@ -2037,15 +2067,18 @@ function renderVisitorHistory(visitors) {
     ? `<p class="visitor-demo-notice">デモ表示中です。訪問回数や台帳には保存されません。</p>`
     : "";
   visitorHistory.innerHTML = demoNotice + visitors.map((user) => {
+    const historyKnown = Boolean(user.visitHistoryKnown);
     const visits = Number(user.visitCount || 0);
     const entryEvents = Number(user.entryEventCount || 0);
     const previousVisit = user.previousVisitAt ? formatVisitDate(user.previousVisitAt) : "";
-    const visitLabel = visits > 1
+    const visitLabel = !historyKnown
+      ? user.visitHistoryStatus === "checking" ? "履歴確認中" : "履歴未確認"
+      : visits > 1
       ? `${formatNumber(visits)}回目${previousVisit ? `・${previousVisit}` : ""}`
       : "初見";
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
-      <div class="user-row visitor-row ${visits === 1 ? "first-visit-row" : ""}">
+      <div class="user-row visitor-row ${historyKnown && visits === 1 ? "first-visit-row" : ""}">
         <span class="visit-badge">${escapeHtml(visitSourceLabel(user.visitSource))}</span>
         <span class="name">${renderDecoratedName(user)}</span>
         <span class="visit-meta">
@@ -2092,6 +2125,8 @@ function visitorDemoUsers() {
     {
       userId: "demo-first",
       nickname: "はじめて来たリスナー",
+      visitHistoryKnown: true,
+      visitHistoryStatus: "first",
       visitCount: 1,
       entryEventCount: 1,
       visitSource: "member",
@@ -2101,6 +2136,8 @@ function visitorDemoUsers() {
     {
       userId: "demo-return",
       nickname: "また来てくれたリスナー",
+      visitHistoryKnown: true,
+      visitHistoryStatus: "returning",
       visitCount: 3,
       entryEventCount: 1,
       visitSource: "viewer_ranking",

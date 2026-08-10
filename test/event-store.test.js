@@ -72,6 +72,7 @@ test("visit history counts distinct live room ids instead of re-entries", async 
   });
 
   assert.equal(summary.visitCount, 3);
+  assert.equal(summary.visitHistoryKnown, true);
   assert.equal(summary.previousVisitAt, Date.parse("2026-07-20T00:00:00Z"));
   assert.equal(summary.heartMeHistoryKnown, true);
   assert.equal(summary.pastHeartMeGiftCount, 2);
@@ -86,6 +87,36 @@ test("visit history counts distinct live room ids instead of re-entries", async 
   assert.match(calls[3].sql, /avatar_url/);
   assert.equal(calls[3].values[1], "");
   assert.equal(calls[3].values[3], "");
+});
+
+test("does not label a visitor as first-time while the database is unavailable", async () => {
+  const store = new EventStore();
+  const summary = await store.recordVisit({ id: "session-id", username: "streamer" }, {
+    userId: "viewer-id",
+    at: Date.parse("2026-08-11T00:00:00Z")
+  });
+
+  assert.equal(summary.visitHistoryKnown, false);
+  assert.equal(summary.visitCount, 0);
+  assert.equal(summary.firstVisitAt, null);
+  assert.equal(summary.lastVisitAt, null);
+});
+
+test("shares one reconnect attempt and marks connection timeouts unavailable", async () => {
+  const store = new EventStore({ connectionString: "postgres://example" });
+  let attempts = 0;
+  store.initialize = async () => {
+    attempts += 1;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    store.ready = true;
+    store.pool = {};
+    return true;
+  };
+
+  assert.deepEqual(await Promise.all([store.ensureReady(), store.ensureReady()]), [true, true]);
+  assert.equal(attempts, 1);
+  store.rememberError(new Error("connect ETIMEDOUT 10.0.0.1:5432"));
+  assert.equal(store.ready, false);
 });
 
 test("stores and reads Heart Me gift history from past live rooms", async () => {

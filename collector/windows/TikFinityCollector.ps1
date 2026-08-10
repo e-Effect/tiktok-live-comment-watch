@@ -82,8 +82,11 @@ function Flush-PendingEvents {
         for ($i = 0; $i -lt $take; $i++) { [void]$pending.Dequeue() }
         return
     }
-    [void](Send-CollectorPayload -Config $Config -Events $events)
+    $responseText = Send-CollectorPayload -Config $Config -Events $events
+    $delivery = $responseText | ConvertFrom-Json
+    if ($delivery.durable -ne $true) { return $false }
     for ($i = 0; $i -lt $take; $i++) { [void]$pending.Dequeue() }
+    return $true
 }
 
 Write-CollectorStatus -State 'starting' -Message 'Waiting for TikFinity.'
@@ -95,6 +98,9 @@ while ($true) {
         $socket = New-Object System.Net.WebSockets.ClientWebSocket
         $socket.ConnectAsync([Uri]$tikFinityUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
         [void](Send-CollectorPayload -Config $config -Events @() -Heartbeat $true)
+        while ($pending.Count -gt 0) {
+            if (-not (Flush-PendingEvents -Config $config)) { break }
+        }
         Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity and Render.' -PendingCount $pending.Count
 
         $buffer = New-Object byte[] 65536
@@ -120,7 +126,7 @@ while ($true) {
                 $eventType = ''
             }
             if ($allowedEvents -contains $eventType.ToLowerInvariant()) {
-                if ($pending.Count -ge 500) { [void]$pending.Dequeue() }
+                if ($pending.Count -ge 5000) { [void]$pending.Dequeue() }
                 $pending.Enqueue($raw)
                 Flush-PendingEvents -Config $config
                 Write-CollectorStatus -State 'receiving' -Message "Received: $eventType" -PendingCount $pending.Count
