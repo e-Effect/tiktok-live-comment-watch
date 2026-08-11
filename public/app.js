@@ -1308,6 +1308,8 @@ function setupLayoutTools() {
 
   layoutEditToggle?.addEventListener("change", () => setLayoutEditing(layoutEditToggle.checked));
   resetLayoutBtn?.addEventListener("click", () => {
+    const confirmed = window.confirm("レイアウトを初期配置に戻しますか？\n現在の並び順とサイズ設定は元に戻せません。");
+    if (!confirmed) return;
     localStorage.removeItem(LAYOUT_PREFS_KEY);
     applyLayoutPrefs();
   });
