@@ -20,14 +20,17 @@
       <form id="connectForm" class="quick-connect">
         <input id="username" name="username" list="recentIds" autocomplete="off" placeholder="@TikTok ID" aria-label="TikTok ID" required>
         <datalist id="recentIds"></datalist>
-        <button type="submit">追加</button>
-        <button id="previewStartBtn" type="button">保存せず確認</button>
+        <button id="primarySessionBtn" type="submit" data-action="start">配信記録を開始</button>
       </form>
       <div class="top-actions">
+        <details class="test-menu">
+          <summary>テスト・確認</summary>
+          <div class="test-menu-panel">
+            <button id="preflightTestBtn" type="button">配信前テスト</button>
+            <button id="previewStartBtn" type="button">実際の配信を保存せず確認</button>
+          </div>
+        </details>
         <a href="/listener-manager.html">リスナー台帳</a>
-        <button id="preflightTestBtn" type="button">配信前テスト</button>
-        <button id="visitorDemoShortcutBtn" type="button">初見デモ</button>
-        <button id="stopBtn" type="button" disabled>停止</button>
         <a id="exportLink" class="disabled" aria-disabled="true">CSV</a>
         <button id="settingsOpenBtn" type="button" aria-controls="settingsPanel" aria-expanded="false">設定</button>
       </div>

@@ -1,5 +1,6 @@
 const form = document.querySelector("#connectForm");
 const usernameInput = document.querySelector("#username");
+const primarySessionBtn = document.querySelector("#primarySessionBtn");
 const previewStartBtn = document.querySelector("#previewStartBtn");
 const preflightTestBtn = document.querySelector("#preflightTestBtn");
 const previewNotice = document.querySelector("#previewNotice");
@@ -7,7 +8,6 @@ const previewKeyDialog = document.querySelector("#previewKeyDialog");
 const previewKeyForm = document.querySelector("#previewKeyForm");
 const previewAdminKeyInput = document.querySelector("#previewAdminKey");
 const previewKeyCancelBtn = document.querySelector("#previewKeyCancelBtn");
-const stopBtn = document.querySelector("#stopBtn");
 const exportLink = document.querySelector("#exportLink");
 const statusDot = document.querySelector("#statusDot");
 const statusText = document.querySelector("#statusText");
@@ -31,7 +31,6 @@ const giftHistory = document.querySelector("#giftHistory");
 const shareHistory = document.querySelector("#shareHistory");
 const visitorHistory = document.querySelector("#visitorHistory");
 const visitorDemoBtn = document.querySelector("#visitorDemoBtn");
-const visitorDemoShortcutBtn = document.querySelector("#visitorDemoShortcutBtn");
 const targetGiftSelect = document.querySelector("#targetGiftSelect");
 const giftRankingRange = document.querySelector("#giftRankingRange");
 const giftRankingRefresh = document.querySelector("#giftRankingRefresh");
@@ -147,18 +146,10 @@ let visitorDemoActive = false;
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await startSession();
+  if (primarySessionBtn?.dataset.action === "stop") await stopSelectedSession();
+  else await startSession();
 });
-
-stopBtn.addEventListener("click", async () => {
-  if (!selectedSessionId) return;
-  const sessionId = selectedSessionId;
-  try {
-    await fetch(`/api/session/${sessionId}/stop`, { method: "POST" });
-  } finally {
-    closeSession(sessionId, { forget: true });
-  }
-});
+usernameInput.addEventListener("input", updateSelectedControls);
 
 window.addEventListener("pageshow", restoreSavedSessions);
 document.addEventListener("visibilitychange", () => {
@@ -185,12 +176,31 @@ targetGiftSelect?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRange?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRefresh?.addEventListener("click", () => refreshTargetGiftRanking());
 visitorDemoBtn?.addEventListener("click", toggleVisitorDemo);
-visitorDemoShortcutBtn?.addEventListener("click", showVisitorDemo);
-previewStartBtn?.addEventListener("click", () => startSession({ preview: true }));
-preflightTestBtn?.addEventListener("click", () => startSession({ preview: true, demo: true }));
+previewStartBtn?.addEventListener("click", () => {
+  previewStartBtn.closest("details")?.removeAttribute("open");
+  startSession({ preview: true });
+});
+preflightTestBtn?.addEventListener("click", () => {
+  preflightTestBtn.closest("details")?.removeAttribute("open");
+  startSession({ preview: true, demo: true });
+});
+
+async function stopSelectedSession() {
+  if (!selectedSessionId) return;
+  const sessionId = selectedSessionId;
+  setBusy(true);
+  try {
+    await fetch(`/api/session/${sessionId}/stop`, { method: "POST" });
+  } finally {
+    setVisitorDemoActive(false);
+    closeSession(sessionId, { forget: true });
+    setBusy(false);
+  }
+}
 
 async function startSession(options = {}) {
   const preview = options.preview === true;
+  if (!preview) setVisitorDemoActive(false);
   setBusy(true);
   setStatus("connecting", preview ? "保存しない確認モードを準備しています。" : "接続を準備しています。", preview ? "確認準備中" : "追加中");
 
@@ -215,6 +225,7 @@ async function startSession(options = {}) {
         const adminKey = await getPreviewAdminKey();
         if (!adminKey) throw new Error("保存しない確認モードには管理キーが必要です。");
         await requestPreviewDemo(existing.id, adminKey);
+        setVisitorDemoActive(true);
       }
     } catch (error) {
       setStatus("stopped", error.message, "テスト失敗");
@@ -257,6 +268,7 @@ async function startSession(options = {}) {
     usernameInput.value = "";
     if (preview && options.demo) {
       await requestPreviewDemo(body.id, adminKey);
+      setVisitorDemoActive(true);
     }
     return body.id;
   } catch (error) {
@@ -1484,7 +1496,7 @@ function saveCurrentLayoutOrder() {
 }
 
 function setBusy(isBusy) {
-  form.querySelector("button[type='submit']").disabled = isBusy;
+  if (primarySessionBtn) primarySessionBtn.disabled = isBusy;
   if (previewStartBtn) previewStartBtn.disabled = isBusy;
   if (preflightTestBtn) preflightTestBtn.disabled = isBusy;
   usernameInput.disabled = isBusy;
@@ -1783,7 +1795,17 @@ function updateSelectedControls() {
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   const snapshot = selected?.snapshot;
   const canStop = Boolean(selected && shouldKeepSessionConnected(snapshot));
-  stopBtn.disabled = !canStop;
+  const enteredUsername = cleanUsername(usernameInput.value);
+  const selectedUsername = cleanUsername(snapshot?.username || selected?.username || "");
+  const addingDifferentSession = Boolean(enteredUsername && selectedUsername && enteredUsername.toLowerCase() !== selectedUsername.toLowerCase());
+  const shouldStop = canStop && !addingDifferentSession;
+  if (primarySessionBtn) {
+    primarySessionBtn.dataset.action = shouldStop ? "stop" : "start";
+    primarySessionBtn.textContent = shouldStop
+      ? snapshot?.preview ? "テストを終了" : "配信記録を停止"
+      : addingDifferentSession ? "別の配信記録を開始" : "配信記録を開始";
+    primarySessionBtn.classList.toggle("is-stop", shouldStop);
+  }
   if (selected && !selected.preview && !snapshot?.preview) {
     exportLink.href = `/api/session/${selected.id}/export.csv`;
     exportLink.classList.remove("disabled");
@@ -2110,19 +2132,6 @@ function setVisitorDemoActive(active) {
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   renderVisitorHistory(selected?.snapshot?.visitors || []);
   renderComments(selected?.snapshot?.comments || []);
-}
-
-function showVisitorDemo() {
-  const visibilityToggle = panelToggles.find((toggle) => toggle.dataset.panelToggle === "visitors");
-  if (visibilityToggle && !visibilityToggle.checked) {
-    const prefs = readPanelPrefs();
-    prefs.visitors = true;
-    localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(prefs));
-    applyPanelPrefs();
-  }
-  setVisitorDemoActive(true);
-  const visitorPanel = document.querySelector('[data-panel="visitors"]');
-  requestAnimationFrame(() => visitorPanel?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
 function visitorDemoUsers() {
