@@ -146,6 +146,9 @@ let visitorDemoActive = false;
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  await startSession();
+});
+primarySessionBtn?.addEventListener("click", async () => {
   if (primarySessionBtn?.dataset.action === "stop") await stopSelectedSession();
   else await startSession();
 });

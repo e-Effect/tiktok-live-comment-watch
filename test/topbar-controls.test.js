@@ -6,7 +6,7 @@ const html = await readFile(new URL("../public/index.html", import.meta.url), "u
 const client = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 
 test("the top bar has one clear primary start and stop control", () => {
-  assert.match(html, /id="primarySessionBtn"[^>]*>配信記録を開始/);
+  assert.match(html, /id="primarySessionBtn"[^>]*type="button"[^>]*>配信記録を開始/);
   assert.doesNotMatch(html, />追加<|id="stopBtn"/);
   assert.match(client, /primarySessionBtn\?\.dataset\.action === "stop"/);
   assert.match(client, /"配信記録を停止"/);
