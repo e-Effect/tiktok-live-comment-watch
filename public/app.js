@@ -461,18 +461,28 @@ function startSnapshotClock() {
       session.snapshot.elapsedSeconds = Math.floor((Date.now() - session.snapshot.startedAt) / 1000);
       updateCachedWatchTimes(session);
     }
-    renderSessionCards();
-    renderSelectedSession();
+    renderSelectedSessionClock();
     if (document.hidden || snapshotFetchTick % 60 !== 0) return;
     await Promise.all([...sessions.keys()].map(async (sessionId) => {
       try {
         const snapshot = await (await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" })).json();
         renderSnapshot(snapshot);
       } catch {
-        renderSessionCards();
+        // Keep the last good state; the event stream or next reconciliation will refresh it.
       }
     }));
   }, 1000);
+}
+
+function renderSelectedSessionClock() {
+  const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
+  const snapshot = selected?.snapshot;
+  if (!snapshot) return;
+  renderConnectionDetails(snapshot);
+  renderMetrics(snapshot);
+  renderReport(snapshot);
+  renderWatchers(snapshot.topWatchers || []);
+  renderSilentLongWatchers(snapshot.silentLongWatchers || []);
 }
 
 function closeSession(sessionId, { forget } = { forget: false }) {
@@ -578,10 +588,6 @@ function readSavedSessions() {
   } catch {
     return [];
   }
-}
-
-function clearSavedSession() {
-  saveActiveSessions();
 }
 
 function rememberRecentId(username, displayName = "", options = {}) {
@@ -1595,8 +1601,7 @@ function normalizeRealtimeUser(user) {
 }
 
 function rebuildRealtimeLists(snapshot, cache) {
-  const users = [...cache.values()].map(normalizeRealtimeUser);
-  for (const user of users) cache.set(user.userId, user);
+  const users = normalizedRealtimeUsers(cache);
   snapshot.topUsers = [...users]
     .sort((a, b) => Number(b.comments || 0) - Number(a.comments || 0)
       || Number(b.gifts || 0) - Number(a.gifts || 0)
@@ -1608,6 +1613,28 @@ function rebuildRealtimeLists(snapshot, cache) {
       || Number(b.gifts || 0) - Number(a.gifts || 0)
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 30);
+  applyRealtimeWatchLists(snapshot, users);
+  snapshot.visitors = [...users]
+    .filter((user) => user.hasJoined)
+    .sort((a, b) => Number(b.firstJoinAt || 0) - Number(a.firstJoinAt || 0)
+      || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
+    .slice(0, 200);
+  snapshot.comments = refreshEventDisplayState(snapshot.comments, cache);
+  snapshot.gifts = refreshEventDisplayState(snapshot.gifts, cache);
+  snapshot.shares = refreshEventDisplayState(snapshot.shares, cache);
+}
+
+function rebuildRealtimeWatchLists(snapshot, cache) {
+  applyRealtimeWatchLists(snapshot, normalizedRealtimeUsers(cache));
+}
+
+function normalizedRealtimeUsers(cache) {
+  const users = [...cache.values()].map(normalizeRealtimeUser);
+  for (const user of users) cache.set(user.userId, user);
+  return users;
+}
+
+function applyRealtimeWatchLists(snapshot, users) {
   snapshot.topWatchers = [...users]
     .filter((user) => Number(user.confirmedWatchSeconds || 0) > 0)
     .sort((a, b) => Number(b.confirmedWatchSeconds || 0) - Number(a.confirmedWatchSeconds || 0)
@@ -1626,14 +1653,6 @@ function rebuildRealtimeLists(snapshot, cache) {
       || Number(b.confirmedWatchSeconds || 0) - Number(a.confirmedWatchSeconds || 0)
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 100);
-  snapshot.visitors = [...users]
-    .filter((user) => user.hasJoined)
-    .sort((a, b) => Number(b.firstJoinAt || 0) - Number(a.firstJoinAt || 0)
-      || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
-    .slice(0, 200);
-  snapshot.comments = refreshEventDisplayState(snapshot.comments, cache);
-  snapshot.gifts = refreshEventDisplayState(snapshot.gifts, cache);
-  snapshot.shares = refreshEventDisplayState(snapshot.shares, cache);
 }
 
 function refreshEventDisplayState(events, cache) {
@@ -1670,7 +1689,7 @@ function updateCachedWatchTimes(session) {
       confirmedWatchSeconds: clientConfirmedWatchSeconds(user, now)
     });
   }
-  rebuildRealtimeLists(session.snapshot, session.userCache);
+  rebuildRealtimeWatchLists(session.snapshot, session.userCache);
 }
 
 function clientConfirmedWatchSeconds(user, now = Date.now()) {
@@ -2305,11 +2324,6 @@ function setStatus(status, message, mode) {
   statusDot.className = `status-dot ${status === "live" ? "live" : ""}`;
   statusText.textContent = message || "待機中";
   modeText.textContent = mode;
-}
-
-function renderName(user) {
-  const name = escapeHtml(user.nickname || user.userId);
-  return user.followedToday ? `<span class="follow-mark" title="本日フォロー">✓</span>${name}` : name;
 }
 
 function renderDecoratedName(user) {

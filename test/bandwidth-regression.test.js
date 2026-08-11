@@ -21,6 +21,14 @@ test("browser reconciles full state once per minute and consumes delta events", 
   assert.match(clientSource, /applyRealtimePayload\(sessionId,\s*"share"/);
 });
 
+test("the one-second clock updates live counters without rebuilding every panel", () => {
+  const clock = clientSource.match(/function startSnapshotClock\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(clock, /renderSelectedSessionClock\(\)/);
+  assert.doesNotMatch(clock, /renderSelectedSession\(\)|renderSessionCards\(\)/);
+  assert.match(clientSource, /function renderSelectedSessionClock\(\) \{[\s\S]*?renderMetrics\(snapshot\)[\s\S]*?renderWatchers\(/);
+  assert.match(clientSource, /function updateCachedWatchTimes\([\s\S]*?rebuildRealtimeWatchLists\(/);
+});
+
 test("large JSON and event streams enable gzip compression", () => {
   assert.match(serverSource, /gzipSync\(json/);
   assert.match(serverSource, /createGzip\(\{\s*flush:\s*zlibConstants\.Z_SYNC_FLUSH\s*\}\)/);

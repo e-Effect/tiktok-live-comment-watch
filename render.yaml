@@ -1,16 +1,15 @@
 services:
   - type: web
     name: tiktok-live-comment-watch
-    env: node
+    runtime: docker
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    region: virginia
     healthCheckPath: /api/health
-    autoDeploy: true
+    autoDeployTrigger: commit
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: tiktok-listener-ledger-db
+          name: tiktok-listener-ledger
           property: connectionString
       - key: LISTENER_ADMIN_KEY
         sync: false
@@ -19,6 +18,6 @@ services:
       - key: COLLECTOR_INGEST_KEY
         sync: false
 databases:
-  - name: tiktok-listener-ledger-db
-    plan: free
+  - name: tiktok-listener-ledger
+    plan: basic-256mb
     region: virginia
