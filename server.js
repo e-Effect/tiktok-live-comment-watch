@@ -17,6 +17,8 @@ import {
 import { LiveCueForwarder } from "./lib/livecue-forwarder.js";
 import { liveProviderInfo, loadLiveProvider } from "./lib/live-provider.js";
 import { normalizeCollectorEvent } from "./lib/external-collector.js";
+import { shouldRotateCollectorSession } from "./lib/external-collector.js";
+import { optimizeAvatarImage } from "./lib/avatar-image.js";
 
 if (!globalThis.process) {
   globalThis.process = { env: {} };
@@ -28,6 +30,9 @@ const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
 const DATABASE_RETRY_MS = Number(globalThis.process?.env?.DATABASE_RETRY_MS || 15000);
+const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_HEARTBEAT_STALE_MS || 150000);
+const COLLECTOR_RECEIVING_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_RECEIVING_STALE_MS || 15 * 60 * 1000);
+const COLLECTOR_NEW_LIVE_GAP_MS = Number(globalThis.process?.env?.COLLECTOR_NEW_LIVE_GAP_MS || 3 * 60 * 60 * 1000);
 let connectionPauseUntil = 0;
 let databaseRecoveryPending = false;
 const TIKTOOLS_SESSION_COOKIE = String(globalThis.process?.env?.TIKTOOLS_SESSION_COOKIE || "").trim();
@@ -127,6 +132,8 @@ class LiveSession extends EventEmitter {
     this.collectorBridge = null;
     this.collectorRecentIds = new Map();
     this.lastCollectorAt = null;
+    this.lastCollectorHeartbeatAt = null;
+    this.lastCollectorEventAt = null;
     this.recordingEnabled = options.recordingEnabled !== false;
     this.pendingVisitChecks = new Map();
     this.pendingDatabaseEvents = [];
@@ -1553,6 +1560,33 @@ function sendJson(response, status, body) {
   response.end(payload);
 }
 
+function listenerRowsToCsv(rows = []) {
+  const output = [["ユーザーID", "TikTok ID", "表示名", "来訪回数", "コメント数", "ギフト個数", "ギフトコイン", "シェア回数", "スーパーファン", "初回来訪", "最終来訪", "タグ", "メモ"]];
+  for (const item of rows) {
+    output.push([
+      item.userId, item.uniqueId, item.nickname, item.visits, item.comments, item.gifts,
+      item.coins, item.shares, item.isSuperFan ? "はい" : "",
+      item.firstSeenAt ? new Date(item.firstSeenAt).toISOString() : "",
+      item.lastSeenAt ? new Date(item.lastSeenAt).toISOString() : "",
+      (item.tags || []).join(" / "), item.notes || ""
+    ]);
+  }
+  return `\uFEFF${output.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
+}
+
+function sessionRowsToCsv(rows = []) {
+  const output = [["type", "source", "time", "user_id", "tiktok_id", "nickname", "text_or_gift", "count", "coins"]];
+  for (const item of rows) {
+    output.push([
+      item.type, item.source || "live", item.at ? new Date(item.at).toISOString() : "",
+      item.userId, item.uniqueId, item.nickname,
+      item.type === "comment" ? item.text : item.giftName || item.giftId || item.text,
+      item.count || "", item.coins || ""
+    ]);
+  }
+  return `\uFEFF${output.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
+}
+
 function isAuthorizedWithKey(request, expectedKey) {
   if (!expectedKey) return false;
   const authorization = String(request.headers.authorization || "");
@@ -1625,6 +1659,26 @@ function ensureCollectorSession(username) {
   return session;
 }
 
+function collectorSessionForEvents(username, normalizedEvents = []) {
+  const preview = activeCollectorPreviewSession();
+  if (preview) return preview;
+  const firstRoomId = normalizedEvents.find((event) => event.roomId)?.roomId || "";
+  const eventAt = Math.max(0, ...normalizedEvents.map((event) => Number(event.at || 0))) || Date.now();
+  const existing = findCollectorSession(username, { activeOnly: true, recordingEnabled: true });
+  if (existing && shouldRotateCollectorSession({
+    currentRoomId: existing.roomId,
+    incomingRoomId: firstRoomId,
+    lastEventAt: existing.lastCollectorEventAt || 0,
+    eventAt,
+    gapMs: COLLECTOR_NEW_LIVE_GAP_MS
+  })) {
+    existing.stop("新しい配信を検出したため、前の配信記録を終了しました。");
+  }
+  const session = existing?.stoppedAt ? ensureCollectorSession(username) : existing || ensureCollectorSession(username);
+  if (firstRoomId && !session.roomId) session.roomId = String(firstRoomId);
+  return session;
+}
+
 function activateCollectorSession(session) {
   if (session.mode !== "collector" || !session.collectorBridge) prepareCollectorSession(session);
   const wasLive = session.status === "live";
@@ -1632,6 +1686,8 @@ function activateCollectorSession(session) {
   session.stoppedAt = null;
   session.connectedAt ||= Date.now();
   session.lastCollectorAt = Date.now();
+  session.lastCollectorHeartbeatAt = session.lastCollectorAt;
+  session.lastCollectorEventAt = session.lastCollectorAt;
   session.notice = session.recordingEnabled
     ? "note PCのTikFinityからLIVEイベントを受信中です。"
     : "保存しない確認モードでTikFinityのイベントを受信中です。";
@@ -1961,22 +2017,25 @@ const server = createServer(async (request, response) => {
       }
 
       const incoming = Array.isArray(body.events) ? body.events.slice(0, 250) : [];
-      const session = incoming.length > 0
-        ? activeCollectorPreviewSession() || ensureCollectorSession(username)
+      const normalizedIncoming = incoming.map(normalizeCollectorEvent).filter(Boolean);
+      const session = normalizedIncoming.length > 0
+        ? collectorSessionForEvents(username, normalizedIncoming)
         : ensureCollectorSession(username);
       let accepted = 0;
       let dropped = 0;
-      for (const raw of incoming) {
-        const normalized = normalizeCollectorEvent(raw);
+      for (const normalized of normalizedIncoming) {
         if (!normalized || isDuplicateCollectorEvent(session, normalized.key)) {
           dropped += 1;
           continue;
         }
         activateCollectorSession(session);
         session.collectorBridge.emit(normalized.type, normalized.data);
+        if (normalized.roomId) session.roomId = String(normalized.roomId);
+        session.lastCollectorEventAt = Math.max(Number(session.lastCollectorEventAt || 0), Number(normalized.at || Date.now()));
         accepted += 1;
       }
       session.lastCollectorAt = Date.now();
+      session.lastCollectorHeartbeatAt = session.lastCollectorAt;
       if (accepted === 0 && body.heartbeat) {
         session.broadcastSummary("note PCのTikFinityコレクターから待機信号を受信しました。");
       }
@@ -1989,7 +2048,8 @@ const server = createServer(async (request, response) => {
         status: session.status,
         accepted,
         dropped,
-        lastCollectorAt: session.lastCollectorAt
+        lastCollectorAt: session.lastCollectorAt,
+        collectorState: accepted > 0 ? "receiving" : "waiting"
       });
     } catch (error) {
       sendJson(response, 400, { error: shortError(error) });
@@ -2035,6 +2095,15 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === "GET" && url.pathname === "/api/health") {
+    const collectorSessions = [...sessions.values()].filter((session) => session.recordingEnabled && session.mode === "collector");
+    const collectorHeartbeatAt = Math.max(0, ...collectorSessions.map((session) => Number(session.lastCollectorHeartbeatAt || session.lastCollectorAt || 0))) || null;
+    const collectorEventAt = Math.max(0, ...collectorSessions.map((session) => Number(session.lastCollectorEventAt || 0))) || null;
+    const collectorConnected = Boolean(collectorHeartbeatAt && collectorHeartbeatAt >= Date.now() - COLLECTOR_HEARTBEAT_STALE_MS);
+    const collectorState = !collectorConnected
+      ? "offline"
+      : collectorEventAt && collectorEventAt >= Date.now() - COLLECTOR_RECEIVING_STALE_MS
+        ? "receiving"
+        : "waiting";
     sendJson(response, 200, {
       ok: true,
       sessions: sessions.size,
@@ -2042,8 +2111,10 @@ const server = createServer(async (request, response) => {
       provider: providerInfo,
       collector: {
         enabled: EXTERNAL_COLLECTOR_ENABLED,
-        connected: [...sessions.values()].some((session) => session.recordingEnabled && session.mode === "collector" && session.status === "live"),
-        lastEventAt: Math.max(0, ...[...sessions.values()].map((session) => Number(session.lastCollectorAt || 0))) || null,
+        connected: collectorConnected,
+        state: collectorState,
+        lastHeartbeatAt: collectorHeartbeatAt,
+        lastEventAt: collectorEventAt,
         previewActive: Boolean(activeCollectorPreviewSession()),
         previewUsername: activeCollectorPreviewSession()?.username || ""
       },
@@ -2073,6 +2144,24 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, await eventStore.listenerSummary({
         username: normalizeTikTokUsername(url.searchParams.get("username") || "")
       }));
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/export.csv" && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const rows = await eventStore.listenerExportRows({
+        username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
+        search: url.searchParams.get("search") || ""
+      });
+      response.writeHead(200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="listeners-${new Date().toISOString().slice(0, 10)}.csv"`
+      });
+      response.end(listenerRowsToCsv(rows));
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -2116,6 +2205,20 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, await importResolvedListenerAvatars(body.items));
     } catch (error) {
       sendJson(response, 400, { error: shortError(error) });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/avatars/compact" && request.method === "POST") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const body = await readBody(request);
+      sendJson(response, 200, await compactListenerAvatars({
+        limit: Number(body.limit || 25),
+        after: String(body.after || "")
+      }));
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
     }
     return;
   }
@@ -2322,7 +2425,10 @@ const server = createServer(async (request, response) => {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="${session.username}-live.csv"`
       });
-      response.end(session.toCsv());
+      const csv = session.recordingEnabled && eventStore.status().ready
+        ? sessionRowsToCsv(await eventStore.sessionExportRows(session.id))
+        : session.toCsv();
+      response.end(csv);
       return;
     }
 
@@ -2407,6 +2513,9 @@ async function restorePersistentSessions() {
     });
     sessions.set(session.id, session);
     if (EXTERNAL_COLLECTOR_ENABLED) {
+      session.lastCollectorAt = item.lastCollectorAt ? new Date(item.lastCollectorAt).getTime() : null;
+      session.lastCollectorHeartbeatAt = session.lastCollectorAt;
+      session.lastCollectorEventAt = item.lastCollectorEventAt ? new Date(item.lastCollectorEventAt).getTime() : null;
       prepareCollectorSession(session);
     } else {
       session.start();
@@ -2493,7 +2602,7 @@ async function importResolvedListenerAvatars(rawItems) {
     if (updated && imageBase64 && /^image\/[a-z0-9.+-]+$/i.test(mime)) {
       const imageData = Buffer.from(imageBase64, "base64");
       if (imageData.length > 0 && imageData.length <= 1024 * 1024) {
-        cached = await eventStore.storeListenerAvatarData(targetUserId, { data: imageData, mime });
+        cached = await eventStore.storeListenerAvatarData(targetUserId, await optimizeAvatarImage(imageData));
       }
     }
     items.push({ userId, uniqueId, targetUserId, ok: Boolean(updated), cached });
@@ -2522,12 +2631,35 @@ async function cacheListenerAvatar(userId, avatarUrl) {
     if (!mime.startsWith("image/")) return false;
     const data = Buffer.from(await response.arrayBuffer());
     if (!data.length || data.length > 1024 * 1024) return false;
-    return await eventStore.storeListenerAvatarData(id, { data, mime });
+    return await eventStore.storeListenerAvatarData(id, await optimizeAvatarImage(data));
   } catch {
     return false;
   } finally {
     avatarCachePending.delete(id);
   }
+}
+
+async function compactListenerAvatars({ limit = 25, after = "" } = {}) {
+  const candidates = await eventStore.avatarCompactionCandidates({ limit, after });
+  let updated = 0;
+  let savedBytes = 0;
+  for (const candidate of candidates) {
+    try {
+      const optimized = await optimizeAvatarImage(candidate.data);
+      if (optimized.data.length >= candidate.data.length) continue;
+      if (await eventStore.replaceListenerAvatarData(candidate.userId, optimized)) {
+        updated += 1;
+        savedBytes += candidate.data.length - optimized.data.length;
+      }
+    } catch {}
+  }
+  return {
+    scanned: candidates.length,
+    updated,
+    savedBytes,
+    nextAfter: candidates.at(-1)?.userId || "",
+    done: candidates.length < Math.min(50, Math.max(1, Number(limit || 25)))
+  };
 }
 
 async function fetchTikToolsProfilesByUserIds(userIds, apiKey) {

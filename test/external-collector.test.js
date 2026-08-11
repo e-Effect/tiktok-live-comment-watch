@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeCollectorEvent } from "../lib/external-collector.js";
+import { normalizeCollectorEvent, shouldRotateCollectorSession } from "../lib/external-collector.js";
 
 test("normalizes TikFinity chat envelopes", () => {
   const event = normalizeCollectorEvent({
@@ -32,4 +32,17 @@ test("turns terminal control and room events into streamEnd", () => {
 test("drops unknown and malformed events", () => {
   assert.equal(normalizeCollectorEvent(null), null);
   assert.equal(normalizeCollectorEvent({ event: "giftPanelUpdate", data: {} }), null);
+});
+
+test("extracts room id and event time for live-session boundaries", () => {
+  const event = normalizeCollectorEvent({ event: "chat", data: { msgId: "1", roomId: "room-2", createTime: 1_786_400_000 } });
+  assert.equal(event.roomId, "room-2");
+  assert.equal(event.at, 1_786_400_000_000);
+});
+
+test("rotates collector sessions only for a new room or a long event gap", () => {
+  const hour = 60 * 60 * 1000;
+  assert.equal(shouldRotateCollectorSession({ currentRoomId: "1", incomingRoomId: "1", lastEventAt: 10 * hour, eventAt: 11 * hour }), false);
+  assert.equal(shouldRotateCollectorSession({ currentRoomId: "1", incomingRoomId: "2", lastEventAt: 10 * hour, eventAt: 11 * hour }), true);
+  assert.equal(shouldRotateCollectorSession({ currentRoomId: "1", incomingRoomId: "", lastEventAt: 10 * hour, eventAt: 13 * hour }), true);
 });

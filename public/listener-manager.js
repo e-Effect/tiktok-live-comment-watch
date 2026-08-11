@@ -13,6 +13,7 @@ el.loginForm.addEventListener("submit", async (event) => {
 });
 el.logout.addEventListener("click", logout);
 el.backfillAvatars.addEventListener("click", backfillAvatars);
+el.compactAvatars.addEventListener("click", compactAvatars);
 el.refresh.addEventListener("click", refreshAll);
 el.exportCsv.addEventListener("click", exportCsv);
 el.search.addEventListener("input", debounce(refreshListeners, 300));
@@ -82,6 +83,37 @@ async function backfillAvatars() {
       ? `アイコン ${result.updated}人取得・${result.failed}人失敗`
       : "未取得アイコンはありません";
     await refreshAll();
+  } catch (error) {
+    showConnectionError(error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function compactAvatars() {
+  const button = el.compactAvatars;
+  button.disabled = true;
+  let after = "";
+  let scanned = 0;
+  let updated = 0;
+  let savedBytes = 0;
+  try {
+    for (let batch = 0; batch < 1000; batch += 1) {
+      el.connectionStatus.textContent = `アイコン軽量化中… ${number.format(scanned)}件確認`;
+      const response = await api("/api/listeners/avatars/compact", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({limit:25,after})
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "アイコンを軽量化できませんでした");
+      scanned += Number(result.scanned || 0);
+      updated += Number(result.updated || 0);
+      savedBytes += Number(result.savedBytes || 0);
+      after = result.nextAfter || "";
+      if (result.done || !result.scanned) break;
+    }
+    el.connectionStatus.textContent = `アイコン ${number.format(updated)}件軽量化・${(savedBytes / 1024 / 1024).toFixed(1)}MB削減`;
   } catch (error) {
     showConnectionError(error);
   } finally {
@@ -240,9 +272,12 @@ function debounce(fn,ms){let id;return(...args)=>{clearTimeout(id);id=setTimeout
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"})[c])}
 function escapeAttr(value){return escapeHtml(value).replace(/`/g,"&#096;")}
 
-function exportCsv(){
-  const rows=[["ユーザーID","TikTok ID","表示名","来訪回数","コメント数","ギフト個数","ギフトコイン","シェア回数","スーパーファン","初回来訪","最終来訪","タグ","メモ"]];
-  state.items.forEach(i=>rows.push([i.userId,i.uniqueId,i.nickname,i.visits,i.comments,i.gifts,i.coins,i.shares,i.isSuperFan?"はい":"",new Date(i.firstSeenAt||0).toISOString(),new Date(i.lastSeenAt||0).toISOString(),(i.tags||[]).join(" / "),i.notes||""]));
-  const csv="\uFEFF"+rows.map(r=>r.map(v=>`"${String(v??"").replaceAll('"','""')}"`).join(",")).join("\r\n");
-  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download=`listeners-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);
+async function exportCsv(){
+  const button=el.exportCsv;button.disabled=true;el.connectionStatus.textContent="全件CSVを作成中…";
+  try{
+    const query=new URLSearchParams();const username=cleanUsername();if(username)query.set("username",username);const search=el.search.value.trim();if(search)query.set("search",search);
+    const response=await api(`/api/listeners/export.csv?${query}`);if(!response.ok)throw new Error("CSVを作成できませんでした");
+    const url=URL.createObjectURL(await response.blob());const a=document.createElement("a");a.href=url;a.download=`listeners-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);
+    el.connectionStatus.textContent="全件CSVを保存しました";el.connectionStatus.classList.remove("error");
+  }catch(error){showConnectionError(error)}finally{button.disabled=false}
 }

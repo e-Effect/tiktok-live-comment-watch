@@ -1872,7 +1872,13 @@ async function refreshServerState() {
     if (!response.ok || !body.ok) throw new Error("health");
     const provider = body.provider?.label || (body.provider?.paidApiReady ? "Tik.tools" : "標準接続");
     const storage = body.database?.ready ? "長期保存" : "一時保存";
-    serverState.textContent = `サーバー ${formatDuration(body.uptimeSeconds)}・${formatNumber(body.sessions)}接続・${provider}・${storage}`;
+    const collectorLabels = {
+      receiving: "LIVEイベント受信中",
+      waiting: "note PC接続済み・イベント待機中",
+      offline: "note PCオフライン"
+    };
+    const collector = body.collector?.enabled ? `・${collectorLabels[body.collector.state] || "note PC確認中"}` : "";
+    serverState.textContent = `サーバー ${formatDuration(body.uptimeSeconds)}・${formatNumber(body.sessions)}接続・${provider}・${storage}${collector}`;
   } catch {
     serverState.textContent = "サーバー確認不可";
   }

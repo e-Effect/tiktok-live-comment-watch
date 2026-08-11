@@ -108,12 +108,23 @@ while ($true) {
             $memory = New-Object System.IO.MemoryStream
             do {
                 $segment = [System.ArraySegment[byte]]::new($buffer)
-                $result = $socket.ReceiveAsync($segment, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+                $receiveTask = $socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
+                while (-not $receiveTask.Wait(60000)) {
+                    [void](Send-CollectorPayload -Config $config -Events @() -Heartbeat $true)
+                    while ($pending.Count -gt 0) {
+                        if (-not (Flush-PendingEvents -Config $config)) { break }
+                    }
+                    Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; waiting for events.' -PendingCount $pending.Count
+                }
+                $result = $receiveTask.GetAwaiter().GetResult()
                 if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
                 $memory.Write($buffer, 0, $result.Count)
             } while (-not $result.EndOfMessage)
 
-            if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
+            if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                $memory.Dispose()
+                break
+            }
             $raw = [Text.Encoding]::UTF8.GetString($memory.ToArray())
             $memory.Dispose()
             try {

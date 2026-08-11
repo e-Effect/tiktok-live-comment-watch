@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EventStore } from "../lib/event-store.js";
+import { EventStore, rangeStart } from "../lib/event-store.js";
 
 test("gift ranking converts database totals to numbers", async () => {
   const store = new EventStore();
@@ -30,6 +30,26 @@ test("gift ranking converts database totals to numbers", async () => {
   assert.equal(rows[0].count, 12);
   assert.equal(rows[0].diamonds, 12);
   assert.equal(typeof rows[0].lastGiftAt, "number");
+});
+
+test("today starts at midnight in Japan even when the server runs in UTC", () => {
+  assert.equal(rangeStart("today", new Date("2026-08-11T00:30:00Z")).toISOString(), "2026-08-10T15:00:00.000Z");
+  assert.equal(rangeStart("today", new Date("2026-08-10T14:00:00Z")).toISOString(), "2026-08-09T15:00:00.000Z");
+});
+
+test("listener export returns every matching row without the screen limit", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.doesNotMatch(sql, /LIMIT\s+250/i);
+      assert.deepEqual(values, ["streamer", "viewer"]);
+      return { rows: [{ user_id: "1", latest_unique_id: "viewer", latest_nickname: "Viewer", visits: "2" }] };
+    }
+  };
+  const rows = await store.listenerExportRows({ username: "streamer", search: "viewer" });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].visits, 2);
 });
 
 test("visit history counts distinct live room ids instead of re-entries", async () => {
