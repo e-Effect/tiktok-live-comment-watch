@@ -1609,8 +1609,8 @@ function rebuildRealtimeLists(snapshot, cache) {
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 30);
   snapshot.topWatchers = [...users]
-    .filter((user) => Number(user.watchSeconds || 0) > 0)
-    .sort((a, b) => Number(b.watchSeconds || 0) - Number(a.watchSeconds || 0)
+    .filter((user) => Number(user.confirmedWatchSeconds || 0) > 0)
+    .sort((a, b) => Number(b.confirmedWatchSeconds || 0) - Number(a.confirmedWatchSeconds || 0)
       || Number(b.comments || 0) - Number(a.comments || 0)
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 30);
@@ -1623,7 +1623,7 @@ function rebuildRealtimeLists(snapshot, cache) {
   snapshot.currentViewerRanking = [...users]
     .filter((user) => user.isCurrentlyRanked)
     .sort((a, b) => Number(a.currentViewerRank || Number.MAX_SAFE_INTEGER) - Number(b.currentViewerRank || Number.MAX_SAFE_INTEGER)
-      || Number(b.watchSeconds || 0) - Number(a.watchSeconds || 0)
+      || Number(b.confirmedWatchSeconds || 0) - Number(a.confirmedWatchSeconds || 0)
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 100);
   snapshot.visitors = [...users]
@@ -1666,10 +1666,18 @@ function updateCachedWatchTimes(session) {
     if (!user.firstSeenAt) continue;
     session.userCache.set(userId, {
       ...user,
-      watchSeconds: Math.floor(Math.max(0, now - Number(user.firstSeenAt)) / 1000)
+      watchSeconds: Math.floor(Math.max(0, now - Number(user.firstSeenAt)) / 1000),
+      confirmedWatchSeconds: clientConfirmedWatchSeconds(user, now)
     });
   }
   rebuildRealtimeLists(session.snapshot, session.userCache);
+}
+
+function clientConfirmedWatchSeconds(user, now = Date.now()) {
+  let milliseconds = Math.max(0, Number(user?.confirmedWatchMilliseconds || 0));
+  const previousAt = Math.max(0, Number(user?.rankedPresenceUpdatedAt || 0));
+  if (user?.isCurrentlyRanked && previousAt > 0 && now >= previousAt) milliseconds += now - previousAt;
+  return Math.floor(milliseconds / 1000);
 }
 
 function renderSnapshot(snapshot, options = {}) {
@@ -1936,7 +1944,7 @@ function renderReport(snapshot) {
     ${statusCards}
     <article><span>コメント最多</span><strong>${escapeHtml(topCommenter?.nickname || topCommenter?.userId || "-")}</strong><small>${formatNumber(topCommenter?.comments || 0)}件</small></article>
     <article><span>ギフト最多</span><strong>${escapeHtml(topGifter?.nickname || topGifter?.userId || "-")}</strong><small>${formatNumber(topGifter?.diamonds || 0)}ダイヤ</small></article>
-    <article><span>最長滞在</span><strong>${escapeHtml(topWatcher?.nickname || topWatcher?.userId || "-")}</strong><small>${formatDuration(topWatcher?.watchSeconds || 0)}</small></article>
+    <article><span>最長確認滞在</span><strong>${escapeHtml(topWatcher?.nickname || topWatcher?.userId || "-")}</strong><small>${formatDuration(topWatcher?.confirmedWatchSeconds || 0)}</small></article>
     <article><span>現視聴15分無言</span><strong>${formatNumber(silentCount)}</strong><small>人</small></article>
     <article><span>シェア</span><strong>${formatNumber(shareCount)}</strong><small>回</small></article>
     <article><span>本日フォロー</span><strong>${formatNumber(followedCount)}</strong><small>人</small></article>
@@ -1996,7 +2004,7 @@ function commentVisitMeta(comment) {
 }
 
 function renderWatchers(users) {
-  renderRankList(watcherList, users, "まだ滞在時間はありません。", (user) => formatDuration(user.watchSeconds));
+  renderRankList(watcherList, users, "ランキングで確認できた滞在時間はまだありません。", (user) => `合計 ${formatDuration(user.confirmedWatchSeconds)}`);
 }
 
 function renderSilentLongWatchers(users) {

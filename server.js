@@ -8,6 +8,7 @@ import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { isSilentWatcher, silentWatcherPresenceMode } from "./lib/silent-watchers.js";
+import { confirmedRankedWatchSeconds, updateRankedPresence } from "./lib/ranked-watch.js";
 import {
   heartMeLevelFromEvent,
   heartMeStateFromUser,
@@ -746,6 +747,10 @@ class LiveSession extends EventEmitter {
       lastVisitAt: null,
       previousVisitAt: null,
       watchSeconds: 0,
+      confirmedWatchSeconds: 0,
+      confirmedWatchMilliseconds: 0,
+      rankedPresenceUpdatedAt: null,
+      rankedVisitCount: 0,
       followedToday: false,
       followedAt: null,
       isFollowingHost: null,
@@ -783,33 +788,38 @@ class LiveSession extends EventEmitter {
       [...this.currentViewerIds].map((userId) => [userId, this.userStats.get(userId)?.currentViewerRank ?? null])
     );
 
-    for (const user of this.userStats.values()) {
-      user.isCurrentlyRanked = false;
-      user.currentViewerRank = null;
-    }
-    this.currentViewerIds.clear();
-
+    const rankedUsers = [];
     entries.forEach((entry, index) => {
       const person = personFromRankedViewer(entry);
       if (!person) return;
       this.markSeen(person, at, "viewer_ranking");
       const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
       user.lastSeenAt = Math.max(user.lastSeenAt, at);
-      user.isCurrentlyRanked = true;
-      user.currentViewerRank = rankedViewerPosition(entry, index);
       user.currentViewerRankedAt = at;
-      this.currentViewerIds.add(user.userId);
+      rankedUsers.push({ user, rank: rankedViewerPosition(entry, index) });
       this.userStats.set(user.userId, user);
     });
+
+    const rankedUserIds = new Set(rankedUsers.map(({ user }) => user.userId));
+    for (const user of this.userStats.values()) {
+      updateRankedPresence(user, rankedUserIds.has(user.userId), at);
+      user.currentViewerRank = null;
+    }
+    this.currentViewerIds.clear();
+    for (const { user, rank } of rankedUsers) {
+      user.currentViewerRank = rank;
+      this.currentViewerIds.add(user.userId);
+    }
 
     this.currentViewerRankUpdatedAt = at;
     this.viewerStats.currentRanked = this.currentViewerIds.size;
     this.viewerStats.rankUpdatedAt = at;
-    const users = [...this.currentViewerIds]
+    const changedUsers = [...this.currentViewerIds]
       .map((userId) => this.userStats.get(userId))
       .filter((user) => user && previousRanks.get(user.userId) !== user.currentViewerRank);
     const removedUserIds = [...previousRanks.keys()].filter((userId) => !this.currentViewerIds.has(userId));
-    return { count: this.currentViewerIds.size, users, removedUserIds };
+    const removedUsers = removedUserIds.map((userId) => this.userStats.get(userId)).filter(Boolean);
+    return { count: this.currentViewerIds.size, users: [...changedUsers, ...removedUsers], removedUserIds };
   }
 
   summary(message = "") {
@@ -874,8 +884,8 @@ class LiveSession extends EventEmitter {
       .sort((a, b) => b.diamonds - a.diamonds || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
     const topWatchers = [...users]
-      .filter((user) => user.watchSeconds > 0)
-      .sort((a, b) => b.watchSeconds - a.watchSeconds || b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
+      .filter((user) => user.confirmedWatchSeconds > 0)
+      .sort((a, b) => b.confirmedWatchSeconds - a.confirmedWatchSeconds || b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
     const silentLongWatchers = [...users]
       .filter((user) => isSilentWatcher(user))
@@ -884,7 +894,7 @@ class LiveSession extends EventEmitter {
       .slice(0, 100);
     const currentViewerRanking = [...users]
       .filter((user) => user.isCurrentlyRanked)
-      .sort((a, b) => a.currentViewerRank - b.currentViewerRank || b.watchSeconds - a.watchSeconds || b.lastSeenAt - a.lastSeenAt)
+      .sort((a, b) => a.currentViewerRank - b.currentViewerRank || b.confirmedWatchSeconds - a.confirmedWatchSeconds || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 100);
     const visitors = [...users]
       .filter((user) => user.hasJoined)
@@ -946,6 +956,7 @@ class LiveSession extends EventEmitter {
     let total = 0;
     for (const user of this.userStats.values()) {
       user.watchSeconds = Math.floor(Math.max(0, now - user.firstSeenAt) / 1000);
+      user.confirmedWatchSeconds = confirmedRankedWatchSeconds(user, now);
       total += user.watchSeconds;
     }
     this.viewerStats.estimatedWatchSeconds = total;
