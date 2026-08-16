@@ -12,9 +12,19 @@ test("visitor history shows visit count and previous visit date without legacy w
 test("only confirmed first visits receive the yellow first-time style", () => {
   assert.match(clientSource, /comment\.visitHistoryKnown\s*&&\s*Number\(comment\.visitCount \|\| 0\) === 1/);
   assert.match(clientSource, /historyKnown\s*&&\s*visits === 1 \? "first-visit-row"/);
+  assert.match(clientSource, /gift-card \$\{commentVisitClass\(gift\)\}/);
+  assert.match(clientSource, /share-card \$\{commentVisitClass\(share\)\}/);
   assert.match(clientSource, /履歴確認中/);
   assert.match(clientSource, /履歴未確認/);
   assert.match(clientSource, /refreshEventDisplayState\(snapshot\.comments, cache\)/);
+});
+
+test("comment, gift, share, and visitor history render compact listener avatars", () => {
+  assert.match(clientSource, /function renderEventAvatar\(user\)/);
+  assert.match(clientSource, /loading="lazy"/);
+  assert.match(clientSource, /referrerpolicy="no-referrer"/);
+  assert.equal((clientSource.match(/\$\{renderEventAvatar\(/g) || []).length, 4);
+  assert.match(clientSource, /avatarUrl: event\.avatarUrl \|\| user\.avatarUrl \|\| ""/);
 });
 
 test("Heart Me colors are based on saved cross-live history", () => {

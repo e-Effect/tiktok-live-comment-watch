@@ -356,6 +356,9 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .comment p { margin: 7px 0 0; line-height: 1.5; word-break: break-word; }
 .comment.first-visit-comment { background: #fff8d7; box-shadow: inset 4px 0 0 #e2b600; }
 .visitor-row.first-visit-row { background: #fff8d7; box-shadow: inset 4px 0 0 #e2b600; }
+.event-avatar { position: relative; display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; overflow: hidden; border: 1px solid #d8deea; border-radius: 50%; background: #edf1f7; color: #536078; font-size: .76rem; font-weight: 900; }
+.event-avatar > span { line-height: 1; }
+.event-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #edf1f7; }
 .comment-side { display: grid; justify-items: end; gap: 2px; margin-left: auto; flex: 0 0 auto; }
 .comment-side .time { margin-left: 0; }
 .comment-visit-meta { color: var(--muted); font-size: .75rem; font-weight: 900; white-space: nowrap; }

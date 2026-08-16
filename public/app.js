@@ -1661,6 +1661,7 @@ function refreshEventDisplayState(events, cache) {
     if (!user) return event;
     return {
       ...event,
+      avatarUrl: event.avatarUrl || user.avatarUrl || "",
       followedToday: Boolean(user.followedToday),
       isFollowingHost: user.isFollowingHost,
       followStatus: user.followStatus,
@@ -1994,6 +1995,7 @@ function renderComments(comments) {
   commentList.innerHTML = comments.map((comment) => `
     <article class="comment ${commentVisitClass(comment)}">
       <header>
+        ${renderEventAvatar(comment)}
         <span class="name">${renderDecoratedName(comment)}</span>
         <span class="comment-side">
           ${commentVisitMeta(comment)}
@@ -2084,10 +2086,14 @@ function renderGiftHistory(gifts) {
     return;
   }
   giftHistory.innerHTML = gifts.map((gift) => `
-    <article class="comment gift-card">
+    <article class="comment gift-card ${commentVisitClass(gift)}">
       <header>
+        ${renderEventAvatar(gift)}
         <span class="name">${renderDecoratedName(gift)}</span>
-        <span class="time">${formatClock(gift.at)}</span>
+        <span class="comment-side">
+          ${commentVisitMeta(gift)}
+          <span class="time">${formatClock(gift.at)}</span>
+        </span>
       </header>
       <p>
         ${escapeHtml(gift.giftName || "ギフト")}
@@ -2106,10 +2112,14 @@ function renderShareHistory(shares) {
     return;
   }
   shareHistory.innerHTML = shares.map((share) => `
-    <article class="comment share-card">
+    <article class="comment share-card ${commentVisitClass(share)}">
       <header>
+        ${renderEventAvatar(share)}
         <span class="name">${renderDecoratedName(share)}</span>
-        <span class="time">${formatClock(share.at)}</span>
+        <span class="comment-side">
+          ${commentVisitMeta(share)}
+          <span class="time">${formatClock(share.at)}</span>
+        </span>
       </header>
       <p>${eventSourceBadge(share)}シェア</p>
     </article>
@@ -2140,6 +2150,7 @@ function renderVisitorHistory(visitors) {
     return `
       <div class="user-row visitor-row ${historyKnown && visits === 1 ? "first-visit-row" : ""}">
         <span class="visit-badge">${escapeHtml(visitSourceLabel(user.visitSource))}</span>
+        ${renderEventAvatar(user)}
         <span class="name">${renderDecoratedName(user)}</span>
         <span class="visit-meta">
           <strong>${visitLabel}</strong>
@@ -2329,6 +2340,16 @@ function setStatus(status, message, mode) {
 function renderDecoratedName(user) {
   const name = escapeHtml(user.nickname || user.userId);
   return `${heartMeMark(user)}${followStatusMark(user)}${todayFollowMark(user)}${name}`;
+}
+
+function renderEventAvatar(user) {
+  const name = String(user?.nickname || user?.uniqueId || user?.userId || "?").trim();
+  const fallback = Array.from(name)[0] || "?";
+  const avatarUrl = String(user?.avatarUrl || "").trim();
+  const image = /^https:\/\//i.test(avatarUrl)
+    ? `<img src="${escapeHtml(avatarUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    : "";
+  return `<span class="event-avatar" aria-hidden="true"><span>${escapeHtml(fallback)}</span>${image}</span>`;
 }
 
 function heartMeMark(user) {
