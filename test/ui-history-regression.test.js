@@ -7,6 +7,16 @@ const clientSource = await readFile(new URL("../public/app.js", import.meta.url)
 test("visitor history shows visit count and previous visit date without legacy wording", () => {
   assert.doesNotMatch(clientSource, /再訪・累計/);
   assert.match(clientSource, /`\$\{formatNumber\(visits\)\}回目\$\{previousVisit \? `・\$\{previousVisit\}` : ""\}`/);
+  assert.match(clientSource, /previousAt \? `（\$\{formatVisitDate\(previousAt\)\}）` : ""/);
+  assert.doesNotMatch(clientSource, /前回 \$\{formatVisitDate/);
+});
+
+test("visitor rows omit source badges and decorated names omit follow-status F marks", () => {
+  assert.doesNotMatch(clientSource, /visit-badge/);
+  assert.doesNotMatch(clientSource, /function visitSourceLabel/);
+  assert.doesNotMatch(clientSource, /function followStatusMark/);
+  assert.doesNotMatch(clientSource, /follow-status-mark/);
+  assert.match(clientSource, /return `\$\{heartMeMark\(user\)\}\$\{todayFollowMark\(user\)\}\$\{name\}`/);
 });
 
 test("only confirmed first visits receive the yellow first-time style", () => {

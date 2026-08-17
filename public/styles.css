@@ -375,7 +375,6 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .visit-meta { margin-left: auto; text-align: right; white-space: nowrap; }
 .visit-meta strong, .visit-meta small { display: block; }
 .visit-meta small { color: var(--muted); font-size: .74rem; }
-.visit-badge { border-radius: 999px; background: #e7eefb; color: #31558b; font-size: .72rem; font-weight: 900; padding: 3px 7px; }
 .visitor-demo-tools { display: flex; align-items: center; gap: 8px; margin: -2px 0 9px; }
 .visitor-demo-tools button { background: var(--soft); color: var(--ink); padding: 7px 10px; font-size: .78rem; }
 .visitor-demo-tools button.active { background: var(--accent); color: var(--accent-ink); }
@@ -418,7 +417,7 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .layout-editing .layout-card { outline: 2px dashed rgba(0, 169, 154, .45); outline-offset: 2px; cursor: grab; }
 .layout-card.dragging { opacity: .45; }
 
-.heart-mark, .follow-status-mark, .follow-mark {
+.heart-mark, .follow-mark {
   display: inline-grid;
   place-items: center;
   width: 18px;
@@ -436,8 +435,6 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .heart-new-today { background: #22c55e; color: #062b13; }
 .heart-active { background: #ef4444; color: #fff; }
 .heart-inactive { background: #111827; color: #fff; }
-.follow-status-mark { border-radius: 5px; background: #e7eefb; color: #31558b; }
-.follow-status-mark.not-following { background: #f1f3f4; color: #9ca8ae; }
 .follow-mark { background: var(--accent); color: var(--accent-ink); }
 .source-badge { display: inline-block; margin-right: 6px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: .7rem; font-weight: 900; padding: 2px 6px; vertical-align: 1px; }
 .silent-row.silent-yellow { background: #fff4bd; }

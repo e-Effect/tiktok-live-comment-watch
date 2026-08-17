@@ -2020,7 +2020,7 @@ function commentVisitMeta(comment) {
   if (count <= 0) return "";
   if (count === 1) return `<span class="comment-visit-meta first">初見</span>`;
   const previousAt = comment.previousVisitAt || comment.firstVisitAt;
-  const previousLabel = previousAt ? `（前回 ${formatVisitDate(previousAt)}）` : "";
+  const previousLabel = previousAt ? `（${formatVisitDate(previousAt)}）` : "";
   return `<span class="comment-visit-meta">${formatNumber(count)}回目${previousLabel}</span>`;
 }
 
@@ -2149,7 +2149,6 @@ function renderVisitorHistory(visitors) {
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
       <div class="user-row visitor-row ${historyKnown && visits === 1 ? "first-visit-row" : ""}">
-        <span class="visit-badge">${escapeHtml(visitSourceLabel(user.visitSource))}</span>
         ${renderEventAvatar(user)}
         <span class="name">${renderDecoratedName(user)}</span>
         <span class="visit-meta">
@@ -2212,22 +2211,6 @@ function visitorDemoComments() {
     { ...firstVisit, at: Date.now(), text: "はじめまして！" },
     { ...returnVisit, at: Date.now() - 15_000, text: "また来ました！" }
   ];
-}
-
-function visitSourceLabel(source) {
-  const labels = {
-    member: "入室",
-    super_fan_join: "会員入室",
-    viewer_ranking: "視聴中",
-    comment: "コメント",
-    gift: "ギフト",
-    share: "シェア",
-    follow: "フォロー",
-    like: "いいね",
-    subscribe: "登録",
-    heart_me: "ハート"
-  };
-  return labels[source] || "確認";
 }
 
 function scheduleTargetGiftRankingRefresh() {
@@ -2339,7 +2322,7 @@ function setStatus(status, message, mode) {
 
 function renderDecoratedName(user) {
   const name = escapeHtml(user.nickname || user.userId);
-  return `${heartMeMark(user)}${followStatusMark(user)}${todayFollowMark(user)}${name}`;
+  return `${heartMeMark(user)}${todayFollowMark(user)}${name}`;
 }
 
 function renderEventAvatar(user) {
@@ -2372,16 +2355,6 @@ function heartMeMark(user) {
   const title = `${titleMap[status]}${level > 0 ? ` Lv.${level}` : ""}`;
   const symbol = status === "unknown" ? "♡" : "♥";
   return `<span class="heart-mark heart-${status}" title="${escapeHtml(title)}">${symbol}</span>`;
-}
-
-function followStatusMark(user) {
-  if (user.isFollowingHost === true) {
-    return `<span class="follow-status-mark following" title="配信主をフォロー中">F</span>`;
-  }
-  if (user.isFollowingHost === false) {
-    return `<span class="follow-status-mark not-following" title="配信主を未フォロー">F</span>`;
-  }
-  return "";
 }
 
 function todayFollowMark(user) {
