@@ -220,16 +220,22 @@ async function openDetail(userId) {
 function renderDetail(data) {
   const item = data.listener;
   const totals = (data.stats||[]).reduce((a,s)=>({visits:a.visits+s.visitCount,comments:a.comments+s.commentCount,gifts:a.gifts+s.giftCount,coins:a.coins+s.giftCoins}),{visits:0,comments:0,gifts:0,coins:0});
+  const stampTotal = (data.stamps||[]).reduce((sum, stamp)=>sum+Number(stamp.quantity||1),0);
+  const receiptTotal = (data.receiptPrints||[]).length;
   el.detailContent.innerHTML = `
     <div class="detail-hero">${avatar(item)}<div><h2>${escapeHtml(item.nickname||item.uniqueId||item.userId)}</h2><p>${item.uniqueId?`@${escapeHtml(item.uniqueId)}`:""}</p><p>ユーザーID: ${escapeHtml(item.userId)}</p></div></div>
-    <div class="detail-metrics">${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("コイン",totals.coins)}</div>
+    <div class="detail-metrics">${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("コイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
     <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
+    <section class="detail-section"><h3>スタンプカード履歴</h3><div>${(data.stamps||[]).map(s=>`<div class="history-item"><time>${formatDate(s.stampedAt)}</time><strong>${escapeHtml(stampLabel(s.stampType))} × ${number.format(s.quantity||1)}</strong>${s.note?`<p>${escapeHtml(s.note)}</p>`:""}</div>`).join("")||'<p class="empty">スタンプ履歴なし</p>'}</div></section>
+    <section class="detail-section"><h3>レシート印刷履歴</h3><div>${(data.receiptPrints||[]).map(p=>`<div class="history-item"><time>${formatDate(p.printedAt)}</time><strong>${escapeHtml(p.giftName||"ギフト")} × ${number.format(p.count||1)}</strong><p>${number.format(p.coins||0)}コイン${p.templateId?`・テンプレート ${escapeHtml(p.templateId)}`:""}</p></div>`).join("")||'<p class="empty">レシート印刷履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>ギフト内訳</h3><div class="gift-grid">${(data.gifts||[]).map(g=>`<div class="gift-item"><strong>${escapeHtml(g.giftName||g.giftId||"ギフト")}</strong><small>${number.format(g.count||0)}個・${number.format(g.coins||0)}コイン</small></div>`).join("")||'<p class="empty">ギフト履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>最近のコメント</h3><div>${(data.comments||[]).map(c=>`<div class="history-item"><time>${formatDate(c.at)}</time><p>${escapeHtml(c.text||"")}</p></div>`).join("")||'<p class="empty">コメント履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>過去に確認した名前</h3><div>${(data.aliases||[]).map(a=>`<div class="history-item"><strong>${escapeHtml(a.nickname||"")}</strong> <small>${a.uniqueId?`@${escapeHtml(a.uniqueId)}`:""}</small><p>${formatDate(a.firstSeenAt)} ～ ${formatDate(a.lastSeenAt)}</p></div>`).join("")||'<p class="empty">別名履歴なし</p>'}</div></section>`;
   hydrateAvatars(el.detailContent);
   document.getElementById("detailForm")?.addEventListener("submit", saveDetail);
 }
+
+function stampLabel(type){return({visit:"来店スタンプ",action:"応援スタンプ",legacy:"過去分スタンプ",standard:"スタンプ"})[type]||type||"スタンプ"}
 
 async function saveDetail(event) {
   event.preventDefault();
