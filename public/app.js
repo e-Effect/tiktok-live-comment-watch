@@ -2144,7 +2144,7 @@ function renderVisitorHistory(visitors) {
     const visitLabel = !historyKnown
       ? user.visitHistoryStatus === "checking" ? "履歴確認中" : "履歴未確認"
       : visits > 1
-      ? `${formatNumber(visits)}回目${previousVisit ? `・${previousVisit}` : ""}`
+      ? `${formatNumber(visits)}回目${previousVisit ? `（${previousVisit}）` : ""}`
       : "初見";
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
