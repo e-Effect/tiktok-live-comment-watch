@@ -221,6 +221,62 @@ test("does not import Count Pocket users as super fans", async () => {
   assert.deepEqual(result, { imported: 1, importedStamps: 0 });
 });
 
+test("shared stamp polling returns a small unchanged response", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql) {
+      if (/FROM shared_app_states/.test(sql)) {
+        return { rows: [{ state: { users: [{ id: "saved" }] }, revision: "27", sourceRevision: "26", superFanRevision: "3:1000", updatedAt: new Date(1000) }] };
+      }
+      if (/COUNT\(\*\) FILTER/.test(sql)) {
+        return { rows: [{ count: "3", changed: "1000" }] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const result = await store.sharedStampState({ revision: 27, superFanRevision: "3:1000" });
+
+  assert.deepEqual(result, {
+    unchanged: true,
+    revision: 27,
+    sourceRevision: 26,
+    superFanRevision: "3:1000",
+    updatedAt: 1000
+  });
+  assert.equal("state" in result, false);
+});
+
+test("receipt printing is idempotent by external event id", async () => {
+  const store = new EventStore();
+  const calls = [];
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (/SELECT user_id AS "userId"/.test(sql)) return { rows: [{ userId: "700000000000001" }] };
+      if (/INSERT INTO listeners/.test(sql)) return { rows: [] };
+      if (/INSERT INTO receipt_prints/.test(sql)) return { rows: [] };
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const result = await store.recordReceiptPrint({
+    userId: "700000000000001",
+    uniqueId: "listener",
+    eventId: "gift-event-1",
+    giftName: "Rose",
+    count: 1,
+    coins: 1
+  });
+
+  assert.equal(result.recorded, false);
+  assert.equal(result.duplicate, true);
+  assert.match(calls.at(-1).sql, /ON CONFLICT \(external_event_id\)/);
+  assert.equal(calls.at(-1).values.at(-1), "gift-event-1");
+});
+
 test("stores a profile icon resolved for an existing listener", async () => {
   const store = new EventStore();
   store.ready = true;

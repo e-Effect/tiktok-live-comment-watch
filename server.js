@@ -2149,6 +2149,52 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/integrations/stamp-state") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      if (request.method === "GET") {
+        sendJson(response, 200, await eventStore.sharedStampState({
+          revision: Number(url.searchParams.get("revision") ?? -1),
+          superFanRevision: String(url.searchParams.get("superFanRevision") || "")
+        }));
+        return;
+      }
+      if (request.method === "PUT") {
+        const body = await readBody(request);
+        sendJson(response, 200, await eventStore.updateSharedStampState(body.state, {
+          sourceRevision: Number(body.revision || 0),
+          source: String(body.source || "count-pocket")
+        }));
+        return;
+      }
+      sendJson(response, 405, { error: "GETまたはPUTを使用してください" });
+    } catch (error) {
+      sendJson(response, 400, { error: shortError(error) });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/integrations/superfans" && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const [items, revision] = await Promise.all([eventStore.superFans(), eventStore.superFanRevision()]);
+      sendJson(response, 200, { items, revision });
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/integrations/receipt-print" && request.method === "POST") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      sendJson(response, 200, await eventStore.recordReceiptPrint(await readBody(request)));
+    } catch (error) {
+      sendJson(response, 400, { error: shortError(error) });
+    }
+    return;
+  }
+
   if (url.pathname === "/api/listeners/summary") {
     if (!requireListenerAdmin(request, response)) return;
     try {
