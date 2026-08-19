@@ -19,6 +19,7 @@ import {
 import { LiveCueForwarder } from "./lib/livecue-forwarder.js";
 import { liveProviderInfo, loadLiveProvider } from "./lib/live-provider.js";
 import { normalizeCollectorEvent } from "./lib/external-collector.js";
+import { isFirstVisitClaim } from "./lib/first-visit-claim.js";
 import { shouldRotateCollectorSession } from "./lib/external-collector.js";
 import { optimizeAvatarImage } from "./lib/avatar-image.js";
 
@@ -140,6 +141,8 @@ class LiveSession extends EventEmitter {
     this.pendingVisitChecks = new Map();
     this.pendingDatabaseEvents = [];
     this.databaseFlushPromise = null;
+    this.firstVisitClaimPendingIds = new Set();
+    this.firstVisitClaimAlertedIds = new Set();
   }
 
   async start() {
@@ -578,6 +581,7 @@ class LiveSession extends EventEmitter {
     current.lastSeenAt = comment.at;
     this.userStats.set(current.userId, current);
     this.emitNormalized({ ...comment, type: "comment" });
+    this.checkFirstVisitClaim(comment).catch(() => {});
     this.broadcast("comment", {
       comment: this.decorateUserEvent(comment),
       summary: this.summary(),
@@ -670,6 +674,56 @@ class LiveSession extends EventEmitter {
       summary: this.summary(),
       users: [this.realtimeUser(user)]
     });
+  }
+
+  async checkFirstVisitClaim(comment) {
+    if (
+      !this.recordingEnabled
+      || comment.source === "initial"
+      || !isFirstVisitClaim(comment.text)
+    ) return false;
+
+    const identityKey = String(comment.userId || comment.uniqueId || "").toLowerCase();
+    if (
+      !identityKey
+      || this.firstVisitClaimPendingIds.has(identityKey)
+      || this.firstVisitClaimAlertedIds.has(identityKey)
+    ) return false;
+
+    this.firstVisitClaimPendingIds.add(identityKey);
+    try {
+      const history = await eventStore.priorListenerHistory({
+        sessionId: this.id,
+        roomId: this.roomId,
+        username: this.username,
+        userId: comment.userId,
+        uniqueId: comment.uniqueId,
+      });
+      if (!history.known || history.priorVisitCount < 1) return false;
+
+      this.firstVisitClaimAlertedIds.add(identityKey);
+      const alert = {
+        id: `first-claim:${comment.id || randomUUID()}`,
+        type: "first_visit_claim_alert",
+        userId: comment.userId,
+        uniqueId: comment.uniqueId || "",
+        nickname: comment.nickname || comment.uniqueId || "TikTokユーザー",
+        avatarUrl: comment.avatarUrl || "",
+        text: "初見ではありません",
+        at: comment.at || Date.now(),
+        source: comment.source || "live",
+        payload: {
+          originalComment: String(comment.text || "").slice(0, 300),
+          priorVisitCount: history.priorVisitCount,
+          lastPriorVisitAt: history.lastPriorVisitAt,
+        },
+      };
+      this.emitNormalized(alert);
+      this.broadcast("first_visit_claim_alert", { alert });
+      return true;
+    } finally {
+      this.firstVisitClaimPendingIds.delete(identityKey);
+    }
   }
 
   emitNormalized(event) {

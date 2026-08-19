@@ -122,6 +122,53 @@ test("does not label a visitor as first-time while the database is unavailable",
   assert.equal(summary.lastVisitAt, null);
 });
 
+test("prior listener history excludes the current live and matches stable IDs plus aliases", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /WITH identity_ids AS/);
+      assert.match(sql, /viewer_visits/);
+      assert.match(sql, /live_events/);
+      assert.match(sql, /<> \$4/);
+      assert.deepEqual(values, ["streamer", "700000000001", "viewer_name", "room-current"]);
+      return {
+        rows: [{
+          priorVisitCount: "4",
+          lastPriorVisitAt: new Date("2026-08-10T12:00:00Z"),
+        }],
+      };
+    },
+  };
+
+  const history = await store.priorListenerHistory({
+    sessionId: "session-current",
+    roomId: "room-current",
+    username: "streamer",
+    userId: "700000000001",
+    uniqueId: "@viewer_name",
+  });
+
+  assert.deepEqual(history, {
+    known: true,
+    priorVisitCount: 4,
+    lastPriorVisitAt: Date.parse("2026-08-10T12:00:00Z"),
+  });
+});
+
+test("prior listener history stays unconfirmed while the database is unavailable", async () => {
+  const store = new EventStore();
+  assert.deepEqual(await store.priorListenerHistory({
+    sessionId: "session-current",
+    username: "streamer",
+    userId: "viewer-id",
+  }), {
+    known: false,
+    priorVisitCount: 0,
+    lastPriorVisitAt: null,
+  });
+});
+
 test("shares one reconnect attempt and marks connection timeouts unavailable", async () => {
   const store = new EventStore({ connectionString: "postgres://example" });
   let attempts = 0;
