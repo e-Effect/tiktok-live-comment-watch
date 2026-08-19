@@ -372,6 +372,26 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .gift-score strong, .gift-score small, .gift-ranking-detail strong, .gift-ranking-detail small { display: block; }
 .gift-score small, .gift-card span, .gift-ranking-detail small { color: var(--muted); }
 .gift-card strong { margin: 0 6px; }
+.gift-event-body { display: flex; align-items: center; gap: 12px; margin-top: 9px; }
+.gift-artwork {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  flex: 0 0 68px;
+  overflow: hidden;
+  border: 1px solid #f0dfe3;
+  border-radius: 13px;
+  background: #fff6f8;
+  font-size: 1.7rem;
+}
+.gift-artwork > span { color: initial; }
+.gift-artwork img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; }
+.gift-event-info { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; }
+.gift-event-info > strong { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 1.06rem; }
+.gift-event-info > span { color: var(--ink); font-weight: 900; }
+.gift-event-info > small { flex-basis: 100%; color: var(--muted); font-weight: 800; }
 .visit-meta { margin-left: auto; text-align: right; white-space: nowrap; }
 .visit-meta strong, .visit-meta small { display: block; }
 .visit-meta small { color: var(--muted); font-size: .74rem; }

@@ -7,6 +7,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
+import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
 import { isSilentWatcher, silentWatcherPresenceMode } from "./lib/silent-watchers.js";
 import { confirmedRankedWatchSeconds, updateRankedPresence } from "./lib/ranked-watch.js";
 import {
@@ -1396,6 +1397,7 @@ function parseGiftEvent(data, knownHeartMeGiftIds = []) {
     avatarUrl: person.avatarUrl,
     giftId: String(data.giftId || extended.id || ""),
     giftName: data.giftName || extended.name || data.giftId || "ギフト",
+    giftImageUrl: giftImageUrlFromEvent(data, extended),
     repeatCount: Number(data.repeatCount || data.repeat_count || 1),
     diamondCount,
     isHeartMe: isHeartMeGift(data, extended, knownHeartMeGiftIds),
@@ -1748,6 +1750,7 @@ function addPreviewDemoEvents(session) {
     ...person,
     giftId: "preview-rose",
     giftName: "テストのバラ",
+    giftImageUrl: "/gift-preview-rose.svg",
     repeatCount: 3,
     diamondCount: 1,
     isHeartMe: false,

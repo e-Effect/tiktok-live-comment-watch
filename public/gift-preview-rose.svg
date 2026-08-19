@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="バラのギフト">
+  <rect width="120" height="120" rx="24" fill="#fff4f6"/>
+  <path d="M59 104c-4-24-1-43 4-58" fill="none" stroke="#258a65" stroke-width="7" stroke-linecap="round"/>
+  <path d="M57 76c-15-1-23-8-25-20 15-1 24 5 28 17M62 86c14-3 21-11 21-23-14 1-22 8-24 20" fill="#55b887"/>
+  <circle cx="62" cy="39" r="22" fill="#e93458"/>
+  <circle cx="50" cy="35" r="13" fill="#ff6f87"/>
+  <circle cx="72" cy="34" r="13" fill="#c81843"/>
+  <circle cx="64" cy="48" r="14" fill="#f24c6b"/>
+  <circle cx="61" cy="38" r="8" fill="#a91239"/>
+</svg>

@@ -199,6 +199,9 @@ targetGiftSelect?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRange?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRefresh?.addEventListener("click", () => refreshTargetGiftRanking());
 visitorDemoBtn?.addEventListener("click", toggleVisitorDemo);
+giftHistory?.addEventListener("error", (event) => {
+  if (event.target?.matches?.("img.gift-image")) event.target.remove();
+}, true);
 previewStartBtn?.addEventListener("click", () => {
   previewStartBtn.closest("details")?.removeAttribute("open");
   startSession({ preview: true });
@@ -2285,6 +2288,14 @@ function giftMatchesHistoryFilter(gift) {
   return new Set(giftHistoryFilter.selected).has(giftChoiceKey(gift));
 }
 
+function renderGiftArtwork(gift) {
+  const imageUrl = String(gift?.giftImageUrl || "").trim();
+  const image = /^https:\/\//i.test(imageUrl) || imageUrl.startsWith("/")
+    ? `<img class="gift-image" src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    : "";
+  return `<span class="gift-artwork" aria-hidden="true"><span>🎁</span>${image}</span>`;
+}
+
 function renderGiftHistory(gifts) {
   if (!gifts.length) {
     giftHistory.innerHTML = `<p class="empty">ギフトが届くとここに表示されます。</p>`;
@@ -2305,12 +2316,15 @@ function renderGiftHistory(gifts) {
           <span class="time">${formatClock(gift.at)}</span>
         </span>
       </header>
-      <p>
-        ${escapeHtml(gift.giftName || "ギフト")}
-        ${eventSourceBadge(gift)}
-        <strong>x${formatNumber(gift.repeatCount)}</strong>
-        <span>${formatNumber(gift.totalDiamonds)} ダイヤ</span>
-      </p>
+      <div class="gift-event-body">
+        ${renderGiftArtwork(gift)}
+        <div class="gift-event-info">
+          <strong>${escapeHtml(gift.giftName || "ギフト")}</strong>
+          ${eventSourceBadge(gift)}
+          <span>×${formatNumber(gift.repeatCount)}</span>
+          <small>${formatNumber(gift.totalDiamonds)} ダイヤ</small>
+        </div>
+      </div>
     </article>
   `).join("");
 }
