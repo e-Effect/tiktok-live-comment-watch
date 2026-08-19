@@ -329,7 +329,10 @@
           </section>
 
           <section data-panel="giftHistory">
-            <h2>ギフト履歴</h2>
+            <div class="gift-history-head">
+              <h2>ギフト履歴</h2>
+              <button id="giftHistoryFilterButton" type="button">すべてのギフトを表示</button>
+            </div>
             <div id="giftHistory" class="list small">
               <p class="empty">ギフトが届くとここに表示されます。</p>
             </div>
@@ -337,6 +340,40 @@
         </div>
       </section>
     </main>
+    <dialog id="giftHistoryFilterDialog" class="gift-filter-dialog">
+      <form id="giftHistoryFilterForm" method="dialog">
+        <header>
+          <div>
+            <span>ギフト履歴</span>
+            <h2>表示するギフトを選ぶ</h2>
+          </div>
+          <button id="giftHistoryFilterClose" type="button" aria-label="閉じる">×</button>
+        </header>
+        <label class="gift-filter-enabled">
+          <input id="giftHistoryFilterEnabled" type="checkbox">
+          <span>
+            <strong>特定のギフトだけ表示する</strong>
+            <small>OFFにすると、すべてのギフトを表示します。</small>
+          </span>
+        </label>
+        <div id="giftHistoryFilterControls" class="gift-filter-controls">
+          <input id="giftHistoryFilterSearch" type="search" placeholder="ギフト名・コイン数で検索" autocomplete="off">
+          <div class="gift-filter-toolbar">
+            <strong id="giftHistoryFilterCount">0種類を選択中</strong>
+            <button id="giftHistoryFilterSelectVisible" type="button">検索結果をすべて選択</button>
+            <button id="giftHistoryFilterClear" type="button">選択を解除</button>
+          </div>
+          <div id="giftHistoryFilterList" class="gift-filter-list">
+            <p class="empty">ギフト一覧を読み込んでいます。</p>
+          </div>
+        </div>
+        <p id="giftHistoryFilterError" class="gift-filter-error" hidden>表示するギフトを1種類以上選んでください。</p>
+        <footer>
+          <button id="giftHistoryFilterCancel" type="button">キャンセル</button>
+          <button id="giftHistoryFilterApply" type="submit">この条件で表示</button>
+        </footer>
+      </form>
+    </dialog>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

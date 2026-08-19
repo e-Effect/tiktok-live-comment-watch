@@ -28,6 +28,20 @@ const commentList = document.querySelector("#commentList");
 const userList = document.querySelector("#userList");
 const giftList = document.querySelector("#giftList");
 const giftHistory = document.querySelector("#giftHistory");
+const giftHistoryFilterButton = document.querySelector("#giftHistoryFilterButton");
+const giftHistoryFilterDialog = document.querySelector("#giftHistoryFilterDialog");
+const giftHistoryFilterForm = document.querySelector("#giftHistoryFilterForm");
+const giftHistoryFilterClose = document.querySelector("#giftHistoryFilterClose");
+const giftHistoryFilterCancel = document.querySelector("#giftHistoryFilterCancel");
+const giftHistoryFilterEnabled = document.querySelector("#giftHistoryFilterEnabled");
+const giftHistoryFilterControls = document.querySelector("#giftHistoryFilterControls");
+const giftHistoryFilterSearch = document.querySelector("#giftHistoryFilterSearch");
+const giftHistoryFilterCount = document.querySelector("#giftHistoryFilterCount");
+const giftHistoryFilterSelectVisible = document.querySelector("#giftHistoryFilterSelectVisible");
+const giftHistoryFilterClear = document.querySelector("#giftHistoryFilterClear");
+const giftHistoryFilterList = document.querySelector("#giftHistoryFilterList");
+const giftHistoryFilterError = document.querySelector("#giftHistoryFilterError");
+const giftHistoryFilterApply = document.querySelector("#giftHistoryFilterApply");
 const shareHistory = document.querySelector("#shareHistory");
 const visitorHistory = document.querySelector("#visitorHistory");
 const visitorDemoBtn = document.querySelector("#visitorDemoBtn");
@@ -96,6 +110,7 @@ const FIXED_ACCOUNT_KEY = "tiktok-live-fixed-account";
 const SINGLE_MODE_KEY = "tiktok-live-single-mode";
 const FONT_SIZE_KEY = "tiktok-live-font-size-level";
 const PREVIEW_ADMIN_KEY = "tiktok-listener-admin-key";
+const GIFT_HISTORY_FILTER_KEY = "tiktok-live-gift-history-filter-v1";
 const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
 const PANEL_SIZE_OPTIONS = ["small", "tall", "medium", "large", "wide"];
@@ -143,6 +158,10 @@ let snapshotFetchTick = 0;
 let giftRankingRequest = 0;
 let giftRankingRefreshTimer = null;
 let visitorDemoActive = false;
+let receiptGiftCatalog = [];
+let sessionGiftCatalog = [];
+let giftHistoryFilter = readGiftHistoryFilter();
+let giftHistoryFilterDraft = cloneGiftHistoryFilter(giftHistoryFilter);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -167,6 +186,7 @@ setupFontSizeTools();
 setupSettingsPanel();
 setupFixedAccountTools();
 setupCandidateTools();
+setupGiftHistoryFilter();
 renderRecentIds();
 refreshMissingRecentProfiles();
 restoreSavedSessions();
@@ -2080,12 +2100,202 @@ function renderGifters(users) {
   `).join("");
 }
 
+function setupGiftHistoryFilter() {
+  updateGiftHistoryFilterSummary();
+  loadReceiptGiftCatalog();
+
+  giftHistoryFilterButton?.addEventListener("click", openGiftHistoryFilter);
+  giftHistoryFilterClose?.addEventListener("click", closeGiftHistoryFilter);
+  giftHistoryFilterCancel?.addEventListener("click", closeGiftHistoryFilter);
+  giftHistoryFilterEnabled?.addEventListener("change", () => {
+    giftHistoryFilterDraft.enabled = giftHistoryFilterEnabled.checked;
+    renderGiftHistoryFilterList();
+  });
+  giftHistoryFilterSearch?.addEventListener("input", renderGiftHistoryFilterList);
+  giftHistoryFilterSelectVisible?.addEventListener("click", () => {
+    const selected = new Set(giftHistoryFilterDraft.selected);
+    for (const gift of visibleGiftCatalog()) selected.add(giftChoiceKey(gift));
+    giftHistoryFilterDraft.selected = [...selected];
+    renderGiftHistoryFilterList();
+  });
+  giftHistoryFilterClear?.addEventListener("click", () => {
+    giftHistoryFilterDraft.selected = [];
+    renderGiftHistoryFilterList();
+  });
+  giftHistoryFilterList?.addEventListener("change", (event) => {
+    const input = event.target.closest("input[data-gift-key]");
+    if (!input) return;
+    const selected = new Set(giftHistoryFilterDraft.selected);
+    if (input.checked) selected.add(input.dataset.giftKey);
+    else selected.delete(input.dataset.giftKey);
+    giftHistoryFilterDraft.selected = [...selected];
+    updateGiftHistoryFilterDialogState();
+  });
+  giftHistoryFilterForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (giftHistoryFilterDraft.enabled && !giftHistoryFilterDraft.selected.length) {
+      updateGiftHistoryFilterDialogState();
+      return;
+    }
+    giftHistoryFilter = cloneGiftHistoryFilter(giftHistoryFilterDraft);
+    localStorage.setItem(GIFT_HISTORY_FILTER_KEY, JSON.stringify(giftHistoryFilter));
+    updateGiftHistoryFilterSummary();
+    closeGiftHistoryFilter();
+    renderSelectedSession();
+  });
+  giftHistoryFilterDialog?.addEventListener("click", (event) => {
+    if (event.target === giftHistoryFilterDialog) closeGiftHistoryFilter();
+  });
+}
+
+function openGiftHistoryFilter() {
+  giftHistoryFilterDraft = cloneGiftHistoryFilter(giftHistoryFilter);
+  if (giftHistoryFilterSearch) giftHistoryFilterSearch.value = "";
+  renderGiftHistoryFilterList();
+  giftHistoryFilterDialog?.showModal();
+}
+
+function closeGiftHistoryFilter() {
+  if (giftHistoryFilterDialog?.open) giftHistoryFilterDialog.close();
+}
+
+function readGiftHistoryFilter() {
+  try {
+    return cloneGiftHistoryFilter(JSON.parse(localStorage.getItem(GIFT_HISTORY_FILTER_KEY) || "null"));
+  } catch {
+    return cloneGiftHistoryFilter(null);
+  }
+}
+
+function cloneGiftHistoryFilter(value) {
+  return {
+    enabled: Boolean(value?.enabled),
+    selected: [...new Set(Array.isArray(value?.selected) ? value.selected.map(String).filter(Boolean) : [])]
+  };
+}
+
+async function loadReceiptGiftCatalog() {
+  try {
+    const response = await fetch("/receipt-gift-catalog.json", { cache: "no-store" });
+    const catalog = await response.json();
+    receiptGiftCatalog = Array.isArray(catalog) ? catalog : [];
+  } catch {
+    receiptGiftCatalog = [];
+  }
+  if (giftHistoryFilterDialog?.open) renderGiftHistoryFilterList();
+}
+
+function normalizeGiftChoice(gift) {
+  if (Array.isArray(gift)) {
+    return {
+      id: String(gift[0] ?? ""),
+      name: String(gift[1] ?? "").trim(),
+      coins: Math.max(0, Number(gift[2] ?? 0)),
+      count: 0
+    };
+  }
+  return {
+    id: String(gift?.giftId ?? gift?.id ?? ""),
+    name: String(gift?.giftName ?? gift?.name ?? "").trim(),
+    coins: Math.max(0, Number(gift?.coins ?? gift?.diamondCount ?? 0)),
+    count: Math.max(0, Number(gift?.count ?? 0))
+  };
+}
+
+function giftChoiceKey(gift) {
+  const normalized = normalizeGiftChoice(gift);
+  if (normalized.name) return `name:${normalized.name.toLocaleLowerCase("ja-JP")}`;
+  return normalized.id ? `id:${normalized.id}` : "";
+}
+
+function combinedGiftCatalog() {
+  const merged = new Map();
+  for (const rawGift of [...receiptGiftCatalog, ...sessionGiftCatalog]) {
+    const gift = normalizeGiftChoice(rawGift);
+    const key = giftChoiceKey(gift);
+    if (!key) continue;
+    const current = merged.get(key);
+    merged.set(key, current
+      ? {
+          id: gift.id || current.id,
+          name: gift.name || current.name,
+          coins: gift.coins || current.coins,
+          count: Math.max(gift.count, current.count)
+        }
+      : gift);
+  }
+  return [...merged.values()].sort((left, right) =>
+    left.coins - right.coins || left.name.localeCompare(right.name, "ja-JP")
+  );
+}
+
+function visibleGiftCatalog() {
+  const query = String(giftHistoryFilterSearch?.value || "").trim().toLocaleLowerCase("ja-JP");
+  const catalog = combinedGiftCatalog();
+  if (!query) return catalog;
+  return catalog.filter((gift) =>
+    gift.name.toLocaleLowerCase("ja-JP").includes(query)
+      || String(gift.coins).includes(query)
+  );
+}
+
+function renderGiftHistoryFilterList() {
+  if (!giftHistoryFilterList) return;
+  if (giftHistoryFilterEnabled) giftHistoryFilterEnabled.checked = giftHistoryFilterDraft.enabled;
+  const catalog = visibleGiftCatalog();
+  const selected = new Set(giftHistoryFilterDraft.selected);
+  giftHistoryFilterList.innerHTML = catalog.length
+    ? catalog.map((gift) => {
+        const key = giftChoiceKey(gift);
+        const detail = gift.coins > 0 ? `${formatNumber(gift.coins)}コイン` : "コイン数未取得";
+        return `
+          <label class="gift-filter-option">
+            <input type="checkbox" data-gift-key="${escapeHtml(key)}" ${selected.has(key) ? "checked" : ""}>
+            <span>${escapeHtml(gift.name || `ギフト ${gift.id}`)}</span>
+            <small>${detail}</small>
+          </label>
+        `;
+      }).join("")
+    : `<p class="empty">該当するギフトがありません。</p>`;
+  updateGiftHistoryFilterDialogState();
+}
+
+function updateGiftHistoryFilterDialogState() {
+  const enabled = giftHistoryFilterDraft.enabled;
+  const selectedCount = giftHistoryFilterDraft.selected.length;
+  giftHistoryFilterControls?.classList.toggle("disabled", !enabled);
+  giftHistoryFilterControls?.querySelectorAll("input, button").forEach((control) => {
+    control.disabled = !enabled;
+  });
+  if (giftHistoryFilterCount) giftHistoryFilterCount.textContent = `${formatNumber(selectedCount)}種類を選択中`;
+  if (giftHistoryFilterError) giftHistoryFilterError.hidden = !enabled || selectedCount > 0;
+  if (giftHistoryFilterApply) giftHistoryFilterApply.disabled = enabled && selectedCount === 0;
+}
+
+function updateGiftHistoryFilterSummary() {
+  if (!giftHistoryFilterButton) return;
+  giftHistoryFilterButton.textContent = giftHistoryFilter.enabled
+    ? `対象 ${formatNumber(giftHistoryFilter.selected.length)}種類`
+    : "すべてのギフトを表示";
+  giftHistoryFilterButton.classList.toggle("active", giftHistoryFilter.enabled);
+}
+
+function giftMatchesHistoryFilter(gift) {
+  if (!giftHistoryFilter.enabled) return true;
+  return new Set(giftHistoryFilter.selected).has(giftChoiceKey(gift));
+}
+
 function renderGiftHistory(gifts) {
   if (!gifts.length) {
     giftHistory.innerHTML = `<p class="empty">ギフトが届くとここに表示されます。</p>`;
     return;
   }
-  giftHistory.innerHTML = gifts.map((gift) => `
+  const visibleGifts = gifts.filter(giftMatchesHistoryFilter);
+  if (!visibleGifts.length) {
+    giftHistory.innerHTML = `<p class="empty">選択したギフトはまだ届いていません。</p>`;
+    return;
+  }
+  giftHistory.innerHTML = visibleGifts.map((gift) => `
     <article class="comment gift-card ${commentVisitClass(gift)}">
       <header>
         ${renderEventAvatar(gift)}
@@ -2258,6 +2468,8 @@ async function refreshTargetGiftRanking() {
 }
 
 function updateGiftCatalog(catalog, selectedGift) {
+  sessionGiftCatalog = Array.isArray(catalog) ? catalog : [];
+  if (giftHistoryFilterDialog?.open) renderGiftHistoryFilterList();
   if (!targetGiftSelect) return;
   const options = [`<option value="">すべてのギフト</option>`];
   for (const gift of catalog) {
