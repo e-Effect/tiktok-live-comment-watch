@@ -7,6 +7,9 @@ test("recognizes common first-visit claims and spelling variations", () => {
     "初見",
     "初見です",
     "初見でーす！",
+    "初見ですよー",
+    "しょけんです",
+    "初見でござる",
     "初見です。よろしくお願いします！",
     "この枠初見です",
     "はじめまして",
@@ -14,6 +17,7 @@ test("recognizes common first-visit claims and spelling variations", () => {
     "お初です",
     "初訪問です",
     "初めて来ました",
+    "はじめて来たよ",
     "この配信はじめて見に来ました",
   ];
   for (const claim of claims) assert.equal(isFirstVisitClaim(claim), true, claim);
