@@ -2399,6 +2399,23 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  const listenerHistoryMatch = url.pathname.match(/^\/api\/listeners\/([^/]+)\/history$/);
+  if (listenerHistoryMatch && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      const history = await eventStore.listenerHistory(decodeURIComponent(listenerHistoryMatch[1]), {
+        username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
+        kind: url.searchParams.get("kind") === "visits" ? "visits" : "comments",
+        limit: Number(url.searchParams.get("limit") || 200),
+        offset: Number(url.searchParams.get("offset") || 0)
+      });
+      sendJson(response, 200, history);
+    } catch (error) {
+      sendJson(response, 500, { error: shortError(error) });
+    }
+    return;
+  }
+
   const listenerMatch = url.pathname.match(/^\/api\/listeners\/([^/]+)$/);
   if (listenerMatch) {
     if (!requireListenerAdmin(request, response)) return;

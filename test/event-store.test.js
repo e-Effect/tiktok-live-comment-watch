@@ -52,6 +52,55 @@ test("listener export returns every matching row without the screen limit", asyn
   assert.equal(rows[0].visits, 2);
 });
 
+test("listener comment history is paginated while remaining fully reachable", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /event_type = 'comment'/);
+      assert.match(sql, /COUNT\(\*\) OVER\(\)/);
+      assert.deepEqual(values, ["listener-1", "streamer", 200, 200]);
+      return { rows: [{ id:"event-201", at:new Date("2026-08-22T12:00:00Z"), text:"続き", streamUsername:"streamer", fullCount:"401" }] };
+    }
+  };
+  const result = await store.listenerHistory("listener-1", { username:"streamer", kind:"comments", limit:200, offset:200 });
+  assert.equal(result.total, 401);
+  assert.equal(result.items[0].text, "続き");
+  assert.equal(typeof result.items[0].at, "number");
+});
+
+test("listener visit history groups every recorded day in Japan", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /Asia\/Tokyo/);
+      assert.match(sql, /GROUP BY TO_CHAR/);
+      assert.deepEqual(values, ["listener-1", "", 200, 0]);
+      return { rows: [{ day:"2026-08-22", firstSeenAt:new Date("2026-08-22T10:00:00Z"), lastSeenAt:new Date("2026-08-22T12:00:00Z"), liveCount:"2", streamUsernames:["streamer"], fullCount:"12" }] };
+    }
+  };
+  const result = await store.listenerHistory("listener-1", { kind:"visits" });
+  assert.equal(result.total, 12);
+  assert.equal(result.items[0].day, "2026-08-22");
+  assert.equal(result.items[0].liveCount, 2);
+});
+
+test("listener attention flag is saved independently from super fan", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /needs_attention = COALESCE/);
+      assert.deepEqual(values, ["listener-1", null, true, null, null]);
+      return { rows: [{ user_id:"listener-1", needs_attention:true }] };
+    }
+  };
+  const result = await store.updateListener("listener-1", { needsAttention:true });
+  assert.equal(result.needsAttention, true);
+  assert.equal(result.isSuperFan, false);
+});
+
 test("visit history counts distinct live room ids instead of re-entries", async () => {
   const store = new EventStore();
   const calls = [];

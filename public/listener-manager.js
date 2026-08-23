@@ -1,8 +1,13 @@
 const storageKey = "tiktok-listener-admin-key";
-const state = { key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null, selectedUserId: "", avatarObjectUrls: new Map() };
+const state = {
+  key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null,
+  selectedUserId: "", avatarObjectUrls: new Map(), attentionExpires: new Map(),
+  seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null
+};
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
 const dateTime = new Intl.DateTimeFormat("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
+const historyDateTime = new Intl.DateTimeFormat("ja-JP", { year:"numeric", month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
 
 el.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -55,6 +60,7 @@ function normalizeAdminKey(value) {
 
 function logout() {
   clearInterval(state.timer);
+  clearTimeout(state.attentionExpiryTimer);
   localStorage.removeItem(storageKey);
   state.key = "";
   el.app.hidden = true;
@@ -146,11 +152,7 @@ async function refreshListeners() {
     const data = await response.json(); state.items = data.items || [];
     el.resultCount.textContent = `${number.format(data.total || 0)}人`;
     el.emptyState.hidden = state.items.length > 0;
-    el.listenerRows.innerHTML = state.items.map(rowHtml).join("");
-    hydrateAvatars(el.listenerRows);
-    el.listenerRows.querySelectorAll("tr[data-user-id]").forEach((row) => row.addEventListener("click", () => openDetail(row.dataset.userId)));
-    el.listenerRows.querySelectorAll(".fan-cell").forEach((cell) => cell.addEventListener("click", (event) => event.stopPropagation()));
-    el.listenerRows.querySelectorAll(".fan-toggle").forEach((input) => input.addEventListener("change", () => setInlineSuperFan(input)));
+    renderListenerTable();
   } catch (error) { showConnectionError(error); }
 }
 
@@ -159,16 +161,52 @@ async function refreshRealtime() {
     const response = await api(`/api/listeners/events${params({limit:"80"})}`);
     if (!response.ok) throw new Error("受信履歴を取得できません");
     const data = await response.json();
+    trackAttentionEvents(data.items || []);
     el.liveEvents.innerHTML = (data.items || []).map(eventHtml).join("") || `<p class="empty">まだ受信データがありません。</p>`;
+    renderListenerTable();
     el.connectionStatus.textContent = "リアルタイム更新中"; el.connectionStatus.classList.remove("error");
   } catch (error) { showConnectionError(error); }
 }
 
-function rowHtml(item) {
+function rowHtml(item, attentionActive = false) {
   const rawName = item.nickname || item.uniqueId || item.userId;
   const name = escapeHtml(rawName);
   const sub = item.uniqueId ? `@${escapeHtml(item.uniqueId)}` : escapeHtml(item.userId);
-  return `<tr class="listener-row" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}</strong><small>${sub}</small></div></div></td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+  return `<tr class="listener-row ${attentionActive?"attention-active":""}" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}${item.needsAttention?'<span class="attention-badge">要確認</span>':''}</strong><small>${sub}${attentionActive?'・<b class="attention-now">いま反応あり</b>':''}</small></div></div></td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td class="attention-cell"><input class="attention-toggle" type="checkbox" ${item.needsAttention?"checked":""} aria-label="${escapeAttr(rawName)}を要確認として管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+}
+
+function renderListenerTable() {
+  const now = Date.now();
+  for (const [userId, expiresAt] of state.attentionExpires) if (expiresAt <= now) state.attentionExpires.delete(userId);
+  const rows = state.items.map((item, index) => ({ item, index, active:item.needsAttention && (state.attentionExpires.get(item.userId) || 0) > now }));
+  rows.sort((a,b) => Number(b.active)-Number(a.active) || (b.active ? (state.attentionExpires.get(b.item.userId)||0)-(state.attentionExpires.get(a.item.userId)||0) : a.index-b.index));
+  el.listenerRows.innerHTML = rows.map(({item,active}) => rowHtml(item,active)).join("");
+  hydrateAvatars(el.listenerRows);
+  el.listenerRows.querySelectorAll("tr[data-user-id]").forEach((row) => row.addEventListener("click", () => openDetail(row.dataset.userId)));
+  el.listenerRows.querySelectorAll(".fan-cell,.attention-cell").forEach((cell) => cell.addEventListener("click", (event) => event.stopPropagation()));
+  el.listenerRows.querySelectorAll(".fan-toggle").forEach((input) => input.addEventListener("change", () => setInlineSuperFan(input)));
+  el.listenerRows.querySelectorAll(".attention-toggle").forEach((input) => input.addEventListener("change", () => setInlineAttention(input)));
+  clearTimeout(state.attentionExpiryTimer);
+  const nextExpiry = Math.min(...[...state.attentionExpires.values()].filter((value) => value > now));
+  if (Number.isFinite(nextExpiry)) state.attentionExpiryTimer = setTimeout(renderListenerTable, Math.max(50, nextExpiry-now+50));
+}
+
+function trackAttentionEvents(items) {
+  const now = Date.now();
+  for (const item of items) {
+    if (!item.userId) continue;
+    const eventId = String(item.id || `${item.userId}:${item.type}:${item.at}`);
+    if (state.seenEventIds.has(eventId)) continue;
+    state.seenEventIds.add(eventId);
+    const at = Number(item.at || 0);
+    if (!state.realtimeLoaded) {
+      if (at > now-30000) state.attentionExpires.set(item.userId, Math.max(state.attentionExpires.get(item.userId)||0, at+30000));
+    } else {
+      state.attentionExpires.set(item.userId, now+30000);
+    }
+  }
+  state.realtimeLoaded = true;
+  if (state.seenEventIds.size > 2000) state.seenEventIds = new Set([...state.seenEventIds].slice(-1000));
 }
 
 async function setInlineSuperFan(input) {
@@ -200,6 +238,30 @@ async function setInlineSuperFan(input) {
   }
 }
 
+async function setInlineAttention(input) {
+  const row = input.closest("tr[data-user-id]");
+  const userId = row?.dataset.userId || "";
+  const item = state.items.find((candidate) => candidate.userId === userId);
+  if (!row || !item) return;
+  const previous = Boolean(item.needsAttention);
+  input.disabled = true;
+  try {
+    const response = await api(`/api/listeners/${encodeURIComponent(userId)}`, {
+      method:"PATCH", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({needsAttention:Boolean(input.checked)})
+    });
+    if (!response.ok) throw new Error("要確認設定を保存できませんでした");
+    const updated = await response.json();
+    item.needsAttention = Boolean(updated.needsAttention);
+    renderListenerTable();
+  } catch (error) {
+    input.checked = previous;
+    showConnectionError(error);
+  } finally {
+    input.disabled = false;
+  }
+}
+
 function eventHtml(item) {
   const label = ({comment:"コメント",gift:"ギフト",share:"シェア",follow:"フォロー",join:"入室",like:"いいね",subscribe:"サブスク"})[item.type] || item.type;
   const text = item.type === "comment" ? item.text : item.type === "gift" ? `${item.giftName || "ギフト"} × ${number.format(item.count||1)}（${number.format(item.coins||0)}コイン）` : label;
@@ -211,9 +273,18 @@ async function openDetail(userId) {
   el.detailBackdrop.hidden = false; el.detailPanel.classList.add("open"); el.detailPanel.setAttribute("aria-hidden","false");
   el.detailContent.innerHTML = `<p class="empty">読み込み中…</p>`;
   try {
-    const response = await api(`/api/listeners/${encodeURIComponent(userId)}${params()}`);
-    if (!response.ok) throw new Error("詳細を取得できません");
-    renderDetail(await response.json());
+    const [response, commentsResponse, visitsResponse] = await Promise.all([
+      api(`/api/listeners/${encodeURIComponent(userId)}${params()}`),
+      api(listenerHistoryUrl(userId,"comments",0)),
+      api(listenerHistoryUrl(userId,"visits",0))
+    ]);
+    if (!response.ok || !commentsResponse.ok || !visitsResponse.ok) throw new Error("詳細を取得できません");
+    state.detailData = {
+      ...(await response.json()),
+      commentHistory:await commentsResponse.json(),
+      visitHistory:await visitsResponse.json()
+    };
+    renderDetail(state.detailData);
   } catch (error) { el.detailContent.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`; }
 }
 
@@ -225,14 +296,50 @@ function renderDetail(data) {
   el.detailContent.innerHTML = `
     <div class="detail-hero">${avatar(item)}<div><h2>${escapeHtml(item.nickname||item.uniqueId||item.userId)}</h2><p>${item.uniqueId?`@${escapeHtml(item.uniqueId)}`:""}</p><p>ユーザーID: ${escapeHtml(item.userId)}</p></div></div>
     <div class="detail-metrics">${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("コイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
-    <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
+    <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label class="check attention-check"><input id="detailNeedsAttention" type="checkbox" ${item.needsAttention?"checked":""}> 要確認（配信中に反応したら30秒間、赤く上部表示）</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
+    ${historySection("visits",data.visitHistory)}
     <section class="detail-section"><h3>スタンプカード履歴</h3><div>${(data.stamps||[]).map(s=>`<div class="history-item"><time>${formatDate(s.stampedAt)}</time><strong>${escapeHtml(stampLabel(s.stampType))} × ${number.format(s.quantity||1)}</strong>${s.note?`<p>${escapeHtml(s.note)}</p>`:""}</div>`).join("")||'<p class="empty">スタンプ履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>レシート印刷履歴</h3><div>${(data.receiptPrints||[]).map(p=>`<div class="history-item"><time>${formatDate(p.printedAt)}</time><strong>${escapeHtml(p.giftName||"ギフト")} × ${number.format(p.count||1)}</strong><p>${number.format(p.coins||0)}コイン${p.templateId?`・テンプレート ${escapeHtml(p.templateId)}`:""}</p></div>`).join("")||'<p class="empty">レシート印刷履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>ギフト内訳</h3><div class="gift-grid">${(data.gifts||[]).map(g=>`<div class="gift-item"><strong>${escapeHtml(g.giftName||g.giftId||"ギフト")}</strong><small>${number.format(g.count||0)}個・${number.format(g.coins||0)}コイン</small></div>`).join("")||'<p class="empty">ギフト履歴なし</p>'}</div></section>
-    <section class="detail-section"><h3>最近のコメント</h3><div>${(data.comments||[]).map(c=>`<div class="history-item"><time>${formatDate(c.at)}</time><p>${escapeHtml(c.text||"")}</p></div>`).join("")||'<p class="empty">コメント履歴なし</p>'}</div></section>
+    ${historySection("comments",data.commentHistory)}
     <section class="detail-section"><h3>過去に確認した名前</h3><div>${(data.aliases||[]).map(a=>`<div class="history-item"><strong>${escapeHtml(a.nickname||"")}</strong> <small>${a.uniqueId?`@${escapeHtml(a.uniqueId)}`:""}</small><p>${formatDate(a.firstSeenAt)} ～ ${formatDate(a.lastSeenAt)}</p></div>`).join("")||'<p class="empty">別名履歴なし</p>'}</div></section>`;
   hydrateAvatars(el.detailContent);
   document.getElementById("detailForm")?.addEventListener("submit", saveDetail);
+  el.detailContent.querySelectorAll("[data-load-history]").forEach((button)=>button.addEventListener("click",()=>loadMoreHistory(button.dataset.loadHistory)));
+}
+
+function historySection(kind, history = {}) {
+  const items = history.items || [];
+  const total = Number(history.total || 0);
+  const isVisits = kind === "visits";
+  const rows = isVisits
+    ? items.map((visit)=>`<div class="history-item visit-day"><strong>${escapeHtml(formatVisitDay(visit.day))}</strong><p>初回検知 ${escapeHtml(formatTime(visit.firstSeenAt))}・最終検知 ${escapeHtml(formatTime(visit.lastSeenAt))}・配信 ${number.format(visit.liveCount||1)}回</p>${visit.streamUsernames?.length>1?`<small>${visit.streamUsernames.map((name)=>`@${escapeHtml(name)}`).join(" / ")}</small>`:""}</div>`).join("")
+    : items.map((comment)=>`<div class="history-item"><time>${formatHistoryDate(comment.at)}${comment.streamUsername?`・@${escapeHtml(comment.streamUsername)}`:""}</time><p>${escapeHtml(comment.text||"")}</p></div>`).join("");
+  const remaining = Math.max(0,total-items.length);
+  return `<section class="detail-section history-section"><h3>${isVisits?"入室した全ての日":"これまでの全コメント"} <span>${number.format(total)}件</span></h3><div>${rows||`<p class="empty">${isVisits?"来訪日":"コメント"}履歴なし</p>`}</div>${remaining?`<button class="history-more" type="button" data-load-history="${kind}">続きを表示（残り${number.format(remaining)}件）</button>`:""}</section>`;
+}
+
+function listenerHistoryUrl(userId, kind, offset) {
+  const query = new URLSearchParams({kind,limit:"200",offset:String(offset||0)});
+  const username = cleanUsername(); if (username) query.set("username",username);
+  return `/api/listeners/${encodeURIComponent(userId)}/history?${query}`;
+}
+
+async function loadMoreHistory(kind) {
+  if (!state.selectedUserId || !state.detailData) return;
+  const key = kind === "visits" ? "visitHistory" : "commentHistory";
+  const current = state.detailData[key] || {items:[],total:0};
+  const button = el.detailContent.querySelector(`[data-load-history="${kind}"]`);
+  if (button) { button.disabled = true; button.textContent = "読み込み中…"; }
+  try {
+    const response = await api(listenerHistoryUrl(state.selectedUserId,kind,current.items.length));
+    if (!response.ok) throw new Error("続きを取得できません");
+    const next = await response.json();
+    state.detailData[key] = {items:[...current.items,...(next.items||[])],total:Number(next.total||current.total||0)};
+    const scrollTop = el.detailPanel.scrollTop;
+    renderDetail(state.detailData);
+    el.detailPanel.scrollTop = scrollTop;
+  } catch (error) { showConnectionError(error); if (button) button.disabled = false; }
 }
 
 function stampLabel(type){return({visit:"来店スタンプ",action:"応援スタンプ",legacy:"過去分スタンプ",standard:"スタンプ"})[type]||type||"スタンプ"}
@@ -240,16 +347,17 @@ function stampLabel(type){return({visit:"来店スタンプ",action:"応援ス�
 async function saveDetail(event) {
   event.preventDefault();
   const superFan = document.getElementById("detailSuperFan");
+  const needsAttention = document.getElementById("detailNeedsAttention");
   const notes = document.getElementById("detailNotes");
   const tags = document.getElementById("detailTags");
   const saveStatus = document.getElementById("detailSaveStatus");
-  const payload = { isSuperFan:Boolean(superFan?.checked), notes:notes?.value || "", tags:(tags?.value || "").split(",").map(v=>v.trim()).filter(Boolean) };
+  const payload = { isSuperFan:Boolean(superFan?.checked), needsAttention:Boolean(needsAttention?.checked), notes:notes?.value || "", tags:(tags?.value || "").split(",").map(v=>v.trim()).filter(Boolean) };
   const response = await api(`/api/listeners/${encodeURIComponent(state.selectedUserId)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
   if (saveStatus) saveStatus.textContent = response.ok ? "保存しました" : "保存できませんでした";
   if (response.ok) refreshAll();
 }
 
-function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId=""}
+function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId="";state.detailData=null}
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
 function avatar(item){
   const first=Array.from(item.nickname||item.uniqueId||"?")[0]||"?";
@@ -274,6 +382,9 @@ function params(extra={}){const q=new URLSearchParams(extra);const u=cleanUserna
 function api(path,options={}){return fetch(path,{...options,cache:"no-store",headers:{Authorization:`Bearer ${state.key}`,...(options.headers||{})}})}
 function showConnectionError(error){el.connectionStatus.textContent=error.message;el.connectionStatus.classList.add("error")}
 function formatDate(value){if(!value)return"-";const d=new Date(value);return Number.isNaN(d.getTime())?"-":dateTime.format(d)}
+function formatHistoryDate(value){if(!value)return"-";const d=new Date(value);return Number.isNaN(d.getTime())?"-":historyDateTime.format(d)}
+function formatTime(value){if(!value)return"-";const d=new Date(value);return Number.isNaN(d.getTime())?"-":new Intl.DateTimeFormat("ja-JP",{hour:"2-digit",minute:"2-digit"}).format(d)}
+function formatVisitDay(value){const match=String(value||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!match)return String(value||"-");const date=new Date(`${value}T12:00:00+09:00`);const weekday=new Intl.DateTimeFormat("ja-JP",{weekday:"short"}).format(date);return `${Number(match[1])}/${Number(match[2])}/${Number(match[3])}（${weekday}）`}
 function debounce(fn,ms){let id;return(...args)=>{clearTimeout(id);id=setTimeout(()=>fn(...args),ms)}}
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"})[c])}
 function escapeAttr(value){return escapeHtml(value).replace(/`/g,"&#096;")}
