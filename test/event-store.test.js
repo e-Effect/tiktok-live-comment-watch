@@ -52,6 +52,23 @@ test("listener export returns every matching row without the screen limit", asyn
   assert.equal(rows[0].visits, 2);
 });
 
+test("listener search narrows people before aggregating their stream totals", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /WITH matched_listeners AS MATERIALIZED/);
+      assert.ok(sql.indexOf("FROM listeners l") < sql.indexOf("FROM listener_stream_stats s"));
+      assert.match(sql, /JOIN matched_listeners m ON m\.user_id = s\.user_id/);
+      assert.deepEqual(values, ["streamer", "viewer", 250, 0]);
+      return { rows: [{ user_id:"1", latest_unique_id:"viewer", latest_nickname:"Viewer", visits:"2", full_count:"1" }] };
+    }
+  };
+  const result = await store.listeners({ username:"streamer", search:"viewer", limit:250 });
+  assert.equal(result.total, 1);
+  assert.equal(result.items[0].visits, 2);
+});
+
 test("listener comment history is paginated while remaining fully reachable", async () => {
   const store = new EventStore();
   store.ready = true;

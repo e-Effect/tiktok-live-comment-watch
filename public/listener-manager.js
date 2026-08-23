@@ -2,7 +2,8 @@ const storageKey = "tiktok-listener-admin-key";
 const state = {
   key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null,
   selectedUserId: "", avatarObjectUrls: new Map(), attentionExpires: new Map(),
-  seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null
+  seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null,
+  searchController: null
 };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
@@ -144,16 +145,23 @@ async function refreshSummary() {
 }
 
 async function refreshListeners() {
+  state.searchController?.abort();
+  const controller = new AbortController();
+  state.searchController = controller;
   try {
     const query = new URLSearchParams({ search:el.search.value.trim(), sort:el.sort.value, limit:"250" });
     const username = cleanUsername(); if (username) query.set("username",username);
-    const response = await api(`/api/listeners?${query}`);
+    const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
     const data = await response.json(); state.items = data.items || [];
     el.resultCount.textContent = `${number.format(data.total || 0)}人`;
     el.emptyState.hidden = state.items.length > 0;
     renderListenerTable();
-  } catch (error) { showConnectionError(error); }
+  } catch (error) {
+    if (error?.name !== "AbortError") showConnectionError(error);
+  } finally {
+    if (state.searchController === controller) state.searchController = null;
+  }
 }
 
 async function refreshRealtime() {
