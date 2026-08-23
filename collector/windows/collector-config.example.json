@@ -1,5 +1,6 @@
 {
   "endpoint": "https://tiktok-live-comment-watch.onrender.com/api/collector/events",
+  "receiptEndpoint": "http://127.0.0.1:3210/api/collector/events",
   "key": "REPLACE_WITH_COLLECTOR_KEY",
   "streamUsername": "mentalist_k"
 }

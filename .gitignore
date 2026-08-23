@@ -3,3 +3,7 @@ node_modules/
 .npm-cache/
 npm-debug.log*
 .server.*.log
+collector/windows/collector-config.json
+collector/windows/collector-status.json
+collector/windows/collector.log
+collector/windows/receipt-pending.jsonl
