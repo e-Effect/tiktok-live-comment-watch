@@ -40,7 +40,16 @@ test("preview events stay out of the recorded session and normal routing resumes
   await postJson(`/api/session/${preview.id}/stop`, {});
   const routedNormal = await postCollector("my_account", "normal-comment");
   assert.equal(routedNormal.preview, false);
-  assert.equal((await getJson(`/api/session/${normal.id}/snapshot`)).commentCount, 1);
+  const normalSnapshot = await getJson(`/api/session/${normal.id}/snapshot`);
+  assert.equal(normalSnapshot.commentCount, 1);
+  assert.equal(normalSnapshot.ingestionDiagnostics.acceptedByType.chat, 1);
+  assert.equal(normalSnapshot.ingestionDiagnostics.pendingDatabaseEvents, 1);
+  assert.equal(normalSnapshot.ingestionDiagnostics.collector.receivedByType.chat, 1);
+
+  await postCollector("my_account", "normal-comment");
+  const deduplicatedSnapshot = await getJson(`/api/session/${normal.id}/snapshot`);
+  assert.equal(deduplicatedSnapshot.commentCount, 1);
+  assert.equal(deduplicatedSnapshot.ingestionDiagnostics.duplicateByType.chat, 1);
 });
 
 async function waitForServer(child) {
@@ -68,6 +77,13 @@ async function postCollector(streamUsername, messageId) {
     },
     body: JSON.stringify({
       streamUsername,
+      diagnostics: {
+        startedAt: "2026-08-24T00:00:00Z",
+        updatedAt: "2026-08-24T00:01:00Z",
+        receivedByType: { chat: 1 },
+        forwardedByType: { chat: 1 },
+        unknownByType: {}
+      },
       events: [{
         event: "chat",
         data: {

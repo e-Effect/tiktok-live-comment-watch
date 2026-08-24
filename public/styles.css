@@ -201,6 +201,31 @@ input, select, textarea {
   font-weight: 900;
   padding: 5px 9px;
 }
+.ingestion-diagnostics {
+  margin: 8px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.ingestion-diagnostics summary {
+  cursor: pointer;
+  padding: 8px 11px;
+  font-weight: 800;
+}
+.ingestion-diagnostics-body {
+  padding: 0 11px 10px;
+  color: var(--muted);
+  font-size: .86rem;
+}
+.ingestion-diagnostics-body p { margin: 7px 0 0; }
+.ingestion-diagnostics-grid {
+  display: grid;
+  grid-template-columns: minmax(74px, 1fr) repeat(3, minmax(58px, .7fr));
+  gap: 4px 8px;
+  align-items: center;
+}
+.ingestion-diagnostics-grid strong,
+.ingestion-diagnostics-grid span:not(:nth-child(4n + 1)) { text-align: right; }
 .metrics {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));

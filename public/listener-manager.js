@@ -3,7 +3,8 @@ const state = {
   key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null,
   selectedUserId: "", avatarObjectUrls: new Map(), attentionExpires: new Map(),
   seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null,
-  searchController: null
+  searchController: null, realtimeItems: [], realtimeCursor: 0, realtimeInFlight: false,
+  listenerPage: 0, listenerPageSize: 100, listenerTotal: 0
 };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
@@ -22,12 +23,29 @@ el.backfillAvatars.addEventListener("click", backfillAvatars);
 el.compactAvatars.addEventListener("click", compactAvatars);
 el.refresh.addEventListener("click", refreshAll);
 el.exportCsv.addEventListener("click", exportCsv);
-el.search.addEventListener("input", debounce(refreshListeners, 300));
-el.streamUsername.addEventListener("change", refreshAll);
-el.sort.addEventListener("change", refreshListeners);
+el.search.addEventListener("input", debounce(() => { state.listenerPage = 0; refreshListeners(); }, 300));
+el.streamUsername.addEventListener("change", () => {
+  state.listenerPage = 0;
+  resetRealtimeFeed();
+  refreshAll();
+});
+el.sort.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
+el.listenerPrev.addEventListener("click", () => {
+  if (state.listenerPage <= 0) return;
+  state.listenerPage -= 1;
+  refreshListeners();
+});
+el.listenerNext.addEventListener("click", () => {
+  if ((state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal) return;
+  state.listenerPage += 1;
+  refreshListeners();
+});
 el.detailClose.addEventListener("click", closeDetail);
 el.detailBackdrop.addEventListener("click", closeDetail);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetail(); });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && state.key) refreshRealtime();
+});
 
 if (state.key) authenticate();
 
@@ -128,9 +146,9 @@ async function compactAvatars() {
   }
 }
 
-async function refreshSummary() {
+async function refreshSummary(options = {}) {
   try {
-    const response = await api(`/api/listeners/summary${params()}`);
+    const response = await api(`/api/listeners/summary${params(options.fresh ? {fresh:"1"} : {})}`);
     if (!response.ok) throw new Error("集計を取得できません");
     state.summary = await response.json();
     const cards = [
@@ -149,12 +167,22 @@ async function refreshListeners() {
   const controller = new AbortController();
   state.searchController = controller;
   try {
-    const query = new URLSearchParams({ search:el.search.value.trim(), sort:el.sort.value, limit:"250" });
+    const query = new URLSearchParams({
+      search:el.search.value.trim(), sort:el.sort.value,
+      direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
+      limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
+    });
     const username = cleanUsername(); if (username) query.set("username",username);
     const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
     const data = await response.json(); state.items = data.items || [];
-    el.resultCount.textContent = `${number.format(data.total || 0)}人`;
+    state.listenerTotal = Number(data.total || 0);
+    const start = state.listenerTotal ? state.listenerPage * state.listenerPageSize + 1 : 0;
+    const end = Math.min(state.listenerTotal, start + state.items.length - 1);
+    el.resultCount.textContent = `${number.format(state.listenerTotal)}人中 ${number.format(start)}～${number.format(Math.max(start, end))}人`;
+    el.listenerPage.textContent = `${number.format(state.listenerPage + 1)}ページ目`;
+    el.listenerPrev.disabled = state.listenerPage <= 0;
+    el.listenerNext.disabled = (state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal;
     el.emptyState.hidden = state.items.length > 0;
     renderListenerTable();
   } catch (error) {
@@ -165,15 +193,42 @@ async function refreshListeners() {
 }
 
 async function refreshRealtime() {
+  if (document.hidden || state.realtimeInFlight) return;
+  state.realtimeInFlight = true;
   try {
-    const response = await api(`/api/listeners/events${params({limit:"80"})}`);
+    const extra = {limit:"80"};
+    if (state.realtimeCursor > 0) extra.since = String(Math.max(0, state.realtimeCursor - 1));
+    const response = await api(`/api/listeners/events${params(extra)}`);
     if (!response.ok) throw new Error("受信履歴を取得できません");
     const data = await response.json();
-    trackAttentionEvents(data.items || []);
-    el.liveEvents.innerHTML = (data.items || []).map(eventHtml).join("") || `<p class="empty">まだ受信データがありません。</p>`;
+    const incoming = Array.isArray(data.items) ? data.items : [];
+    trackAttentionEvents(incoming);
+    const merged = new Map(state.realtimeItems.map((item) => [String(item.id || `${item.userId}:${item.type}:${item.at}`), item]));
+    for (const item of incoming) merged.set(String(item.id || `${item.userId}:${item.type}:${item.at}`), item);
+    state.realtimeItems = [...merged.values()]
+      .sort((a, b) => eventTimestamp(b.at) - eventTimestamp(a.at))
+      .slice(0, 80);
+    state.realtimeCursor = Math.max(state.realtimeCursor, ...incoming.map((item) => eventTimestamp(item.at)), 0);
+    el.liveEvents.innerHTML = state.realtimeItems.map(eventHtml).join("") || `<p class="empty">まだ受信データがありません。</p>`;
     renderListenerTable();
     el.connectionStatus.textContent = "リアルタイム更新中"; el.connectionStatus.classList.remove("error");
   } catch (error) { showConnectionError(error); }
+  finally { state.realtimeInFlight = false; }
+}
+
+function resetRealtimeFeed() {
+  state.realtimeItems = [];
+  state.realtimeCursor = 0;
+  state.realtimeLoaded = false;
+  state.realtimeInFlight = false;
+  state.seenEventIds.clear();
+}
+
+function eventTimestamp(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function rowHtml(item, attentionActive = false) {
@@ -206,7 +261,7 @@ function trackAttentionEvents(items) {
     const eventId = String(item.id || `${item.userId}:${item.type}:${item.at}`);
     if (state.seenEventIds.has(eventId)) continue;
     state.seenEventIds.add(eventId);
-    const at = Number(item.at || 0);
+    const at = eventTimestamp(item.at);
     if (!state.realtimeLoaded) {
       if (at > now-30000) state.attentionExpires.set(item.userId, Math.max(state.attentionExpires.get(item.userId)||0, at+30000));
     } else {
@@ -237,7 +292,7 @@ async function setInlineSuperFan(input) {
     const name = row.querySelector(".person strong");
     name?.querySelector(".fan")?.remove();
     if (item.isSuperFan && name) name.insertAdjacentHTML("beforeend", '<span class="fan">スパファン</span>');
-    await refreshSummary();
+    await refreshSummary({fresh:true});
   } catch (error) {
     input.checked = previous;
     showConnectionError(error);

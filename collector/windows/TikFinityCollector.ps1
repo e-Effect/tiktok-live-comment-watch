@@ -21,6 +21,29 @@ $lastReceiptAttemptAt = [DateTime]::MinValue
 $pending = New-Object 'System.Collections.Generic.Queue[string]'
 $receiptPending = New-Object 'System.Collections.Generic.Queue[string]'
 $receiptPendingKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+$collectorStartedAt = [DateTime]::UtcNow.ToString('o')
+$receivedCounts = @{}
+$forwardedCounts = @{}
+$unknownCounts = @{}
+
+function Add-DiagnosticCount {
+    param([hashtable]$Bucket, [string]$Name)
+    $key = ([string]$Name).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($key)) { $key = '(blank)' }
+    if ($key.Length -gt 60) { $key = $key.Substring(0, 60) }
+    if ($Bucket.ContainsKey($key)) { $Bucket[$key] = [int64]$Bucket[$key] + 1 }
+    else { $Bucket[$key] = [int64]1 }
+}
+
+function Get-CollectorDiagnostics {
+    return [ordered]@{
+        startedAt = $script:collectorStartedAt
+        updatedAt = [DateTime]::UtcNow.ToString('o')
+        receivedByType = $script:receivedCounts
+        forwardedByType = $script:forwardedCounts
+        unknownByType = $script:unknownCounts
+    }
+}
 
 function Write-CollectorStatus {
     param([string]$State, [string]$Message, [int]$PendingCount = 0)
@@ -30,6 +53,7 @@ function Write-CollectorStatus {
         message = $Message
         pending = $PendingCount
         updatedAt = $now
+        diagnostics = Get-CollectorDiagnostics
     }
     $status | ConvertTo-Json -Compress | Set-Content -LiteralPath $statusPath -Encoding UTF8
     "[$now] $State - $Message" | Add-Content -LiteralPath $logPath -Encoding UTF8
@@ -57,6 +81,7 @@ function Send-CollectorPayload {
         collectorId = [string]$env:COMPUTERNAME
         heartbeat = $Heartbeat
         events = @($Events)
+        diagnostics = Get-CollectorDiagnostics
     } | ConvertTo-Json -Depth 100 -Compress
 
     Send-LocalReceiptPayload -Config $Config -Events $Events -Heartbeat $Heartbeat
@@ -227,11 +252,17 @@ while ($true) {
             catch {
                 $eventType = ''
             }
+            Add-DiagnosticCount -Bucket $script:receivedCounts -Name $eventType
             if ($allowedEvents -contains $eventType.ToLowerInvariant()) {
+                Add-DiagnosticCount -Bucket $script:forwardedCounts -Name $eventType
                 if ($pending.Count -ge 5000) { [void]$pending.Dequeue() }
                 $pending.Enqueue($raw)
                 Flush-PendingEvents -Config $config
                 Write-CollectorStatus -State 'receiving' -Message "Received: $eventType" -PendingCount $pending.Count
+            }
+            else {
+                Add-DiagnosticCount -Bucket $script:unknownCounts -Name $eventType
+                Write-CollectorStatus -State 'connected' -Message "Ignored event type: $eventType" -PendingCount $pending.Count
             }
         }
     }

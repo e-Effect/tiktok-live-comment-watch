@@ -24,6 +24,15 @@ test("keeps pending and completed gift streak events distinct", () => {
   assert.notEqual(pending.key, completed.key);
 });
 
+test("creates stable retry keys for member and like events without message ids", () => {
+  const member = { event: "member", data: { createTime: 1_786_400_000, user: { userId: "123", uniqueId: "viewer" } } };
+  const like = { event: "like", data: { createTime: 1_786_400_001, likeCount: 8, user: { userId: "123" } } };
+  assert.equal(normalizeCollectorEvent(member).key, normalizeCollectorEvent(member).key);
+  assert.equal(normalizeCollectorEvent(like).key, normalizeCollectorEvent(like).key);
+  assert.match(normalizeCollectorEvent(member).key, /^member:fallback:/);
+  assert.match(normalizeCollectorEvent(like).key, /^like:fallback:/);
+});
+
 test("turns terminal control and room events into streamEnd", () => {
   assert.equal(normalizeCollectorEvent({ event: "control", data: { action: 3 } }).type, "streamEnd");
   assert.equal(normalizeCollectorEvent({ event: "room", data: { status: 4 } }).type, "streamEnd");

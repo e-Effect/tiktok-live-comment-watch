@@ -69,11 +69,16 @@
                 <tbody id="listenerRows"></tbody>
               </table>
             </div>
+            <div class="listener-pager" aria-label="リスナー一覧のページ切替">
+              <button id="listenerPrev" type="button">前の100人</button>
+              <span id="listenerPage">1ページ目</span>
+              <button id="listenerNext" type="button">次の100人</button>
+            </div>
             <p id="emptyState" class="empty" hidden>条件に一致するリスナーはいません。</p>
           </article>
 
           <article class="card live-card">
-            <div class="section-head"><div><h2>リアルタイム受信</h2><p>10秒ごとに自動更新</p></div><span class="live-dot">LIVE</span></div>
+            <div class="section-head"><div><h2>リアルタイム受信</h2><p>新しく増えた分だけ10秒ごとに更新</p></div><span class="live-dot">LIVE</span></div>
             <div id="liveEvents" class="event-list"></div>
           </article>
         </section>
@@ -85,6 +90,6 @@
       <button id="detailClose" class="detail-close" type="button" aria-label="閉じる">×</button>
       <div id="detailContent"></div>
     </aside>
-    <script src="/listener-manager.js?v=20260823-listener-speed" type="module"></script>
+    <script src="/listener-manager.js?v=20260824-listener-delta" type="module"></script>
   </body>
 </html>

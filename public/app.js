@@ -16,6 +16,7 @@ const serverState = document.querySelector("#serverState");
 const tikTokState = document.querySelector("#tikTokState");
 const lastEventTime = document.querySelector("#lastEventTime");
 const cooldownTime = document.querySelector("#cooldownTime");
+const ingestionDiagnosticsBody = document.querySelector("#ingestionDiagnosticsBody");
 const commentCount = document.querySelector("#commentCount");
 const initialCount = document.querySelector("#initialCount");
 const giftCount = document.querySelector("#giftCount");
@@ -1978,6 +1979,43 @@ function renderConnectionDetails(snapshot) {
       ? `制限解除まで ${formatCountdown(cooldown.until - Date.now())}`
       : "制限なし";
   }
+  renderIngestionDiagnostics(snapshot?.ingestionDiagnostics);
+}
+
+function renderIngestionDiagnostics(diagnostics) {
+  if (!ingestionDiagnosticsBody) return;
+  if (!diagnostics) {
+    ingestionDiagnosticsBody.textContent = "配信開始後に取得状況を表示します。";
+    return;
+  }
+  const collector = diagnostics.collector || {};
+  const received = collector.receivedByType || {};
+  const accepted = diagnostics.acceptedByType || {};
+  const stored = diagnostics.storedByType || {};
+  const sum = (bucket, names) => names.reduce((total, name) => total + Number(bucket[name] || 0), 0);
+  const rows = [
+    ["入室", ["member", "join"]],
+    ["いいね", ["like"]],
+    ["コメント", ["chat", "comment"]],
+    ["ギフト", ["gift"]]
+  ];
+  const unknown = Object.entries(collector.unknownByType || {})
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 8);
+  ingestionDiagnosticsBody.innerHTML = `
+    <div class="ingestion-diagnostics-grid">
+      <strong>種類</strong><strong>TikFinity</strong><strong>Render</strong><strong>帳簿</strong>
+      ${rows.map(([label, names]) => `
+        <span>${label}</span>
+        <span>${formatNumber(sum(received, names))}</span>
+        <span>${formatNumber(sum(accepted, names))}</span>
+        <span>${formatNumber(sum(stored, names))}</span>
+      `).join("")}
+    </div>
+    <p>保存待ち ${formatNumber(diagnostics.pendingDatabaseEvents || 0)}件・重複除外 ${formatNumber(diagnostics.duplicate || 0)}件</p>
+    ${unknown.length ? `<p>未対応イベント: ${unknown.map(([name, count]) => `${escapeHtml(name)} ${formatNumber(count)}`).join("、")}</p>` : ""}
+  `;
 }
 
 async function refreshServerState() {

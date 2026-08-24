@@ -31,6 +31,8 @@ const PORT = Number(globalThis.__TIKTOK_LIVE_PORT__ || globalThis.process?.env?.
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
+const listenerSummaryCache = new Map();
+const LISTENER_SUMMARY_CACHE_MS = 30000;
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
 const DATABASE_RETRY_MS = Number(globalThis.process?.env?.DATABASE_RETRY_MS || 15000);
 const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_HEARTBEAT_STALE_MS || 150000);
@@ -116,6 +118,7 @@ class LiveSession extends EventEmitter {
       current: 0,
       peak: 0,
       knownJoins: 0,
+      totalLikes: 0,
       estimatedWatchSeconds: 0,
       currentRanked: 0,
       rankUpdatedAt: null
@@ -141,6 +144,20 @@ class LiveSession extends EventEmitter {
     this.pendingVisitChecks = new Map();
     this.pendingDatabaseEvents = [];
     this.databaseFlushPromise = null;
+    this.collectorDiagnostics = null;
+    this.ingestionStats = {
+      accepted: 0,
+      duplicate: 0,
+      stored: 0,
+      queuedTotal: 0,
+      acceptedByType: {},
+      duplicateByType: {},
+      storedByType: {},
+      queuedByType: {},
+      lastAcceptedAt: null,
+      lastStoredAt: null,
+      lastQueuedAt: null
+    };
     this.firstVisitClaimPendingIds = new Set();
     this.firstVisitClaimAlertedIds = new Set();
   }
@@ -321,13 +338,22 @@ class LiveSession extends EventEmitter {
     connection.on(events.LIKE || "like", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
+      const likeCount = Number(
+        data.likeCount ?? data.like_count ?? data.count ?? data.likeMessage?.likeCount ?? 0
+      );
+      const totalLikes = Number(
+        data.totalLikes ?? data.totalLikeCount ?? data.total_like_count ?? data.likeMessage?.totalLikeCount ?? 0
+      );
+      if (Number.isFinite(totalLikes) && totalLikes > 0) {
+        this.viewerStats.totalLikes = Math.max(Number(this.viewerStats.totalLikes || 0), totalLikes);
+      }
       this.markSeen(person, at, "like");
       this.emitNormalized({
         id: data.msgId || randomUUID(),
         type: "like",
         ...person,
-        likeCount: Number(data.likeCount || 0),
-        totalLikes: Number(data.totalLikes || 0),
+        likeCount: Number.isFinite(likeCount) ? Math.max(0, likeCount) : 0,
+        totalLikes: Number.isFinite(totalLikes) ? Math.max(0, totalLikes) : 0,
         at,
         source: this.currentEventSource()
       });
@@ -734,7 +760,10 @@ class LiveSession extends EventEmitter {
       eventStore.recordEvent(this, event)
         .then((stored) => {
           if (!stored) this.queueDatabaseEvent(event);
-          else cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
+          else {
+            this.noteIngestion("stored", event.type);
+            cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
+          }
         })
         .catch(() => this.queueDatabaseEvent(event));
     }
@@ -743,9 +772,11 @@ class LiveSession extends EventEmitter {
 
   queueDatabaseEvent(event) {
     const key = `${event?.type || ""}:${event?.id || ""}`;
-    if (key !== ":" && this.pendingDatabaseEvents.some((item) => item.key === key)) return;
+    if (key !== ":" && this.pendingDatabaseEvents.some((item) => item.key === key)) return false;
     this.pendingDatabaseEvents.push({ key, event: { ...event } });
     if (this.pendingDatabaseEvents.length > 10000) this.pendingDatabaseEvents.shift();
+    this.noteIngestion("queued", event?.type);
+    return true;
   }
 
   async flushPendingDatabaseEvents() {
@@ -756,6 +787,7 @@ class LiveSession extends EventEmitter {
         const stored = await eventStore.recordEvent(this, pending.event);
         if (!stored) break;
         this.pendingDatabaseEvents.shift();
+        this.noteIngestion("stored", pending.event?.type);
         cacheListenerAvatar(pending.event.userId, pending.event.avatarUrl).catch(() => {});
       }
       return this.pendingDatabaseEvents.length === 0;
@@ -770,6 +802,60 @@ class LiveSession extends EventEmitter {
   persistSession(options) {
     if (!this.recordingEnabled) return;
     eventStore.saveSession(this, options).catch(() => {});
+  }
+
+  noteIngestion(kind, rawType = "unknown") {
+    const type = String(rawType || "unknown").slice(0, 40) || "unknown";
+    const now = Date.now();
+    if (kind === "accepted") {
+      this.ingestionStats.accepted += 1;
+      this.ingestionStats.acceptedByType[type] = Number(this.ingestionStats.acceptedByType[type] || 0) + 1;
+      this.ingestionStats.lastAcceptedAt = now;
+    } else if (kind === "duplicate") {
+      this.ingestionStats.duplicate += 1;
+      this.ingestionStats.duplicateByType[type] = Number(this.ingestionStats.duplicateByType[type] || 0) + 1;
+    } else if (kind === "stored") {
+      this.ingestionStats.stored += 1;
+      this.ingestionStats.storedByType[type] = Number(this.ingestionStats.storedByType[type] || 0) + 1;
+      this.ingestionStats.lastStoredAt = now;
+    } else if (kind === "queued") {
+      this.ingestionStats.queuedTotal += 1;
+      this.ingestionStats.queuedByType[type] = Number(this.ingestionStats.queuedByType[type] || 0) + 1;
+      this.ingestionStats.lastQueuedAt = now;
+    }
+  }
+
+  updateCollectorDiagnostics(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+    const cleanCounts = (value) => Object.fromEntries(
+      Object.entries(value && typeof value === "object" ? value : {})
+        .slice(0, 80)
+        .map(([key, count]) => [String(key).slice(0, 60), Math.max(0, Number(count) || 0)])
+    );
+    this.collectorDiagnostics = {
+      startedAt: raw.startedAt || null,
+      updatedAt: raw.updatedAt || Date.now(),
+      receivedByType: cleanCounts(raw.receivedByType),
+      forwardedByType: cleanCounts(raw.forwardedByType),
+      unknownByType: cleanCounts(raw.unknownByType)
+    };
+  }
+
+  ingestionDiagnosticsSnapshot() {
+    return {
+      ...this.ingestionStats,
+      acceptedByType: { ...this.ingestionStats.acceptedByType },
+      duplicateByType: { ...this.ingestionStats.duplicateByType },
+      storedByType: { ...this.ingestionStats.storedByType },
+      queuedByType: { ...this.ingestionStats.queuedByType },
+      pendingDatabaseEvents: this.pendingDatabaseEvents.length,
+      collector: this.collectorDiagnostics ? {
+        ...this.collectorDiagnostics,
+        receivedByType: { ...this.collectorDiagnostics.receivedByType },
+        forwardedByType: { ...this.collectorDiagnostics.forwardedByType },
+        unknownByType: { ...this.collectorDiagnostics.unknownByType }
+      } : null
+    };
   }
 
   getUserStat(rawUserId, rawNickname, at, signals = null) {
@@ -996,6 +1082,7 @@ class LiveSession extends EventEmitter {
       heartMeStats,
       followStats,
       viewerStats: this.viewerStats,
+      ingestionDiagnostics: this.ingestionDiagnosticsSnapshot(),
       recordingEnabled: this.recordingEnabled,
       preview: !this.recordingEnabled
     };
@@ -1269,17 +1356,22 @@ function findNestedDisplayName(value, depth = 0, seen = new Set()) {
 }
 
 function rankedViewerEntries(data) {
+  // A roomUser payload may also contain top-gifter rankings. Those users are not
+  // proof of current presence, so only consume fields that explicitly describe
+  // the current audience.
   const candidates = [
-    data?.topViewers,
-    data?.ranksList,
-    data?.rankList,
-    data?.rankings,
-    data?.seatsList,
-    data?.users,
-    data?.data?.topViewers,
-    data?.data?.ranksList,
-    data?.message?.topViewers,
-    data?.message?.ranksList
+    data?.currentViewers,
+    data?.viewerList,
+    data?.onlineUsers,
+    data?.audienceList,
+    data?.data?.currentViewers,
+    data?.data?.viewerList,
+    data?.data?.onlineUsers,
+    data?.data?.audienceList,
+    data?.message?.currentViewers,
+    data?.message?.viewerList,
+    data?.message?.onlineUsers,
+    data?.message?.audienceList
   ];
   const entries = candidates.find((value) => Array.isArray(value));
   return {
@@ -1419,7 +1511,8 @@ function summarizeFollowStatus(users) {
 }
 
 function personFromEvent(data) {
-  const rawUser = data.user || data.userInfo || data.viewer || data.author || data.data?.user || data;
+  const nestedMessage = data.memberMessage || data.likeMessage || data.chatMessage || data.giftMessage || {};
+  const rawUser = data.user || data.userInfo || data.viewer || data.author || data.data?.user || nestedMessage.user || data;
   const nickname = data.nickname || rawUser?.nickname || rawUser?.uniqueId || data.uniqueId || "unknown";
   const userId = rawUser?.id || rawUser?.userId || rawUser?.uniqueId || data.uniqueId || nickname;
   return {
@@ -1520,7 +1613,10 @@ function isShareEvent(data) {
 }
 
 function eventTime(data) {
-  const value = Number(data?.timestamp || data?.createTime || data?.create_time || 0);
+  const nestedMessage = data?.memberMessage || data?.likeMessage || data?.chatMessage || data?.giftMessage || {};
+  const value = Number(
+    data?.timestamp || data?.createTime || data?.create_time || data?.common?.createTime || nestedMessage?.createTime || 0
+  );
   if (!value) return Date.now();
   return value < 100000000000 ? value * 1000 : value;
 }
@@ -2090,13 +2186,20 @@ const server = createServer(async (request, response) => {
         ? collectorSessionForEvents(username, normalizedIncoming)
         : ensureCollectorSession(username);
       let accepted = 0;
-      let dropped = 0;
+      let dropped = Math.max(0, incoming.length - normalizedIncoming.length);
+      session.updateCollectorDiagnostics(body.diagnostics);
       for (const normalized of normalizedIncoming) {
-        if (!normalized || isDuplicateCollectorEvent(session, normalized.key)) {
+        if (!normalized) {
+          dropped += 1;
+          continue;
+        }
+        if (isDuplicateCollectorEvent(session, normalized.key)) {
+          session.noteIngestion("duplicate", normalized.type);
           dropped += 1;
           continue;
         }
         activateCollectorSession(session);
+        session.noteIngestion("accepted", normalized.type);
         session.collectorBridge.emit(normalized.type, normalized.data);
         if (normalized.roomId) session.roomId = String(normalized.roomId);
         session.lastCollectorEventAt = Math.max(Number(session.lastCollectorEventAt || 0), Number(normalized.at || Date.now()));
@@ -2166,6 +2269,9 @@ const server = createServer(async (request, response) => {
     const collectorSessions = [...sessions.values()].filter((session) => session.recordingEnabled && session.mode === "collector");
     const collectorHeartbeatAt = Math.max(0, ...collectorSessions.map((session) => Number(session.lastCollectorHeartbeatAt || session.lastCollectorAt || 0))) || null;
     const collectorEventAt = Math.max(0, ...collectorSessions.map((session) => Number(session.lastCollectorEventAt || 0))) || null;
+    const latestCollectorSession = collectorSessions
+      .slice()
+      .sort((a, b) => Number(b.lastCollectorHeartbeatAt || b.lastCollectorAt || 0) - Number(a.lastCollectorHeartbeatAt || a.lastCollectorAt || 0))[0];
     const collectorConnected = Boolean(collectorHeartbeatAt && collectorHeartbeatAt >= Date.now() - COLLECTOR_HEARTBEAT_STALE_MS);
     const collectorState = !collectorConnected
       ? "offline"
@@ -2183,6 +2289,7 @@ const server = createServer(async (request, response) => {
         state: collectorState,
         lastHeartbeatAt: collectorHeartbeatAt,
         lastEventAt: collectorEventAt,
+        diagnostics: latestCollectorSession?.ingestionDiagnosticsSnapshot() || null,
         previewActive: Boolean(activeCollectorPreviewSession()),
         previewUsername: activeCollectorPreviewSession()?.username || ""
       },
@@ -2255,9 +2362,17 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/api/listeners/summary") {
     if (!requireListenerAdmin(request, response)) return;
     try {
-      sendJson(response, 200, await eventStore.listenerSummary({
-        username: normalizeTikTokUsername(url.searchParams.get("username") || "")
-      }));
+      const username = normalizeTikTokUsername(url.searchParams.get("username") || "");
+      const cacheKey = username.toLowerCase() || "*";
+      const cached = listenerSummaryCache.get(cacheKey);
+      const forceFresh = url.searchParams.get("fresh") === "1";
+      if (!forceFresh && cached && cached.at >= Date.now() - LISTENER_SUMMARY_CACHE_MS) {
+        sendJson(response, 200, cached.value);
+        return;
+      }
+      const summary = await eventStore.listenerSummary({ username });
+      listenerSummaryCache.set(cacheKey, { at: Date.now(), value: summary });
+      sendJson(response, 200, summary);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
