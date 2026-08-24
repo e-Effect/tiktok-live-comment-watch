@@ -235,6 +235,30 @@ test("prior listener history stays unconfirmed while the database is unavailable
   });
 });
 
+test("first-visit alerts restore numeric timestamp strings from JSON payloads", async () => {
+  const store = new EventStore();
+  const previousVisitAt = Date.parse("2026-08-05T12:00:00+09:00");
+  store.ready = true;
+  store.pool = {
+    async query() {
+      return {
+        rows: [{
+          id: "first-claim:test",
+          type: "first_visit_claim_alert",
+          at: new Date("2026-08-24T12:00:00+09:00"),
+          priorVisitCount: "2",
+          lastPriorVisitAt: String(previousVisitAt),
+        }],
+      };
+    },
+  };
+
+  const [alert] = await store.recentListenerEvents({ limit: 1 });
+
+  assert.equal(alert.lastPriorVisitAt, previousVisitAt);
+  assert.equal(alert.priorVisitCount, 2);
+});
+
 test("shares one reconnect attempt and marks connection timeouts unavailable", async () => {
   const store = new EventStore({ connectionString: "postgres://example" });
   let attempts = 0;
