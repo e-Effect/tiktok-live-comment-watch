@@ -149,6 +149,7 @@ const LEAGUE_ORDER = {
 
 const sessions = new Map();
 const eventSources = new Map();
+const eventStreamActivity = new Map();
 const pendingProfileLookups = new Set();
 
 let selectedSessionId = null;
@@ -194,6 +195,7 @@ renderSessionCards();
 renderSelectedSession();
 refreshServerState();
 setInterval(refreshServerState, 30000);
+setInterval(checkEventStreamHealth, 15000);
 
 targetGiftSelect?.addEventListener("change", () => refreshTargetGiftRanking());
 giftRankingRange?.addEventListener("change", () => refreshTargetGiftRanking());
@@ -414,25 +416,41 @@ function openEventStream(sessionId) {
 
   const source = new EventSource(`/api/session/${sessionId}/events`);
   eventSources.set(sessionId, source);
-  source.addEventListener("snapshot", (event) => renderSnapshot(JSON.parse(event.data)));
-  source.addEventListener("status", (event) => applyRealtimePayload(sessionId, "status", JSON.parse(event.data)));
-  source.addEventListener("presence", (event) => applyRealtimePayload(sessionId, "presence", JSON.parse(event.data)));
+  markEventStreamActivity(sessionId);
+  source.onopen = () => markEventStreamActivity(sessionId);
+  source.addEventListener("heartbeat", () => markEventStreamActivity(sessionId));
+  source.addEventListener("snapshot", (event) => {
+    markEventStreamActivity(sessionId);
+    renderSnapshot(JSON.parse(event.data));
+  });
+  source.addEventListener("status", (event) => {
+    markEventStreamActivity(sessionId);
+    applyRealtimePayload(sessionId, "status", JSON.parse(event.data));
+  });
+  source.addEventListener("presence", (event) => {
+    markEventStreamActivity(sessionId);
+    applyRealtimePayload(sessionId, "presence", JSON.parse(event.data));
+  });
   source.addEventListener("comment", (event) => {
+    markEventStreamActivity(sessionId);
     const payload = JSON.parse(event.data);
     applyRealtimePayload(sessionId, "comment", payload);
   });
   source.addEventListener("gift", (event) => {
+    markEventStreamActivity(sessionId);
     const payload = JSON.parse(event.data);
     applyRealtimePayload(sessionId, "gift", payload);
     if (selectedSessionId === sessionId) scheduleTargetGiftRankingRefresh();
   });
   source.addEventListener("share", (event) => {
+    markEventStreamActivity(sessionId);
     const payload = JSON.parse(event.data);
     applyRealtimePayload(sessionId, "share", payload);
   });
   source.onerror = () => {
     source.close();
     eventSources.delete(sessionId);
+    eventStreamActivity.delete(sessionId);
     const session = sessions.get(sessionId);
     if (!session) return;
     if (selectedSessionId === sessionId) {
@@ -512,6 +530,7 @@ function closeSession(sessionId, { forget } = { forget: false }) {
   const source = eventSources.get(sessionId);
   if (source) source.close();
   eventSources.delete(sessionId);
+  eventStreamActivity.delete(sessionId);
   sessions.delete(sessionId);
 
   if (selectedSessionId === sessionId) {
@@ -1623,6 +1642,24 @@ function normalizeRealtimeUser(user) {
   };
 }
 
+function markEventStreamActivity(sessionId) {
+  eventStreamActivity.set(sessionId, Date.now());
+}
+
+function checkEventStreamHealth() {
+  if (document.hidden) return;
+  const staleBefore = Date.now() - 45000;
+  let recycled = false;
+  for (const [sessionId, source] of eventSources) {
+    if ((eventStreamActivity.get(sessionId) || 0) >= staleBefore) continue;
+    source.close();
+    eventSources.delete(sessionId);
+    eventStreamActivity.delete(sessionId);
+    recycled = true;
+  }
+  if (recycled) scheduleReconnect();
+}
+
 function rebuildRealtimeLists(snapshot, cache) {
   const users = normalizedRealtimeUsers(cache);
   snapshot.topUsers = [...users]
@@ -1747,6 +1784,7 @@ function renderSnapshot(snapshot, options = {}) {
     const source = eventSources.get(snapshot.id);
     if (source) source.close();
     eventSources.delete(snapshot.id);
+    eventStreamActivity.delete(snapshot.id);
   }
   saveActiveSessions();
   renderSessionCards();

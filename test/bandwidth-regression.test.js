@@ -21,6 +21,15 @@ test("browser reconciles full state once per minute and consumes delta events", 
   assert.match(clientSource, /applyRealtimePayload\(sessionId,\s*"share"/);
 });
 
+test("event stream keepalives recover a silently stalled display without polling", () => {
+  assert.match(serverSource, /send\(\{\s*type:\s*"heartbeat",\s*payload:\s*\{\s*at:\s*Date\.now\(\)\s*\}\s*\}\)/);
+  assert.match(serverSource, /clearInterval\(keepAliveTimer\)/);
+  assert.match(clientSource, /addEventListener\("heartbeat",\s*\(\)\s*=>\s*markEventStreamActivity\(sessionId\)\)/);
+  assert.match(clientSource, /function checkEventStreamHealth\(\)[\s\S]*?Date\.now\(\)\s*-\s*45000[\s\S]*?scheduleReconnect\(\)/);
+  const watchdog = clientSource.match(/function checkEventStreamHealth\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(watchdog, /fetch\s*\(/);
+});
+
 test("the one-second clock updates live counters without rebuilding every panel", () => {
   const clock = clientSource.match(/function startSnapshotClock\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(clock, /renderSelectedSessionClock\(\)/);

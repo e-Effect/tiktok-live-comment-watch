@@ -2501,8 +2501,13 @@ const server = createServer(async (request, response) => {
         if (acceptsGzip) stream.flush(zlibConstants.Z_SYNC_FLUSH);
       };
       send({ type: "snapshot", payload: session.snapshot() });
+      const keepAliveTimer = setInterval(() => {
+        send({ type: "heartbeat", payload: { at: Date.now() } });
+      }, 15000);
+      keepAliveTimer.unref?.();
       session.on("event", send);
       request.on("close", () => {
+        clearInterval(keepAliveTimer);
         session.off("event", send);
         if (acceptsGzip && !stream.destroyed) stream.end();
       });
