@@ -175,6 +175,8 @@ async function refreshListeners() {
   try {
     const search = currentListenerSearch();
     state.pendingListenerSearch = search;
+    el.listenerRows.setAttribute("aria-busy", "true");
+    el.resultCount.textContent = search ? `「${search}」を検索中…` : "一覧を読み込み中…";
     const query = new URLSearchParams({
       search, sort:el.sort.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
@@ -195,11 +197,15 @@ async function refreshListeners() {
     el.emptyState.hidden = state.items.length > 0;
     renderListenerTable();
   } catch (error) {
-    if (error?.name !== "AbortError") showConnectionError(error);
+    if (error?.name !== "AbortError") {
+      el.resultCount.textContent = "検索を完了できませんでした";
+      showConnectionError(error);
+    }
   } finally {
     if (state.searchController === controller) {
       state.searchController = null;
       state.pendingListenerSearch = null;
+      el.listenerRows.removeAttribute("aria-busy");
     }
   }
 }

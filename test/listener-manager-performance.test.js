@@ -40,6 +40,7 @@ test("restored listener searches rerun and normalize full-width IDs", () => {
   assert.match(clientSource, /window\.addEventListener\("pageshow", scheduleRestoredSearchChecks\)/);
   assert.match(clientSource, /\[50, 250, 750, 1500, 3000\]/);
   assert.match(clientSource, /search === state\.pendingListenerSearch/);
+  assert.match(clientSource, /を検索中…/);
   assert.match(serverSource, /normalizeListenerSearch\(url\.searchParams\.get\("search"\)/);
   assert.match(htmlSource, />全データを再読み込み</);
 });
