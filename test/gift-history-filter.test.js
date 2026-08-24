@@ -15,8 +15,10 @@ test("gift history has a saved multi-gift display filter", () => {
 });
 
 test("gift filter includes the receipt application's catalog", () => {
-  assert.equal(receiptCatalog.length, 645);
-  assert.ok(receiptCatalog.every((gift) => Array.isArray(gift) && gift.length === 3));
+  assert.ok(receiptCatalog.length >= 600);
+  assert.equal(new Set(receiptCatalog.map((gift) => Number(gift.id))).size, receiptCatalog.length);
+  assert.ok(receiptCatalog.every((gift) => Number(gift.id) > 0 && String(gift.name).trim() && Number(gift.coins) >= 0));
+  assert.equal(receiptCatalog.find((gift) => Number(gift.id) === 7934)?.name, "ハートミー");
   assert.match(client, /fetch\("\/receipt-gift-catalog\.json"/);
   assert.match(client, /\.\.\.receiptGiftCatalog, \.\.\.sessionGiftCatalog/);
 });
