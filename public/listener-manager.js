@@ -4,7 +4,8 @@ const state = {
   selectedUserId: "", avatarObjectUrls: new Map(), attentionExpires: new Map(),
   seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null,
   searchController: null, realtimeItems: [], realtimeCursor: 0, realtimeInFlight: false,
-  listenerPage: 0, listenerPageSize: 100, listenerTotal: 0, lastListenerSearch: null
+  listenerPage: 0, listenerPageSize: 100, listenerTotal: 0,
+  lastListenerSearch: null, pendingListenerSearch: null
 };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
@@ -49,7 +50,7 @@ document.addEventListener("visibilitychange", () => {
     refreshRestoredSearch();
   }
 });
-window.addEventListener("pageshow", () => setTimeout(refreshRestoredSearch, 50));
+window.addEventListener("pageshow", scheduleRestoredSearchChecks);
 
 if (state.key) authenticate();
 
@@ -64,7 +65,7 @@ async function authenticate() {
     el.connectionStatus.textContent = "データベース接続済み";
     el.connectionStatus.classList.remove("error");
     await refreshAll();
-    setTimeout(refreshRestoredSearch, 100);
+    scheduleRestoredSearchChecks();
     clearInterval(state.timer);
     state.timer = setInterval(refreshRealtime, 10000);
   } catch (error) {
@@ -173,6 +174,7 @@ async function refreshListeners() {
   state.searchController = controller;
   try {
     const search = currentListenerSearch();
+    state.pendingListenerSearch = search;
     const query = new URLSearchParams({
       search, sort:el.sort.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
@@ -195,7 +197,10 @@ async function refreshListeners() {
   } catch (error) {
     if (error?.name !== "AbortError") showConnectionError(error);
   } finally {
-    if (state.searchController === controller) state.searchController = null;
+    if (state.searchController === controller) {
+      state.searchController = null;
+      state.pendingListenerSearch = null;
+    }
   }
 }
 
@@ -212,9 +217,13 @@ function currentListenerSearch() {
 function refreshRestoredSearch() {
   if (!state.key || el.app.hidden) return;
   const search = currentListenerSearch();
-  if (!search || search === state.lastListenerSearch && state.items.length) return;
+  if (!search || search === state.pendingListenerSearch || search === state.lastListenerSearch && state.items.length) return;
   state.listenerPage = 0;
   refreshListeners();
+}
+
+function scheduleRestoredSearchChecks() {
+  [50, 250, 750, 1500, 3000].forEach((delay) => setTimeout(refreshRestoredSearch, delay));
 }
 
 async function refreshRealtime() {
