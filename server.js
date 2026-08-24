@@ -22,6 +22,7 @@ import { normalizeCollectorEvent } from "./lib/external-collector.js";
 import { isFirstVisitClaim } from "./lib/first-visit-claim.js";
 import { shouldRotateCollectorSession } from "./lib/external-collector.js";
 import { optimizeAvatarImage } from "./lib/avatar-image.js";
+import { tiktokProfileFromUser } from "./lib/tiktok-profile.js";
 
 if (!globalThis.process) {
   globalThis.process = { env: {} };
@@ -1447,22 +1448,21 @@ function applyUserSignals(user, signals, at) {
 }
 
 function userSignalsFromRawUser(rawUser) {
+  const profile = tiktokProfileFromUser(rawUser);
   return {
     heartMe: heartMeStateFromUser(rawUser),
-    follow: followStateFromUser(rawUser)
+    follow: followStateFromUser(rawUser, profile),
+    profile
   };
 }
 
-function followStateFromUser(rawUser) {
+function followStateFromUser(rawUser, profile = tiktokProfileFromUser(rawUser)) {
   if (!rawUser || typeof rawUser !== "object") return null;
-  const rawStatus = firstDefined(rawUser.followInfo?.followStatus, rawUser.followRole);
-  if (rawStatus === undefined) return null;
-  const statusNumber = Number(rawStatus);
-  if (!Number.isFinite(statusNumber)) return { status: "unknown", rawStatus, isFollowingHost: null, source: "follow_info" };
+  if (!profile.followStatus) return null;
   return {
-    status: statusNumber > 0 ? "following" : "not_following",
-    rawStatus,
-    isFollowingHost: statusNumber > 0,
+    status: profile.followStatus,
+    rawStatus: profile.followStatusRaw,
+    isFollowingHost: profile.followStatus === "following",
     source: "follow_info"
   };
 }
@@ -1728,10 +1728,12 @@ function normalizeListenerSearch(value) {
 }
 
 function listenerRowsToCsv(rows = []) {
-  const output = [["ユーザーID", "TikTok ID", "表示名", "来訪回数", "コメント数", "ギフト個数", "ギフトコイン", "シェア回数", "スーパーファン", "初回来訪", "最終来訪", "タグ", "メモ"]];
+  const output = [["ユーザーID", "TikTok ID", "表示名", "あなたをフォロー", "本人のフォロー数", "本人のフォロワー数", "プロフィール確認日時", "来訪回数", "コメント数", "ギフト個数", "ギフトコイン", "シェア回数", "スーパーファン", "初回来訪", "最終来訪", "タグ", "メモ"]];
   for (const item of rows) {
     output.push([
-      item.userId, item.uniqueId, item.nickname, item.visits, item.comments, item.gifts,
+      item.userId, item.uniqueId, item.nickname, ({following:"フォロー中",not_following:"未フォロー"})[item.hostFollowStatus] || "未確認",
+      item.followingCount ?? "", item.followerCount ?? "", item.profileCountsUpdatedAt ? new Date(item.profileCountsUpdatedAt).toISOString() : "",
+      item.visits, item.comments, item.gifts,
       item.coins, item.shares, item.isSuperFan ? "はい" : "",
       item.firstSeenAt ? new Date(item.firstSeenAt).toISOString() : "",
       item.lastSeenAt ? new Date(item.lastSeenAt).toISOString() : "",

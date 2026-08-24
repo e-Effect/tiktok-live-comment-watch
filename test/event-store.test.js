@@ -118,6 +118,50 @@ test("listener attention flag is saved independently from super fan", async () =
   assert.equal(result.isSuperFan, false);
 });
 
+test("listener profile fields are returned without turning missing counts into zero", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql) {
+      assert.match(sql, /host_follow_status/);
+      return { rows: [{
+        user_id:"listener-1", latest_unique_id:"viewer", latest_nickname:"Viewer",
+        host_follow_status:"following", host_follow_status_updated_at:new Date("2026-08-24T10:00:00Z"),
+        profile_follower_count:"4567", profile_following_count:null,
+        profile_counts_updated_at:new Date("2026-08-24T10:00:00Z")
+      }] };
+    }
+  };
+  const result = await store.listeners({ search:"viewer", sort:"last_seen" });
+  assert.equal(result.items[0].hostFollowStatus, "following");
+  assert.equal(result.items[0].followerCount, 4567);
+  assert.equal(result.items[0].followingCount, null);
+  assert.equal(typeof result.items[0].hostFollowStatusUpdatedAt, "number");
+});
+
+test("live events save the latest TikTok profile snapshot with the listener", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let insertCall;
+  store.pool = {
+    async query(sql, values) {
+      if (/SELECT user_id FROM listeners/.test(sql)) return { rows: [] };
+      insertCall = { sql, values };
+      return { rows: [] };
+    }
+  };
+  const at = Date.parse("2026-08-24T11:00:00Z");
+  assert.equal(await store.recordEvent({ id:"session-1", username:"streamer" }, {
+    id:"comment-1", type:"comment", at, userId:"123456", uniqueId:"viewer",
+    signals:{ profile:{ followStatus:"following", followerCount:4567, followingCount:123 } }
+  }), true);
+  assert.match(insertCall.sql, /profile_follower_count/);
+  assert.equal(insertCall.values[17], "following");
+  assert.equal(insertCall.values[19], 4567);
+  assert.equal(insertCall.values[20], 123);
+  assert.equal(insertCall.values[21].getTime(), at);
+});
+
 test("visit history counts distinct live room ids instead of re-entries", async () => {
   const store = new EventStore();
   const calls = [];

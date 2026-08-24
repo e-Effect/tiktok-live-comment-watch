@@ -44,3 +44,14 @@ test("restored listener searches rerun and normalize full-width IDs", () => {
   assert.match(serverSource, /normalizeListenerSearch\(url\.searchParams\.get\("search"\)/);
   assert.match(htmlSource, />全データを再読み込み</);
 });
+
+test("listener rows show a clear follow state while profile totals stay in details", () => {
+  assert.match(htmlSource, /<th>あなたをフォロー<\/th>/);
+  assert.match(clientSource, /フォロー中/);
+  assert.match(clientSource, /未フォロー/);
+  assert.match(clientSource, /未確認/);
+  assert.match(clientSource, /TikTokプロフィール/);
+  assert.match(clientSource, /本人のフォロー数/);
+  assert.match(clientSource, /本人のフォロワー数/);
+  assert.match(clientSource, /未確認は未フォローという意味ではありません/);
+});
