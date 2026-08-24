@@ -1723,6 +1723,10 @@ function sendJson(response, status, body) {
   response.end(payload);
 }
 
+function normalizeListenerSearch(value) {
+  return String(value || "").normalize("NFKC").trim().replace(/^@/, "");
+}
+
 function listenerRowsToCsv(rows = []) {
   const output = [["ユーザーID", "TikTok ID", "表示名", "来訪回数", "コメント数", "ギフト個数", "ギフトコイン", "シェア回数", "スーパーファン", "初回来訪", "最終来訪", "タグ", "メモ"]];
   for (const item of rows) {
@@ -2384,7 +2388,7 @@ const server = createServer(async (request, response) => {
     try {
       const rows = await eventStore.listenerExportRows({
         username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
-        search: url.searchParams.get("search") || ""
+        search: normalizeListenerSearch(url.searchParams.get("search") || "")
       });
       response.writeHead(200, {
         "Content-Type": "text/csv; charset=utf-8",
@@ -2481,7 +2485,7 @@ const server = createServer(async (request, response) => {
     try {
       sendJson(response, 200, await eventStore.listeners({
         username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
-        search: url.searchParams.get("search") || "",
+        search: normalizeListenerSearch(url.searchParams.get("search") || ""),
         sort: url.searchParams.get("sort") || "last_seen",
         direction: url.searchParams.get("direction") || "desc",
         limit: Number(url.searchParams.get("limit") || 100),

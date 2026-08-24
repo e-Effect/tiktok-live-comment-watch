@@ -29,3 +29,15 @@ test("realtime ledger polling requests deltas and pauses in hidden tabs", () => 
   assert.match(clientSource, /state\.realtimeCursor/);
   assert.match(clientSource, /visibilitychange/);
 });
+
+test("restored listener searches rerun and normalize full-width IDs", () => {
+  const match = clientSource.match(/function normalizeListenerSearch\(value\) \{([\s\S]*?)\n\}/);
+  assert.ok(match, "search normalizer should exist");
+  const normalizeSearch = new Function("value", match[1]);
+
+  assert.equal(normalizeSearch("＠ｕｓｅｒ"), "user");
+  assert.match(clientSource, /refreshRestoredSearch/);
+  assert.match(clientSource, /window\.addEventListener\("pageshow"/);
+  assert.match(serverSource, /normalizeListenerSearch\(url\.searchParams\.get\("search"\)/);
+  assert.match(htmlSource, />全データを再読み込み</);
+});

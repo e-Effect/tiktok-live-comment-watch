@@ -4,7 +4,7 @@ const state = {
   selectedUserId: "", avatarObjectUrls: new Map(), attentionExpires: new Map(),
   seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null,
   searchController: null, realtimeItems: [], realtimeCursor: 0, realtimeInFlight: false,
-  listenerPage: 0, listenerPageSize: 100, listenerTotal: 0
+  listenerPage: 0, listenerPageSize: 100, listenerTotal: 0, lastListenerSearch: null
 };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
@@ -44,8 +44,12 @@ el.detailClose.addEventListener("click", closeDetail);
 el.detailBackdrop.addEventListener("click", closeDetail);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetail(); });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && state.key) refreshRealtime();
+  if (!document.hidden && state.key) {
+    refreshRealtime();
+    refreshRestoredSearch();
+  }
 });
+window.addEventListener("pageshow", () => setTimeout(refreshRestoredSearch, 50));
 
 if (state.key) authenticate();
 
@@ -60,6 +64,7 @@ async function authenticate() {
     el.connectionStatus.textContent = "データベース接続済み";
     el.connectionStatus.classList.remove("error");
     await refreshAll();
+    setTimeout(refreshRestoredSearch, 100);
     clearInterval(state.timer);
     state.timer = setInterval(refreshRealtime, 10000);
   } catch (error) {
@@ -167,8 +172,9 @@ async function refreshListeners() {
   const controller = new AbortController();
   state.searchController = controller;
   try {
+    const search = currentListenerSearch();
     const query = new URLSearchParams({
-      search:el.search.value.trim(), sort:el.sort.value,
+      search, sort:el.sort.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
       limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
     });
@@ -176,6 +182,7 @@ async function refreshListeners() {
     const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
     const data = await response.json(); state.items = data.items || [];
+    state.lastListenerSearch = search;
     state.listenerTotal = Number(data.total || 0);
     const start = state.listenerTotal ? state.listenerPage * state.listenerPageSize + 1 : 0;
     const end = Math.min(state.listenerTotal, start + state.items.length - 1);
@@ -190,6 +197,24 @@ async function refreshListeners() {
   } finally {
     if (state.searchController === controller) state.searchController = null;
   }
+}
+
+function normalizeListenerSearch(value) {
+  return String(value || "").normalize("NFKC").trim().replace(/^@/, "");
+}
+
+function currentListenerSearch() {
+  const search = normalizeListenerSearch(el.search.value);
+  if (el.search.value !== search) el.search.value = search;
+  return search;
+}
+
+function refreshRestoredSearch() {
+  if (!state.key || el.app.hidden) return;
+  const search = currentListenerSearch();
+  if (!search || search === state.lastListenerSearch && state.items.length) return;
+  state.listenerPage = 0;
+  refreshListeners();
 }
 
 async function refreshRealtime() {
@@ -455,7 +480,7 @@ function escapeAttr(value){return escapeHtml(value).replace(/`/g,"&#096;")}
 async function exportCsv(){
   const button=el.exportCsv;button.disabled=true;el.connectionStatus.textContent="全件CSVを作成中…";
   try{
-    const query=new URLSearchParams();const username=cleanUsername();if(username)query.set("username",username);const search=el.search.value.trim();if(search)query.set("search",search);
+    const query=new URLSearchParams();const username=cleanUsername();if(username)query.set("username",username);const search=currentListenerSearch();if(search)query.set("search",search);
     const response=await api(`/api/listeners/export.csv?${query}`);if(!response.ok)throw new Error("CSVを作成できませんでした");
     const url=URL.createObjectURL(await response.blob());const a=document.createElement("a");a.href=url;a.download=`listeners-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);
     el.connectionStatus.textContent="全件CSVを保存しました";el.connectionStatus.classList.remove("error");
