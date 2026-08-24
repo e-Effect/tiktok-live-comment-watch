@@ -54,4 +54,7 @@ test("listener rows show a clear follow state while profile totals stay in detai
   assert.match(clientSource, /本人のフォロー数/);
   assert.match(clientSource, /本人のフォロワー数/);
   assert.match(clientSource, /未確認は未フォローという意味ではありません/);
+  assert.match(clientSource, /TikTokプロフィールを開く/);
+  assert.match(clientSource, /https:\/\/www\.tiktok\.com\/@/);
+  assert.match(clientSource, /rel="noopener noreferrer"/);
 });
