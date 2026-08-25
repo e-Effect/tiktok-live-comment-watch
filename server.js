@@ -2752,6 +2752,13 @@ await eventStore.init();
 
 server.listen(PORT, () => {
   console.log(`TikTok LIVE app: http://localhost:${PORT}`);
+  if (eventStore.status().ready) {
+    setTimeout(() => {
+      eventStore.listenerContributionRankings().catch((error) => {
+        console.error(`Contribution rank warmup failed: ${shortError(error)}`);
+      });
+    }, 1000).unref?.();
+  }
 });
 
 if ((EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady) && eventStore.status().ready) {
