@@ -33,6 +33,7 @@ test("listeners with no gifts and no comments stay D regardless of repeat visits
   const rankings = buildContributionRankings([
     { user_id:"first", visits:1, comments:0, coins:0 },
     { user_id:"repeat", visits:2, comments:0, coins:0, stats_last_seen_at:2 },
+    { user_id:"silent-regular", visits:15, comments:0, coins:0, stats_last_seen_at:4 },
     { user_id:"gifter", visits:0, comments:0, coins:50, stats_last_seen_at:3 }
   ]);
 
@@ -40,6 +41,9 @@ test("listeners with no gifts and no comments stay D regardless of repeat visits
   assert.equal(rankings.byUserId.get("first").contributionPosition, null);
   assert.equal(rankings.byUserId.get("repeat").contributionRank, "D");
   assert.equal(rankings.byUserId.get("repeat").contributionPosition, null);
+  assert.equal(rankings.byUserId.get("silent-regular").contributionRank, "D");
+  assert.equal(rankings.byUserId.get("silent-regular").contributionScore, -26);
+  assert.ok(rankings.lifetimeOrder.indexOf("silent-regular") > rankings.lifetimeOrder.indexOf("repeat"));
   assert.ok(rankings.byUserId.get("gifter").contributionPosition > 0);
 });
 

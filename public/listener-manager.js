@@ -288,7 +288,7 @@ function contributionCell(item) {
 function contributionLine(label, rank, score, position) {
   const normalized = String(rank || "集計不足");
   const tierClass = /^[SABCD]$/.test(normalized) ? `tier-${normalized.toLowerCase()}` : "tier-none";
-  const details = Number(position) > 0 ? `${number.format(score||0)}点・${number.format(position)}位` : normalized;
+  const details = Number(position) > 0 ? `${number.format(score||0)}点・${number.format(position)}位` : Number(score) < 0 ? `${number.format(score)}点` : normalized;
   return `<span class="contribution-line"><small>${label}</small><b class="rank-badge ${tierClass}">${escapeHtml(normalized)}</b><em>${escapeHtml(details)}</em></span>`;
 }
 
@@ -478,7 +478,7 @@ async function saveDetail(event) {
 function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId="";state.detailData=null}
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
 function textMetric(label,value){return `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`}
-function contributionDetail(item,range){const recent=range==="recent";const rank=recent?item.recentContributionRank:item.contributionRank;const score=recent?item.recentContributionScore:item.contributionScore;const position=recent?item.recentContributionPosition:item.contributionPosition;const total=recent?item.recentContributionTotal:item.contributionTotal;return Number(position)>0?`${rank}・${number.format(score||0)}点・${number.format(position)}/${number.format(total)}位`:String(rank||"集計不足")}
+function contributionDetail(item,range){const recent=range==="recent";const rank=recent?item.recentContributionRank:item.contributionRank;const score=recent?item.recentContributionScore:item.contributionScore;const position=recent?item.recentContributionPosition:item.contributionPosition;const total=recent?item.recentContributionTotal:item.contributionTotal;return Number(position)>0?`${rank}・${number.format(score||0)}点・${number.format(position)}/${number.format(total)}位`:Number(score)<0?`${rank}・${number.format(score)}点`:String(rank||"集計不足")}
 function followBadge(status){const normalized=status==="following"?"following":status==="not_following"?"not-following":"unknown";const label=normalized==="following"?"フォロー中":normalized==="not-following"?"未フォロー":"未確認";return `<span class="follow-badge ${normalized}">${label}</span>`}
 function profileCount(value){return value===null||value===undefined?'<span class="profile-missing">未取得</span>':number.format(value)}
 function tiktokProfileLink(uniqueId){const id=String(uniqueId||"").trim().replace(/^@/,"");if(!id)return"";return `<a class="tiktok-profile-link" href="https://www.tiktok.com/@${encodeURIComponent(id)}" target="_blank" rel="noopener noreferrer">TikTokプロフィールを開く ↗</a>`}
