@@ -69,6 +69,7 @@ test("listener manager shows relative lifetime and recent contribution ranks", (
   assert.match(clientSource, /recentContributionRank/);
   assert.match(clientSource, /Number\(score\) < 0/);
   assert.match(clientSource, /ランキング対象コイン/);
+  assert.match(clientSource, /1来訪あたり対象コイン/);
   assert.match(clientSource, /query\.set\("fresh","1"\)/);
   assert.match(serverSource, /listenerContributionPage/);
 });

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildContributionRankings, contributionTier } from "../lib/contribution-rank.js";
 
-test("contribution ranks are relative and reward gifts, visits, comments, recency, and a small like bonus", () => {
+test("contribution ranks are relative and reward gifts, coins per visit, comments, recency, and a small like bonus", () => {
   const rows = Array.from({ length: 100 }, (_, index) => ({
     user_id: `user-${index + 1}`,
     search_text: `user-${index + 1}`,
@@ -25,10 +25,27 @@ test("contribution ranks are relative and reward gifts, visits, comments, recenc
   assert.equal(top.contributionPosition, 1);
   assert.equal(top.contributionScore, 105);
   assert.equal(top.contributionCoins, 1000);
+  assert.equal(top.contributionCoinsPerVisit, 9.9);
   assert.equal(top.recentContributionCoins, 198);
+  assert.equal(top.recentContributionCoinsPerVisit, 66);
   assert.equal(middle.contributionRank, "D");
   assert.equal(rankings.lifetimeOrder[0], "user-100");
-  assert.equal(rankings.recentOrder[0], "user-100");
+  assert.equal(rankings.recentOrder[0], "user-98");
+});
+
+test("the same qualifying coins score higher when earned across fewer visits", () => {
+  const rankings = buildContributionRankings([
+    { user_id:"efficient", visits:2, comments:10, coins:100, likes:0, stats_last_seen_at:2 },
+    { user_id:"frequent-low-gift", visits:20, comments:10, coins:100, likes:0, stats_last_seen_at:2 },
+    { user_id:"baseline", visits:5, comments:5, coins:50, likes:0, stats_last_seen_at:1 }
+  ]);
+
+  assert.equal(rankings.byUserId.get("efficient").contributionCoinsPerVisit, 50);
+  assert.equal(rankings.byUserId.get("frequent-low-gift").contributionCoinsPerVisit, 5);
+  assert.ok(
+    rankings.byUserId.get("efficient").contributionScore
+      > rankings.byUserId.get("frequent-low-gift").contributionScore
+  );
 });
 
 test("listeners with no gifts and no comments stay D regardless of repeat visits", () => {
