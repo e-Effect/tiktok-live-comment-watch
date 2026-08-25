@@ -139,6 +139,31 @@ test("listener profile fields are returned without turning missing counts into z
   assert.equal(typeof result.items[0].hostFollowStatusUpdatedAt, "number");
 });
 
+test("listener contribution rankings combine lifetime and recent activity and reuse the cache", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let calls = 0;
+  store.pool = {
+    async query(sql, values) {
+      calls += 1;
+      assert.match(sql, /INTERVAL '30 days'/);
+      assert.match(sql, /recent_visits/);
+      assert.deepEqual(values, ["streamer"]);
+      return { rows: [
+        { user_id:"top", search_text:"top listener", visits:"8", comments:"30", coins:"500", stats_last_seen_at:new Date("2026-08-25T10:00:00Z"), recent_visits:"3", recent_comments:"10", recent_coins:"100", recent_last_seen_at:new Date("2026-08-25T10:00:00Z") },
+        { user_id:"other", search_text:"other listener", visits:"2", comments:"1", coins:"0", stats_last_seen_at:new Date("2026-08-20T10:00:00Z"), recent_visits:"1", recent_comments:"1", recent_coins:"0", recent_last_seen_at:new Date("2026-08-20T10:00:00Z") }
+      ] };
+    }
+  };
+
+  const first = await store.listenerContributionRankings({ username:"streamer" });
+  const second = await store.listenerContributionRankings({ username:"streamer" });
+  assert.equal(calls, 1);
+  assert.equal(first.byUserId.get("top").contributionPosition, 1);
+  assert.equal(first.byUserId.get("top").recentContributionPosition, 1);
+  assert.equal(second.generatedAt, first.generatedAt);
+});
+
 test("live events save the latest TikTok profile snapshot with the listener", async () => {
   const store = new EventStore();
   store.ready = true;

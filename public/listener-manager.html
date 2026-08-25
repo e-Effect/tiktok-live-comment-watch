@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>リアルタイム・リスナー台帳</title>
-    <link rel="stylesheet" href="/listener-manager.css?v=20260824-follow-profile2">
+    <link rel="stylesheet" href="/listener-manager.css?v=20260825-contribution-rank1">
   </head>
   <body>
     <section id="loginPanel" class="login-panel">
@@ -43,6 +43,8 @@
           <label>並び順
             <select id="sort">
               <option value="last_seen">最終来訪が新しい順</option>
+              <option value="contribution">総合ランク順</option>
+              <option value="recent_contribution">直近30日ランク順</option>
               <option value="visits">来訪回数が多い順</option>
               <option value="comments">コメント数が多い順</option>
               <option value="coins">ギフトコインが多い順</option>
@@ -65,7 +67,7 @@
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>リスナー</th><th>あなたをフォロー</th><th>スパファン</th><th>要確認</th><th>来訪</th><th>コメント</th><th>ギフト</th><th>コイン</th><th>最終来訪</th></tr></thead>
+                <thead><tr><th>リスナー</th><th>ランク</th><th>あなたをフォロー</th><th>スパファン</th><th>要確認</th><th>来訪</th><th>コメント</th><th>ギフト</th><th>コイン</th><th>最終来訪</th></tr></thead>
                 <tbody id="listenerRows"></tbody>
               </table>
             </div>
@@ -90,6 +92,6 @@
       <button id="detailClose" class="detail-close" type="button" aria-label="閉じる">×</button>
       <div id="detailContent"></div>
     </aside>
-    <script src="/listener-manager.js?v=20260824-follow-profile2" type="module"></script>
+    <script src="/listener-manager.js?v=20260825-contribution-rank1" type="module"></script>
   </body>
 </html>

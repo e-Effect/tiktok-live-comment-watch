@@ -1727,6 +1727,12 @@ function normalizeListenerSearch(value) {
   return String(value || "").normalize("NFKC").trim().replace(/^@/, "");
 }
 
+function publicContributionRank(rank) {
+  if (!rank) return {};
+  const { searchText: _searchText, userId: _userId, ...publicRank } = rank;
+  return publicRank;
+}
+
 function listenerRowsToCsv(rows = []) {
   const output = [["ユーザーID", "TikTok ID", "表示名", "あなたをフォロー", "本人のフォロー数", "本人のフォロワー数", "プロフィール確認日時", "来訪回数", "コメント数", "ギフト個数", "ギフトコイン", "シェア回数", "スーパーファン", "初回来訪", "最終来訪", "タグ", "メモ"]];
   for (const item of rows) {
@@ -2485,14 +2491,28 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/api/listeners" && request.method === "GET") {
     if (!requireListenerAdmin(request, response)) return;
     try {
-      sendJson(response, 200, await eventStore.listeners({
+      const options = {
         username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
         search: normalizeListenerSearch(url.searchParams.get("search") || ""),
         sort: url.searchParams.get("sort") || "last_seen",
         direction: url.searchParams.get("direction") || "desc",
         limit: Number(url.searchParams.get("limit") || 100),
-        offset: Number(url.searchParams.get("offset") || 0)
-      }));
+        offset: Number(url.searchParams.get("offset") || 0),
+        fresh: url.searchParams.get("fresh") === "1"
+      };
+      if (options.sort === "contribution" || options.sort === "recent_contribution") {
+        sendJson(response, 200, await eventStore.listenerContributionPage(options));
+        return;
+      }
+      const [result, ranks] = await Promise.all([
+        eventStore.listeners(options),
+        eventStore.listenerContributionRankings({ username: options.username, fresh: options.fresh })
+      ]);
+      sendJson(response, 200, {
+        ...result,
+        items: result.items.map((item) => ({ ...item, ...publicContributionRank(ranks.byUserId.get(item.userId)) })),
+        rankingGeneratedAt: ranks.generatedAt
+      });
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -2546,6 +2566,13 @@ const server = createServer(async (request, response) => {
         const detail = await eventStore.listenerDetail(userId, {
           username: normalizeTikTokUsername(url.searchParams.get("username") || "")
         });
+        if (detail) {
+          const ranks = await eventStore.listenerContributionForIds({
+            username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
+            userIds: [userId]
+          });
+          detail.listener = { ...detail.listener, ...ranks.get(userId) };
+        }
         sendJson(response, detail ? 200 : 404, detail || { error: "リスナーが見つかりません" });
         return;
       }

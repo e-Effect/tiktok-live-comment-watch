@@ -22,7 +22,7 @@ el.loginForm.addEventListener("submit", async (event) => {
 el.logout.addEventListener("click", logout);
 el.backfillAvatars.addEventListener("click", backfillAvatars);
 el.compactAvatars.addEventListener("click", compactAvatars);
-el.refresh.addEventListener("click", refreshAll);
+el.refresh.addEventListener("click", () => refreshAll({fresh:true}));
 el.exportCsv.addEventListener("click", exportCsv);
 el.search.addEventListener("input", debounce(() => { state.listenerPage = 0; refreshListeners(); }, 300));
 el.streamUsername.addEventListener("change", () => {
@@ -93,8 +93,8 @@ function logout() {
   el.adminKey.value = "";
 }
 
-async function refreshAll() {
-  await Promise.all([refreshSummary(), refreshListeners(), refreshRealtime()]);
+async function refreshAll(options = {}) {
+  await Promise.all([refreshSummary(options), refreshListeners(options), refreshRealtime()]);
 }
 
 async function backfillAvatars() {
@@ -168,7 +168,7 @@ async function refreshSummary(options = {}) {
   } catch (error) { showConnectionError(error); }
 }
 
-async function refreshListeners() {
+async function refreshListeners(options = {}) {
   state.searchController?.abort();
   const controller = new AbortController();
   state.searchController = controller;
@@ -182,6 +182,7 @@ async function refreshListeners() {
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
       limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
     });
+    if (options.fresh) query.set("fresh","1");
     const username = cleanUsername(); if (username) query.set("username",username);
     const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
@@ -275,7 +276,20 @@ function rowHtml(item, attentionActive = false) {
   const rawName = item.nickname || item.uniqueId || item.userId;
   const name = escapeHtml(rawName);
   const sub = item.uniqueId ? `@${escapeHtml(item.uniqueId)}` : escapeHtml(item.userId);
-  return `<tr class="listener-row ${attentionActive?"attention-active":""}" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}${item.needsAttention?'<span class="attention-badge">要確認</span>':''}</strong><small>${sub}${attentionActive?'・<b class="attention-now">いま反応あり</b>':''}</small></div></div></td><td class="follow-status-cell">${followBadge(item.hostFollowStatus)}</td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td class="attention-cell"><input class="attention-toggle" type="checkbox" ${item.needsAttention?"checked":""} aria-label="${escapeAttr(rawName)}を要確認として管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+  return `<tr class="listener-row ${attentionActive?"attention-active":""}" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}${item.needsAttention?'<span class="attention-badge">要確認</span>':''}</strong><small>${sub}${attentionActive?'・<b class="attention-now">いま反応あり</b>':''}</small></div></div></td><td class="contribution-cell">${contributionCell(item)}</td><td class="follow-status-cell">${followBadge(item.hostFollowStatus)}</td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td class="attention-cell"><input class="attention-toggle" type="checkbox" ${item.needsAttention?"checked":""} aria-label="${escapeAttr(rawName)}を要確認として管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+}
+
+function contributionCell(item) {
+  const total = contributionLine("総合", item.contributionRank, item.contributionScore, item.contributionPosition);
+  const recent = contributionLine("30日", item.recentContributionRank, item.recentContributionScore, item.recentContributionPosition);
+  return `<div class="contribution-ranks">${total}${recent}</div>`;
+}
+
+function contributionLine(label, rank, score, position) {
+  const normalized = String(rank || "集計不足");
+  const tierClass = /^[SABCD]$/.test(normalized) ? `tier-${normalized.toLowerCase()}` : "tier-none";
+  const details = Number(position) > 0 ? `${number.format(score||0)}点・${number.format(position)}位` : normalized;
+  return `<span class="contribution-line"><small>${label}</small><b class="rank-badge ${tierClass}">${escapeHtml(normalized)}</b><em>${escapeHtml(details)}</em></span>`;
 }
 
 function renderListenerTable() {
@@ -398,7 +412,7 @@ function renderDetail(data) {
   const receiptTotal = (data.receiptPrints||[]).length;
   el.detailContent.innerHTML = `
     <div class="detail-hero">${avatar(item)}<div><h2>${escapeHtml(item.nickname||item.uniqueId||item.userId)}</h2><p>${item.uniqueId?`@${escapeHtml(item.uniqueId)}`:""}</p><p>ユーザーID: ${escapeHtml(item.userId)}</p>${tiktokProfileLink(item.uniqueId)}</div></div>
-    <div class="detail-metrics">${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("コイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
+    <div class="detail-metrics">${textMetric("総合ランク",contributionDetail(item,"lifetime"))}${textMetric("直近30日",contributionDetail(item,"recent"))}${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("コイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
     <section class="detail-section"><h3>TikTokプロフィール</h3><div class="profile-facts"><div class="profile-fact"><span>あなたをフォロー</span><strong>${followBadge(item.hostFollowStatus)}</strong><small>${item.hostFollowStatusUpdatedAt?`最終確認 ${escapeHtml(formatHistoryDate(item.hostFollowStatusUpdatedAt))}`:"まだ確認できていません"}</small></div><div class="profile-fact"><span>本人のフォロー数</span><strong>${profileCount(item.followingCount)}</strong></div><div class="profile-fact"><span>本人のフォロワー数</span><strong>${profileCount(item.followerCount)}</strong></div><div class="profile-fact"><span>人数の更新</span><strong class="profile-updated">${item.profileCountsUpdatedAt?escapeHtml(formatHistoryDate(item.profileCountsUpdatedAt)):"未取得"}</strong></div></div><p class="profile-note">TikTokから最後に受信できたプロフィール情報です。未確認は未フォローという意味ではありません。</p></section>
     <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label class="check attention-check"><input id="detailNeedsAttention" type="checkbox" ${item.needsAttention?"checked":""}> 要確認（配信中に反応したら30秒間、赤く上部表示）</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
     ${historySection("visits",data.visitHistory)}
@@ -463,6 +477,8 @@ async function saveDetail(event) {
 
 function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId="";state.detailData=null}
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
+function textMetric(label,value){return `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`}
+function contributionDetail(item,range){const recent=range==="recent";const rank=recent?item.recentContributionRank:item.contributionRank;const score=recent?item.recentContributionScore:item.contributionScore;const position=recent?item.recentContributionPosition:item.contributionPosition;const total=recent?item.recentContributionTotal:item.contributionTotal;return Number(position)>0?`${rank}・${number.format(score||0)}点・${number.format(position)}/${number.format(total)}位`:String(rank||"集計不足")}
 function followBadge(status){const normalized=status==="following"?"following":status==="not_following"?"not-following":"unknown";const label=normalized==="following"?"フォロー中":normalized==="not-following"?"未フォロー":"未確認";return `<span class="follow-badge ${normalized}">${label}</span>`}
 function profileCount(value){return value===null||value===undefined?'<span class="profile-missing">未取得</span>':number.format(value)}
 function tiktokProfileLink(uniqueId){const id=String(uniqueId||"").trim().replace(/^@/,"");if(!id)return"";return `<a class="tiktok-profile-link" href="https://www.tiktok.com/@${encodeURIComponent(id)}" target="_blank" rel="noopener noreferrer">TikTokプロフィールを開く ↗</a>`}
