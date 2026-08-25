@@ -24,12 +24,12 @@ test("contribution ranks are relative and reward gifts, visits, comments, recenc
   assert.equal(top.contributionRank, "S");
   assert.equal(top.contributionPosition, 1);
   assert.equal(top.contributionScore, 105);
-  assert.equal(middle.contributionRank, "C");
+  assert.equal(middle.contributionRank, "D");
   assert.equal(rankings.lifetimeOrder[0], "user-100");
   assert.equal(rankings.recentOrder[0], "user-100");
 });
 
-test("one silent first visit stays unranked while repeat visitors remain eligible", () => {
+test("listeners with no gifts and no comments stay D regardless of repeat visits", () => {
   const rankings = buildContributionRankings([
     { user_id:"first", visits:1, comments:0, coins:0 },
     { user_id:"repeat", visits:2, comments:0, coins:0, stats_last_seen_at:2 },
@@ -38,15 +38,28 @@ test("one silent first visit stays unranked while repeat visitors remain eligibl
 
   assert.equal(rankings.byUserId.get("first").contributionRank, "集計不足");
   assert.equal(rankings.byUserId.get("first").contributionPosition, null);
-  assert.ok(rankings.byUserId.get("repeat").contributionPosition > 0);
+  assert.equal(rankings.byUserId.get("repeat").contributionRank, "D");
+  assert.equal(rankings.byUserId.get("repeat").contributionPosition, null);
   assert.ok(rankings.byUserId.get("gifter").contributionPosition > 0);
 });
 
+test("a one-coin gift starts near the bottom of gift-giver percentiles instead of above all zeroes", () => {
+  const rankings = buildContributionRankings([
+    { user_id:"one", visits:2, comments:0, coins:1, stats_last_seen_at:1 },
+    { user_id:"hundred", visits:2, comments:0, coins:100, stats_last_seen_at:2 },
+    { user_id:"thousand", visits:2, comments:0, coins:1000, stats_last_seen_at:3 },
+    ...Array.from({length:20},(_,index)=>({user_id:`silent-${index}`,visits:10,comments:0,coins:0,stats_last_seen_at:index+4}))
+  ]);
+  assert.ok(rankings.byUserId.get("one").contributionScore < rankings.byUserId.get("hundred").contributionScore);
+  assert.equal(rankings.byUserId.get("silent-19").contributionRank, "D");
+  assert.equal(rankings.byUserId.get("silent-19").contributionPosition, null);
+});
+
 test("rank tier boundaries use the listener population instead of fixed coin totals", () => {
-  assert.equal(contributionTier(3, 100), "S");
-  assert.equal(contributionTier(4, 100), "A");
-  assert.equal(contributionTier(10, 100), "A");
-  assert.equal(contributionTier(25, 100), "B");
-  assert.equal(contributionTier(50, 100), "C");
-  assert.equal(contributionTier(51, 100), "D");
+  assert.equal(contributionTier(1, 100), "S");
+  assert.equal(contributionTier(2, 100), "A");
+  assert.equal(contributionTier(5, 100), "A");
+  assert.equal(contributionTier(15, 100), "B");
+  assert.equal(contributionTier(40, 100), "C");
+  assert.equal(contributionTier(41, 100), "D");
 });
