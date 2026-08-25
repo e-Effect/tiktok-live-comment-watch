@@ -148,6 +148,8 @@ test("listener contribution rankings combine lifetime and recent activity and re
       calls += 1;
       assert.match(sql, /INTERVAL '30 days'/);
       assert.match(sql, /recent_visits/);
+      assert.match(sql, /diamonds::numeric \/ item_count > 10/);
+      assert.match(sql, /rankable_gifts/);
       assert.deepEqual(values, ["streamer"]);
       return { rows: [
         { user_id:"top", search_text:"top listener", visits:"8", comments:"30", coins:"500", stats_last_seen_at:new Date("2026-08-25T10:00:00Z"), recent_visits:"3", recent_comments:"10", recent_coins:"100", recent_last_seen_at:new Date("2026-08-25T10:00:00Z") },

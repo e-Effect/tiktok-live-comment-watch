@@ -24,6 +24,8 @@ test("contribution ranks are relative and reward gifts, visits, comments, recenc
   assert.equal(top.contributionRank, "S");
   assert.equal(top.contributionPosition, 1);
   assert.equal(top.contributionScore, 105);
+  assert.equal(top.contributionCoins, 1000);
+  assert.equal(top.recentContributionCoins, 198);
   assert.equal(middle.contributionRank, "D");
   assert.equal(rankings.lifetimeOrder[0], "user-100");
   assert.equal(rankings.recentOrder[0], "user-100");
