@@ -60,10 +60,11 @@ test("a one-coin gift starts near the bottom of gift-giver percentiles instead o
 });
 
 test("rank tier boundaries use the listener population instead of fixed coin totals", () => {
-  assert.equal(contributionTier(1, 100), "S");
-  assert.equal(contributionTier(2, 100), "A");
-  assert.equal(contributionTier(5, 100), "A");
-  assert.equal(contributionTier(15, 100), "B");
-  assert.equal(contributionTier(40, 100), "C");
-  assert.equal(contributionTier(41, 100), "D");
+  assert.equal(contributionTier(1, 1000), "S");
+  assert.equal(contributionTier(5, 1000), "S");
+  assert.equal(contributionTier(6, 1000), "A");
+  assert.equal(contributionTier(20, 1000), "A");
+  assert.equal(contributionTier(60, 1000), "B");
+  assert.equal(contributionTier(100, 1000), "C");
+  assert.equal(contributionTier(101, 1000), "D");
 });
