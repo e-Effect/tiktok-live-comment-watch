@@ -246,6 +246,40 @@ test("visit history counts distinct live room ids instead of re-entries", async 
   assert.equal(calls[3].values[3], "");
 });
 
+test("visit judgment checks Heart Me history and syncs the ledger in parallel", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let releaseHeartMe;
+  let releaseListenerSync;
+  let heartMeStarted = false;
+  let listenerSyncStarted = false;
+  store.pool = {
+    async query(sql) {
+      if (sql.includes("COUNT(DISTINCT")) return { rows: [{ visitCount: "2" }] };
+      if (sql.includes("AS \"pastCount\"") && sql.includes("is_heart_me")) {
+        heartMeStarted = true;
+        return new Promise((resolve) => { releaseHeartMe = () => resolve({ rows: [{}] }); });
+      }
+      if (sql.includes("WITH upsert_listener AS")) {
+        listenerSyncStarted = true;
+        return new Promise((resolve) => { releaseListenerSync = () => resolve({ rows: [] }); });
+      }
+      return { rows: [] };
+    }
+  };
+
+  const pending = store.recordVisit({ id: "session-id", username: "streamer" }, {
+    userId: "viewer-id",
+    at: Date.parse("2026-08-28T00:00:00Z")
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(heartMeStarted, true);
+  assert.equal(listenerSyncStarted, true);
+  releaseHeartMe();
+  releaseListenerSync();
+  assert.equal((await pending).visitCount, 2);
+});
+
 test("does not label a visitor as first-time while the database is unavailable", async () => {
   const store = new EventStore();
   const summary = await store.recordVisit({ id: "session-id", username: "streamer" }, {

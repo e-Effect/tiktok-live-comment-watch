@@ -2307,6 +2307,7 @@ const server = createServer(async (request, response) => {
       },
       database: {
         ...eventStore.status(),
+        visitJudgmentMode: "parallel-v1",
         queuedEvents: [...sessions.values()].reduce((total, session) => total + session.pendingDatabaseEvents.length, 0),
         pendingVisitChecks: [...sessions.values()].reduce((total, session) => total + session.pendingVisitChecks.size, 0)
       },
