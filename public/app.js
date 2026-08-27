@@ -112,6 +112,9 @@ const SINGLE_MODE_KEY = "tiktok-live-single-mode";
 const FONT_SIZE_KEY = "tiktok-live-font-size-level";
 const PREVIEW_ADMIN_KEY = "tiktok-listener-admin-key";
 const GIFT_HISTORY_FILTER_KEY = "tiktok-live-gift-history-filter-v1";
+const GIFT_HISTORY_MAGIC_POTION_MIGRATION_KEY = "tiktok-live-gift-history-magic-potion-v1";
+const LEGACY_FEATURED_GIFT_KEYS = ["name:ハートミー", "name:だいすき", "name:折り鶴"];
+const MAGIC_POTION_GIFT_KEY = "name:magic potion";
 const MAX_RECENT_IDS = 8;
 const MAX_ACTIVE_SESSIONS = 3;
 const PANEL_SIZE_OPTIONS = ["small", "tall", "medium", "large", "wide"];
@@ -2240,10 +2243,24 @@ function closeGiftHistoryFilter() {
 
 function readGiftHistoryFilter() {
   try {
-    return cloneGiftHistoryFilter(JSON.parse(localStorage.getItem(GIFT_HISTORY_FILTER_KEY) || "null"));
+    const filter = cloneGiftHistoryFilter(JSON.parse(localStorage.getItem(GIFT_HISTORY_FILTER_KEY) || "null"));
+    return addMagicPotionToFeaturedGiftFilter(filter);
   } catch {
     return cloneGiftHistoryFilter(null);
   }
+}
+
+function addMagicPotionToFeaturedGiftFilter(filter) {
+  if (!filter.enabled || localStorage.getItem(GIFT_HISTORY_MAGIC_POTION_MIGRATION_KEY)) return filter;
+  const selected = new Set(filter.selected);
+  if (!LEGACY_FEATURED_GIFT_KEYS.every((key) => selected.has(key)) || selected.has(MAGIC_POTION_GIFT_KEY)) {
+    return filter;
+  }
+  selected.add(MAGIC_POTION_GIFT_KEY);
+  const migrated = { ...filter, selected: [...selected] };
+  localStorage.setItem(GIFT_HISTORY_FILTER_KEY, JSON.stringify(migrated));
+  localStorage.setItem(GIFT_HISTORY_MAGIC_POTION_MIGRATION_KEY, "1");
+  return migrated;
 }
 
 function cloneGiftHistoryFilter(value) {

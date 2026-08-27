@@ -19,6 +19,14 @@ test("gift filter includes the receipt application's catalog", () => {
   assert.equal(new Set(receiptCatalog.map((gift) => Number(gift.id))).size, receiptCatalog.length);
   assert.ok(receiptCatalog.every((gift) => Number(gift.id) > 0 && String(gift.name).trim() && Number(gift.coins) >= 0));
   assert.equal(receiptCatalog.find((gift) => Number(gift.id) === 7934)?.name, "ハートミー");
+  assert.equal(receiptCatalog.find((gift) => Number(gift.id) === 14753)?.name, "Magic Potion");
   assert.match(client, /fetch\("\/receipt-gift-catalog\.json"/);
   assert.match(client, /\.\.\.receiptGiftCatalog, \.\.\.sessionGiftCatalog/);
+});
+
+test("adds Magic Potion once to the existing featured-gift filter", () => {
+  assert.match(client, /LEGACY_FEATURED_GIFT_KEYS = \["name:ハートミー", "name:だいすき", "name:折り鶴"\]/);
+  assert.match(client, /MAGIC_POTION_GIFT_KEY = "name:magic potion"/);
+  assert.match(client, /addMagicPotionToFeaturedGiftFilter\(filter\)/);
+  assert.match(client, /GIFT_HISTORY_MAGIC_POTION_MIGRATION_KEY/);
 });
