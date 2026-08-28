@@ -73,3 +73,13 @@ test("listener manager shows relative lifetime and recent contribution ranks", (
   assert.match(clientSource, /query\.set\("fresh","1"\)/);
   assert.match(serverSource, /listenerContributionPage/);
 });
+
+test("listener manager can manage automatically classified lurkers", () => {
+  assert.match(htmlSource, /id="classificationFilter"/);
+  assert.match(htmlSource, /value="lurker">潜り人のみ/);
+  assert.match(htmlSource, /value="lurker">潜り傾向が強い順/);
+  assert.match(clientSource, /lurker-badge/);
+  assert.match(clientSource, /来訪5回以上/);
+  assert.match(eventStoreSource, /listenerLurkerIds/);
+  assert.match(eventStoreSource, /lurkers/);
+});

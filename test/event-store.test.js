@@ -69,6 +69,24 @@ test("listener search narrows people before aggregating their stream totals", as
   assert.equal(result.items[0].visits, 2);
 });
 
+test("listener classification filters and sorts lurkers from aggregate activity", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = {
+    async query(sql, values) {
+      assert.match(sql, /AS is_lurker/);
+      assert.match(sql, /WHERE c\.is_lurker = TRUE/);
+      assert.match(sql, /ORDER BY lurker_score DESC/);
+      assert.deepEqual(values, ["streamer", "", 100, 0]);
+      return { rows: [{ user_id:"silent", visits:"8", comments:"1", coins:"0", full_count:"1" }] };
+    }
+  };
+  const result = await store.listeners({ username:"streamer", classification:"lurker", sort:"lurker" });
+  assert.equal(result.total, 1);
+  assert.equal(result.items[0].isLurker, true);
+  assert.equal(result.items[0].commentsPerVisit, 0.13);
+});
+
 test("listener comment history is paginated while remaining fully reachable", async () => {
   const store = new EventStore();
   store.ready = true;

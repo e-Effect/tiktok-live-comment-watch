@@ -2497,6 +2497,7 @@ const server = createServer(async (request, response) => {
         search: normalizeListenerSearch(url.searchParams.get("search") || ""),
         sort: url.searchParams.get("sort") || "last_seen",
         direction: url.searchParams.get("direction") || "desc",
+        classification: url.searchParams.get("classification") || "all",
         limit: Number(url.searchParams.get("limit") || 100),
         offset: Number(url.searchParams.get("offset") || 0),
         fresh: url.searchParams.get("fresh") === "1"

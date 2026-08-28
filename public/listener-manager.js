@@ -31,6 +31,7 @@ el.streamUsername.addEventListener("change", () => {
   refreshAll();
 });
 el.sort.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
+el.classificationFilter.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
 el.listenerPrev.addEventListener("click", () => {
   if (state.listenerPage <= 0) return;
   state.listenerPage -= 1;
@@ -160,6 +161,7 @@ async function refreshSummary(options = {}) {
     const cards = [
       ["記録リスナー", state.summary.listeners], ["本日活動", state.summary.activeToday],
       ["リピーター", state.summary.returning], ["スーパーファン", state.summary.superFans],
+      ["潜り人", state.summary.lurkers],
       ["アイコン取得済み", state.summary.avatars],
       ["来訪回数", state.summary.visits], ["コメント", state.summary.comments],
       ["ギフト個数", state.summary.gifts], ["ギフトコイン", state.summary.coins, true], ["シェア", state.summary.shares]
@@ -178,7 +180,7 @@ async function refreshListeners(options = {}) {
     el.listenerRows.setAttribute("aria-busy", "true");
     el.resultCount.textContent = search ? `「${search}」を検索中…` : "一覧を読み込み中…";
     const query = new URLSearchParams({
-      search, sort:el.sort.value,
+      search, sort:el.sort.value, classification:el.classificationFilter.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
       limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
     });
@@ -276,7 +278,7 @@ function rowHtml(item, attentionActive = false) {
   const rawName = item.nickname || item.uniqueId || item.userId;
   const name = escapeHtml(rawName);
   const sub = item.uniqueId ? `@${escapeHtml(item.uniqueId)}` : escapeHtml(item.userId);
-  return `<tr class="listener-row ${attentionActive?"attention-active":""}" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}${item.needsAttention?'<span class="attention-badge">要確認</span>':''}</strong><small>${sub}${attentionActive?'・<b class="attention-now">いま反応あり</b>':''}</small></div></div></td><td class="contribution-cell">${contributionCell(item)}</td><td class="follow-status-cell">${followBadge(item.hostFollowStatus)}</td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td class="attention-cell"><input class="attention-toggle" type="checkbox" ${item.needsAttention?"checked":""} aria-label="${escapeAttr(rawName)}を要確認として管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+  return `<tr class="listener-row ${item.isLurker?"lurker-row":""} ${attentionActive?"attention-active":""}" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}${item.isLurker?'<span class="lurker-badge">潜り人</span>':''}${item.needsAttention?'<span class="attention-badge">要確認</span>':''}</strong><small>${sub}${attentionActive?'・<b class="attention-now">いま反応あり</b>':''}</small></div></div></td><td class="contribution-cell">${contributionCell(item)}</td><td class="follow-status-cell">${followBadge(item.hostFollowStatus)}</td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td class="attention-cell"><input class="attention-toggle" type="checkbox" ${item.needsAttention?"checked":""} aria-label="${escapeAttr(rawName)}を要確認として管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
 }
 
 function contributionCell(item) {
@@ -410,9 +412,11 @@ function renderDetail(data) {
   const totals = (data.stats||[]).reduce((a,s)=>({visits:a.visits+s.visitCount,comments:a.comments+s.commentCount,gifts:a.gifts+s.giftCount,coins:a.coins+s.giftCoins}),{visits:0,comments:0,gifts:0,coins:0});
   const stampTotal = (data.stamps||[]).reduce((sum, stamp)=>sum+Number(stamp.quantity||1),0);
   const receiptTotal = (data.receiptPrints||[]).length;
+  const lurking = classifyLurkingTotals(totals);
   el.detailContent.innerHTML = `
     <div class="detail-hero">${avatar(item)}<div><h2>${escapeHtml(item.nickname||item.uniqueId||item.userId)}</h2><p>${item.uniqueId?`@${escapeHtml(item.uniqueId)}`:""}</p><p>ユーザーID: ${escapeHtml(item.userId)}</p>${tiktokProfileLink(item.uniqueId)}</div></div>
-    <div class="detail-metrics">${textMetric("総合ランク",contributionDetail(item,"lifetime"))}${textMetric("直近30日",contributionDetail(item,"recent"))}${metric("ランキング対象コイン",item.contributionCoins)}${metric("1来訪あたり対象コイン",item.contributionCoinsPerVisit)}${metric("30日対象コイン",item.recentContributionCoins)}${metric("30日・1来訪あたり",item.recentContributionCoinsPerVisit)}${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("全ギフトコイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
+    <div class="detail-metrics">${textMetric("分類",lurking.isLurker?"潜り人":"通常")}${metric("コメント／来訪",lurking.commentsPerVisit)}${metric("全コイン／来訪",lurking.allCoinsPerVisit)}${textMetric("総合ランク",contributionDetail(item,"lifetime"))}${textMetric("直近30日",contributionDetail(item,"recent"))}${metric("ランキング対象コイン",item.contributionCoins)}${metric("1来訪あたり対象コイン",item.contributionCoinsPerVisit)}${metric("30日対象コイン",item.recentContributionCoins)}${metric("30日・1来訪あたり",item.recentContributionCoinsPerVisit)}${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("全ギフトコイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
+    <p class="lurker-rule ${lurking.isLurker?"matched":""}">${lurking.isLurker?"潜り人に自動分類されています。":"潜り人の条件には該当していません。"} 判定基準：来訪5回以上・1来訪あたりコメント0.5件未満・1来訪あたり全ギフトコイン10未満。</p>
     <section class="detail-section"><h3>TikTokプロフィール</h3><div class="profile-facts"><div class="profile-fact"><span>あなたをフォロー</span><strong>${followBadge(item.hostFollowStatus)}</strong><small>${item.hostFollowStatusUpdatedAt?`最終確認 ${escapeHtml(formatHistoryDate(item.hostFollowStatusUpdatedAt))}`:"まだ確認できていません"}</small></div><div class="profile-fact"><span>本人のフォロー数</span><strong>${profileCount(item.followingCount)}</strong></div><div class="profile-fact"><span>本人のフォロワー数</span><strong>${profileCount(item.followerCount)}</strong></div><div class="profile-fact"><span>人数の更新</span><strong class="profile-updated">${item.profileCountsUpdatedAt?escapeHtml(formatHistoryDate(item.profileCountsUpdatedAt)):"未取得"}</strong></div></div><p class="profile-note">TikTokから最後に受信できたプロフィール情報です。未確認は未フォローという意味ではありません。</p></section>
     <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label class="check attention-check"><input id="detailNeedsAttention" type="checkbox" ${item.needsAttention?"checked":""}> 要確認（配信中に反応したら30秒間、赤く上部表示）</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
     ${historySection("visits",data.visitHistory)}
@@ -479,6 +483,7 @@ function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.re
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
 function textMetric(label,value){return `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`}
 function contributionDetail(item,range){const recent=range==="recent";const rank=recent?item.recentContributionRank:item.contributionRank;const score=recent?item.recentContributionScore:item.contributionScore;const position=recent?item.recentContributionPosition:item.contributionPosition;const total=recent?item.recentContributionTotal:item.contributionTotal;return Number(position)>0?`${rank}・${number.format(score||0)}点・${number.format(position)}/${number.format(total)}位`:Number(score)<0?`${rank}・${number.format(score)}点`:String(rank||"集計不足")}
+function classifyLurkingTotals(totals){const visits=Math.max(0,Number(totals.visits||0));const comments=Math.max(0,Number(totals.comments||0));const coins=Math.max(0,Number(totals.coins||0));const rawCommentsPerVisit=visits?comments/visits:0;const rawCoinsPerVisit=visits?coins/visits:0;return{isLurker:visits>=5&&rawCommentsPerVisit<.5&&rawCoinsPerVisit<10,commentsPerVisit:Math.round(rawCommentsPerVisit*100)/100,allCoinsPerVisit:Math.round(rawCoinsPerVisit*100)/100}}
 function followBadge(status){const normalized=status==="following"?"following":status==="not_following"?"not-following":"unknown";const label=normalized==="following"?"フォロー中":normalized==="not-following"?"未フォロー":"未確認";return `<span class="follow-badge ${normalized}">${label}</span>`}
 function profileCount(value){return value===null||value===undefined?'<span class="profile-missing">未取得</span>':number.format(value)}
 function tiktokProfileLink(uniqueId){const id=String(uniqueId||"").trim().replace(/^@/,"");if(!id)return"";return `<a class="tiktok-profile-link" href="https://www.tiktok.com/@${encodeURIComponent(id)}" target="_blank" rel="noopener noreferrer">TikTokプロフィールを開く ↗</a>`}

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>リアルタイム・リスナー台帳</title>
-    <link rel="stylesheet" href="/listener-manager.css?v=20260825-contribution-rank4">
+    <link rel="stylesheet" href="/listener-manager.css?v=20260828-lurker1">
   </head>
   <body>
     <section id="loginPanel" class="login-panel">
@@ -50,8 +50,16 @@
               <option value="coins">ギフトコインが多い順</option>
               <option value="gifts">ギフト個数が多い順</option>
               <option value="shares">シェア回数が多い順</option>
+              <option value="lurker">潜り傾向が強い順</option>
               <option value="first_seen">初回来訪が古い順</option>
               <option value="name">名前順</option>
+            </select>
+          </label>
+          <label>リスナー分類
+            <select id="classificationFilter">
+              <option value="all">すべて表示</option>
+              <option value="lurker">潜り人のみ</option>
+              <option value="non_lurker">潜り人を除く</option>
             </select>
           </label>
           <button id="refresh" type="button">全データを再読み込み</button>
@@ -92,6 +100,6 @@
       <button id="detailClose" class="detail-close" type="button" aria-label="閉じる">×</button>
       <div id="detailContent"></div>
     </aside>
-    <script src="/listener-manager.js?v=20260825-contribution-rank4" type="module"></script>
+    <script src="/listener-manager.js?v=20260828-lurker1" type="module"></script>
   </body>
 </html>
