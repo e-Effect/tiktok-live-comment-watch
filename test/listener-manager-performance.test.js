@@ -83,3 +83,11 @@ test("listener manager can manage automatically classified lurkers", () => {
   assert.match(eventStoreSource, /listenerLurkerIds/);
   assert.match(eventStoreSource, /lurkers/);
 });
+
+test("listener manager exposes a manual super lurker flag", () => {
+  assert.match(clientSource, /class="super-lurker-toggle"/);
+  assert.match(clientSource, /isSuperLurker:Boolean\(input\.checked\)/);
+  assert.match(clientSource, /スーパー潜り人（配信中に来たらスマホへ大きく表示）/);
+  assert.match(serverSource, /type: "super_lurker_alert"/);
+  assert.match(serverSource, /this\.superLurkerAlertedIds\.add/);
+});

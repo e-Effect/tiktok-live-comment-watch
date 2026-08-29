@@ -39,6 +39,7 @@ const DATABASE_RETRY_MS = Number(globalThis.process?.env?.DATABASE_RETRY_MS || 1
 const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_HEARTBEAT_STALE_MS || 150000);
 const COLLECTOR_RECEIVING_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_RECEIVING_STALE_MS || 15 * 60 * 1000);
 const COLLECTOR_NEW_LIVE_GAP_MS = Number(globalThis.process?.env?.COLLECTOR_NEW_LIVE_GAP_MS || 3 * 60 * 60 * 1000);
+const SUPER_LURKER_ALERT_TYPES = new Set(["join", "comment", "gift", "share", "like", "follow", "subscribe"]);
 let connectionPauseUntil = 0;
 let databaseRecoveryPending = false;
 const TIKTOOLS_SESSION_COOKIE = String(globalThis.process?.env?.TIKTOOLS_SESSION_COOKIE || "").trim();
@@ -161,6 +162,9 @@ class LiveSession extends EventEmitter {
     };
     this.firstVisitClaimPendingIds = new Set();
     this.firstVisitClaimAlertedIds = new Set();
+    this.superLurkerPendingIds = new Set();
+    this.superLurkerAlertedIds = new Set();
+    this.superLurkerCheckedAt = new Map();
   }
 
   async start() {
@@ -753,8 +757,53 @@ class LiveSession extends EventEmitter {
     }
   }
 
+  async checkSuperLurker(event) {
+    if (
+      !this.recordingEnabled
+      || event.source === "initial"
+      || !SUPER_LURKER_ALERT_TYPES.has(event.type)
+    ) return false;
+
+    const identityKey = String(event.userId || event.uniqueId || "").toLowerCase();
+    if (!identityKey || this.superLurkerPendingIds.has(identityKey) || this.superLurkerAlertedIds.has(identityKey)) {
+      return false;
+    }
+    const lastCheckedAt = Number(this.superLurkerCheckedAt.get(identityKey) || 0);
+    if (Date.now() - lastCheckedAt < 15000) return false;
+
+    this.superLurkerPendingIds.add(identityKey);
+    this.superLurkerCheckedAt.set(identityKey, Date.now());
+    try {
+      const flags = await eventStore.listenerManagementFlags({
+        userId: event.userId,
+        uniqueId: event.uniqueId,
+      });
+      if (!flags.known || !flags.isSuperLurker) return false;
+
+      this.superLurkerAlertedIds.add(identityKey);
+      const alert = {
+        id: `super-lurker:${this.id}:${flags.userId || identityKey}`,
+        type: "super_lurker_alert",
+        userId: flags.userId || event.userId || "",
+        uniqueId: event.uniqueId || flags.uniqueId || "",
+        nickname: event.nickname || flags.nickname || event.uniqueId || flags.uniqueId || "TikTokユーザー",
+        avatarUrl: event.avatarUrl || (flags.avatarCached ? `/api/listeners/avatar/${encodeURIComponent(flags.userId)}` : flags.avatarUrl) || "",
+        text: "スーパー潜り人！",
+        at: event.at || Date.now(),
+        source: event.source || "live",
+        payload: { triggerType: event.type },
+      };
+      this.emitNormalized(alert);
+      this.broadcast("super_lurker_alert", { alert });
+      return true;
+    } finally {
+      this.superLurkerPendingIds.delete(identityKey);
+    }
+  }
+
   emitNormalized(event) {
     if (!this.recordingEnabled) return;
+    if (event?.type !== "super_lurker_alert") this.checkSuperLurker(event).catch(() => {});
     if (!eventStore.status().ready) {
       this.queueDatabaseEvent(event);
     } else {

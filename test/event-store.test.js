@@ -127,13 +127,36 @@ test("listener attention flag is saved independently from super fan", async () =
   store.pool = {
     async query(sql, values) {
       assert.match(sql, /needs_attention = COALESCE/);
-      assert.deepEqual(values, ["listener-1", null, true, null, null]);
+      assert.deepEqual(values, ["listener-1", null, true, null, null, null]);
       return { rows: [{ user_id:"listener-1", needs_attention:true }] };
     }
   };
   const result = await store.updateListener("listener-1", { needsAttention:true });
   assert.equal(result.needsAttention, true);
   assert.equal(result.isSuperFan, false);
+});
+
+test("super lurker flag is saved independently and returned by identity", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let call = 0;
+  store.pool = {
+    async query(sql, values) {
+      call += 1;
+      if (call === 1) {
+        assert.match(sql, /is_super_lurker = COALESCE/);
+        assert.deepEqual(values, ["listener-1", null, null, true, null, null]);
+        return { rows: [{ user_id:"listener-1", is_super_lurker:true }] };
+      }
+      assert.match(sql, /listener_aliases/);
+      assert.deepEqual(values, ["listener-1", "viewer"]);
+      return { rows: [{ userId:"listener-1", uniqueId:"viewer", nickname:"Viewer", avatarUrl:"https://example.com/avatar.jpg", avatarCached:true, isSuperLurker:true }] };
+    }
+  };
+  const updated = await store.updateListener("listener-1", { isSuperLurker:true });
+  assert.equal(updated.isSuperLurker, true);
+  const flags = await store.listenerManagementFlags({ userId:"listener-1", uniqueId:"viewer" });
+  assert.deepEqual(flags, { known:true, userId:"listener-1", uniqueId:"viewer", nickname:"Viewer", avatarUrl:"https://example.com/avatar.jpg", avatarCached:true, isSuperLurker:true });
 });
 
 test("listener profile fields are returned without turning missing counts into zero", async () => {
