@@ -532,37 +532,51 @@ class LiveSession extends EventEmitter {
     if (!pending || pending.running || !this.recordingEnabled) return false;
     pending.running = true;
     try {
-      const summary = await eventStore.recordVisit(this, pending.visit);
-      const current = this.userStats.get(userId);
-      if (!current) {
-        this.pendingVisitChecks.delete(userId);
-        return false;
+      let judgmentApplied = false;
+      const summary = await eventStore.recordVisit(this, pending.visit, {
+        onJudgment: (judgment) => {
+          judgmentApplied = this.applyVisitSummary(userId, pending.visit, judgment, { includeHeartMe: false });
+        },
+      });
+      if (!judgmentApplied) {
+        if (!this.applyVisitSummary(userId, pending.visit, summary, { includeHeartMe: true })) return false;
+      } else {
+        this.applyVisitSummary(userId, pending.visit, summary, { includeHeartMe: true });
       }
-      if (!summary?.visitHistoryKnown) {
-        current.visitHistoryKnown = false;
-        current.visitHistoryStatus = "unknown";
-        current.visitCount = 0;
-        this.userStats.set(current.userId, current);
-        this.broadcastPresence([current]);
-        return false;
-      }
-      current.visitHistoryKnown = true;
-      current.visitHistoryStatus = Number(summary.visitCount || 0) === 1 ? "first" : "returning";
-      current.visitCount = Math.max(1, Number(summary.visitCount || 1));
-      current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || pending.visit.at;
-      current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || pending.visit.at;
-      current.previousVisitAt = summary.previousVisitAt || current.previousVisitAt || null;
-      current.heartMeHistoryKnown = Boolean(summary.heartMeHistoryKnown);
-      current.pastHeartMeGiftCount = Math.max(0, Number(summary.pastHeartMeGiftCount || 0));
-      current.lastPastHeartMeAt = summary.lastPastHeartMeAt || current.lastPastHeartMeAt || null;
-      if (current.pastHeartMeGiftCount > 0) current.heartMeHistoryStatus = "returning";
       this.pendingVisitChecks.delete(userId);
-      this.userStats.set(current.userId, current);
-      this.broadcastPresence([current]);
-      return true;
+      return Boolean(summary?.visitHistoryKnown);
     } finally {
       pending.running = false;
     }
+  }
+
+  applyVisitSummary(userId, visit, summary, { includeHeartMe = false } = {}) {
+    const current = this.userStats.get(userId);
+    if (!current) {
+      this.pendingVisitChecks.delete(userId);
+      return false;
+    }
+    if (!summary?.visitHistoryKnown) {
+      current.visitHistoryKnown = false;
+      current.visitHistoryStatus = "unknown";
+      current.visitCount = 0;
+    } else {
+      current.visitHistoryKnown = true;
+      current.visitHistoryStatus = Number(summary.visitCount || 0) === 1 ? "first" : "returning";
+      current.visitCount = Math.max(1, Number(summary.visitCount || 1));
+      current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || visit.at;
+      current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || visit.at;
+      current.previousVisitAt = summary.previousVisitAt || current.previousVisitAt || null;
+    }
+    if (includeHeartMe) {
+      current.heartMeHistoryKnown = Boolean(summary?.heartMeHistoryKnown);
+      current.pastHeartMeGiftCount = Math.max(0, Number(summary?.pastHeartMeGiftCount || 0));
+      current.lastPastHeartMeAt = summary?.lastPastHeartMeAt || current.lastPastHeartMeAt || null;
+      if (current.pastHeartMeGiftCount > 0) current.heartMeHistoryStatus = "returning";
+    }
+    this.userStats.set(current.userId, current);
+    this.broadcastPresence([current]);
+    return true;
   }
 
   async retryPendingVisits() {
@@ -723,13 +737,20 @@ class LiveSession extends EventEmitter {
 
     this.firstVisitClaimPendingIds.add(identityKey);
     try {
-      const history = await eventStore.priorListenerHistory({
-        sessionId: this.id,
-        roomId: this.roomId,
-        username: this.username,
-        userId: comment.userId,
-        uniqueId: comment.uniqueId,
-      });
+      const current = this.userStats.get(comment.userId);
+      const history = current?.visitHistoryKnown
+        ? {
+          known: true,
+          priorVisitCount: Math.max(0, Number(current.visitCount || 0) - 1),
+          lastPriorVisitAt: current.previousVisitAt || null,
+        }
+        : await eventStore.priorListenerHistory({
+          sessionId: this.id,
+          roomId: this.roomId,
+          username: this.username,
+          userId: comment.userId,
+          uniqueId: comment.uniqueId,
+        });
       if (!history.known || history.priorVisitCount < 1) return false;
 
       this.firstVisitClaimAlertedIds.add(identityKey);
@@ -2356,7 +2377,7 @@ const server = createServer(async (request, response) => {
       },
       database: {
         ...eventStore.status(),
-        visitJudgmentMode: "parallel-v1",
+        visitJudgmentMode: "early-result-v2",
         queuedEvents: [...sessions.values()].reduce((total, session) => total + session.pendingDatabaseEvents.length, 0),
         pendingVisitChecks: [...sessions.values()].reduce((total, session) => total + session.pendingVisitChecks.size, 0)
       },

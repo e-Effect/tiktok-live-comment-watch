@@ -321,6 +321,49 @@ test("visit judgment checks Heart Me history and syncs the ledger in parallel", 
   assert.equal((await pending).visitCount, 2);
 });
 
+test("visit judgment is published before slower profile enrichment finishes", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let releaseHeartMe;
+  let releaseListenerSync;
+  let publishedJudgment = null;
+  let completed = false;
+  store.pool = {
+    async query(sql) {
+      if (sql.includes("COUNT(DISTINCT")) {
+        return { rows: [{ visitCount: "4", previousVisitAt: new Date("2026-08-20T00:00:00Z") }] };
+      }
+      if (sql.includes("AS \"pastCount\"") && sql.includes("is_heart_me")) {
+        return new Promise((resolve) => { releaseHeartMe = () => resolve({ rows: [{}] }); });
+      }
+      if (sql.includes("WITH upsert_listener AS")) {
+        return new Promise((resolve) => { releaseListenerSync = () => resolve({ rows: [] }); });
+      }
+      return { rows: [] };
+    },
+  };
+
+  const pending = store.recordVisit({ id: "session-id", username: "streamer" }, {
+    userId: "viewer-id",
+    at: Date.parse("2026-08-30T00:00:00Z"),
+  }, {
+    onJudgment(judgment) {
+      publishedJudgment = judgment;
+    },
+  }).then((summary) => {
+    completed = true;
+    return summary;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(publishedJudgment?.visitCount, 4);
+  assert.equal(publishedJudgment?.previousVisitAt, Date.parse("2026-08-20T00:00:00Z"));
+  assert.equal(completed, false);
+  releaseHeartMe();
+  releaseListenerSync();
+  assert.equal((await pending).visitCount, 4);
+});
+
 test("does not label a visitor as first-time while the database is unavailable", async () => {
   const store = new EventStore();
   const summary = await store.recordVisit({ id: "session-id", username: "streamer" }, {
