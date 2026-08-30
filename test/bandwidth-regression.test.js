@@ -76,4 +76,6 @@ test("the viewer exposes one combined preflight system check", async () => {
   assert.match(clientSource, /function runSystemCheck\(\)/);
   assert.match(clientSource, /count-pocket\.a-line\.workers\.dev\/api\/live-feed/);
   assert.match(clientSource, /sharedReceiptPendingCount/);
+  assert.match(serverSource, /pendingReceiptEvents:\s*Math\.max/);
+  assert.match(serverSource, /printerVerified:\s*receipt\.printerVerified === true/);
 });

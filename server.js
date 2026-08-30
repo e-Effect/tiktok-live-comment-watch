@@ -926,12 +926,30 @@ class LiveSession extends EventEmitter {
         .slice(0, 80)
         .map(([key, count]) => [String(key).slice(0, 60), Math.max(0, Number(count) || 0)])
     );
+    const receipt = raw.receipt && typeof raw.receipt === "object" && !Array.isArray(raw.receipt)
+      ? raw.receipt
+      : {};
+    const cleanText = (value, limit = 300) => String(value || "").slice(0, limit);
     this.collectorDiagnostics = {
       startedAt: raw.startedAt || null,
       updatedAt: raw.updatedAt || Date.now(),
       receivedByType: cleanCounts(raw.receivedByType),
       forwardedByType: cleanCounts(raw.forwardedByType),
-      unknownByType: cleanCounts(raw.unknownByType)
+      unknownByType: cleanCounts(raw.unknownByType),
+      pendingEvents: Math.max(0, Number(raw.pendingEvents) || 0),
+      pendingReceiptEvents: Math.max(0, Number(raw.pendingReceiptEvents) || 0),
+      receipt: {
+        reachable: receipt.reachable === true,
+        printerReady: receipt.printerReady === true,
+        printerVerified: receipt.printerVerified === true,
+        printer: cleanText(receipt.printer, 100),
+        tikfinity: cleanText(receipt.tikfinity, 40),
+        queueCount: Math.max(0, Number(receipt.queueCount) || 0),
+        sharedReceiptPendingCount: Math.max(0, Number(receipt.sharedReceiptPendingCount) || 0),
+        lastPrintAt: cleanText(receipt.lastPrintAt, 80),
+        lastPrintError: cleanText(receipt.lastPrintError, 300),
+        checkedAt: cleanText(receipt.checkedAt, 80)
+      }
     };
   }
 
