@@ -176,6 +176,7 @@ input, select, textarea {
 .system-check-item span { color: var(--muted); font-size: .85rem; }
 .system-check-item.ok { border-color: #9edacb; background: #effbf7; }
 .system-check-item.ng { border-color: #efafb4; background: #fff3f4; }
+.system-check-item.pending { border-color: #e7cf86; background: #fff9e5; }
 #systemCheckRetryBtn { width: 100%; background: var(--ink); color: #fff; }
 
 .preview-key-dialog {

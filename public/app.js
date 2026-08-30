@@ -251,21 +251,28 @@ async function runSystemCheck() {
 
   const diagnostics = health?.collector?.diagnostics?.collector || health?.collector?.diagnostics || {};
   const receipt = diagnostics.receipt || {};
+  const receiptChecked = Boolean(receipt.checkedAt);
+  const pendingCountsKnown = diagnostics.pendingEvents != null;
   const checks = [
     { label: "コメント表示サーバー", ok: Boolean(health?.ok), detail: health ? `稼働 ${formatDuration(health.uptimeSeconds || 0)}` : "Renderへ接続できません" },
     { label: "リスナーデータベース", ok: Boolean(health?.database?.ready), detail: health?.database?.ready ? `保存待ち ${health.database.queuedEvents || 0}件` : "データベースが未接続です" },
     { label: "note PCコレクター", ok: Boolean(health?.collector?.connected), detail: health?.collector?.connected ? `送信待ち ${diagnostics.pendingEvents || 0}件` : "TikFinityコレクターの待機信号がありません" },
-    { label: "レシートアプリ", ok: Boolean(receipt.reachable), detail: receipt.reachable ? `${receipt.printer || "プリンター"}・印刷待ち ${receipt.queueCount || 0}件` : "note PCのレシートアプリを確認できません" },
-    { label: "MP-B20", ok: Boolean(receipt.printerReady), detail: receipt.printerReady ? (receipt.printerVerified ? "接続確認済み" : "印刷キューを確認") : "プリンター電源とBluetoothを確認してください" },
+    { label: "レシートアプリ", ok: receiptChecked && Boolean(receipt.reachable), pending: !receiptChecked, detail: !receiptChecked ? "note PC側の診断機能を更新すると確認できます" : receipt.reachable ? `${receipt.printer || "プリンター"}・印刷待ち ${receipt.queueCount || 0}件` : "note PCのレシートアプリを確認できません" },
+    { label: "MP-B20", ok: receiptChecked && Boolean(receipt.printerReady), pending: !receiptChecked, detail: !receiptChecked ? "note PC側の診断機能を更新すると確認できます" : receipt.printerReady ? (receipt.printerVerified ? "接続確認済み" : "印刷キューを確認") : "プリンター電源とBluetoothを確認してください" },
     { label: "スマホアプリ連携", ok: countPocketOk, detail: countPocketOk ? "Count Pocketの受信経路は正常です" : "Count Pocketの受信経路を確認できません" },
-    { label: "未送信データ", ok: Number(diagnostics.pendingEvents || 0) === 0 && Number(diagnostics.pendingReceiptEvents || 0) === 0 && Number(receipt.sharedReceiptPendingCount || 0) === 0, detail: `コメント等 ${diagnostics.pendingEvents || 0}件・印刷 ${diagnostics.pendingReceiptEvents || 0}件・台帳履歴 ${receipt.sharedReceiptPendingCount || 0}件` },
+    { label: "未送信データ", ok: pendingCountsKnown && Number(diagnostics.pendingEvents || 0) === 0 && Number(diagnostics.pendingReceiptEvents || 0) === 0 && (!receiptChecked || Number(receipt.sharedReceiptPendingCount || 0) === 0), pending: !pendingCountsKnown, detail: pendingCountsKnown ? `コメント等 ${diagnostics.pendingEvents || 0}件・印刷 ${diagnostics.pendingReceiptEvents || 0}件・台帳履歴 ${receipt.sharedReceiptPendingCount || 0}件` : "note PC側の更新後に件数を確認できます" },
   ];
   systemCheckList.innerHTML = checks.map((check) => `
-    <div class="system-check-item ${check.ok ? "ok" : "ng"}">
-      <i>${check.ok ? "✓" : "!"}</i><strong>${escapeHtml(check.label)}</strong><span>${escapeHtml(check.detail)}</span>
+    <div class="system-check-item ${check.pending ? "pending" : check.ok ? "ok" : "ng"}">
+      <i>${check.pending ? "…" : check.ok ? "✓" : "!"}</i><strong>${escapeHtml(check.label)}</strong><span>${escapeHtml(check.detail)}</span>
     </div>`).join("");
-  const failures = checks.filter((check) => !check.ok).length;
-  systemCheckSummary.textContent = failures === 0 ? "すべて正常です。このまま配信を開始できます。" : `${failures}項目を確認してください。正常な機能はそのまま使えます。`;
+  const failures = checks.filter((check) => !check.ok && !check.pending).length;
+  const pending = checks.filter((check) => check.pending).length;
+  systemCheckSummary.textContent = failures > 0
+    ? `${failures}項目を確認してください。正常な機能はそのまま使えます。`
+    : pending > 0
+      ? `クラウド側は正常です。note PC更新後に残り${pending}項目を確認できます。`
+      : "すべて正常です。このまま配信を開始できます。";
   systemCheckRetryBtn.disabled = false;
 }
 
