@@ -26,6 +26,7 @@
         <details class="test-menu">
           <summary>テスト・確認</summary>
           <div class="test-menu-panel">
+            <button id="systemCheckBtn" type="button">配信前総合診断</button>
             <button id="preflightTestBtn" type="button">配信前テスト</button>
             <button id="previewStartBtn" type="button">実際の配信を保存せず確認</button>
           </div>
@@ -35,6 +36,17 @@
         <button id="settingsOpenBtn" type="button" aria-controls="settingsPanel" aria-expanded="false">設定</button>
       </div>
     </header>
+    <div id="systemCheckDialog" class="system-check-dialog" hidden>
+      <section class="system-check-card" role="dialog" aria-modal="true" aria-labelledby="systemCheckTitle">
+        <header>
+          <div><small>STREAM SYSTEM CHECK</small><h2 id="systemCheckTitle">配信前総合診断</h2></div>
+          <button id="systemCheckCloseBtn" type="button" aria-label="閉じる">×</button>
+        </header>
+        <p id="systemCheckSummary">確認しています…</p>
+        <div id="systemCheckList" class="system-check-list"></div>
+        <button id="systemCheckRetryBtn" type="button">もう一度確認</button>
+      </section>
+    </div>
     <div id="previewKeyDialog" class="preview-key-dialog" hidden>
       <form id="previewKeyForm" class="preview-key-card" role="dialog" aria-modal="true" aria-labelledby="previewKeyTitle">
         <h2 id="previewKeyTitle">保存しない確認モード</h2>

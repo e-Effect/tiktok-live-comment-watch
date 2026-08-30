@@ -3,6 +3,12 @@ const usernameInput = document.querySelector("#username");
 const primarySessionBtn = document.querySelector("#primarySessionBtn");
 const previewStartBtn = document.querySelector("#previewStartBtn");
 const preflightTestBtn = document.querySelector("#preflightTestBtn");
+const systemCheckBtn = document.querySelector("#systemCheckBtn");
+const systemCheckDialog = document.querySelector("#systemCheckDialog");
+const systemCheckCloseBtn = document.querySelector("#systemCheckCloseBtn");
+const systemCheckRetryBtn = document.querySelector("#systemCheckRetryBtn");
+const systemCheckSummary = document.querySelector("#systemCheckSummary");
+const systemCheckList = document.querySelector("#systemCheckList");
 const previewNotice = document.querySelector("#previewNotice");
 const previewKeyDialog = document.querySelector("#previewKeyDialog");
 const previewKeyForm = document.querySelector("#previewKeyForm");
@@ -216,6 +222,52 @@ preflightTestBtn?.addEventListener("click", () => {
   preflightTestBtn.closest("details")?.removeAttribute("open");
   startSession({ preview: true, demo: true });
 });
+systemCheckBtn?.addEventListener("click", () => {
+  systemCheckBtn.closest("details")?.removeAttribute("open");
+  systemCheckDialog.hidden = false;
+  runSystemCheck();
+});
+systemCheckCloseBtn?.addEventListener("click", () => { systemCheckDialog.hidden = true; });
+systemCheckRetryBtn?.addEventListener("click", runSystemCheck);
+systemCheckDialog?.addEventListener("click", (event) => {
+  if (event.target === systemCheckDialog) systemCheckDialog.hidden = true;
+});
+
+async function runSystemCheck() {
+  systemCheckRetryBtn.disabled = true;
+  systemCheckSummary.textContent = "各サービスを確認しています…";
+  systemCheckList.innerHTML = "";
+  let health = null;
+  let countPocketOk = false;
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (response.ok) health = await response.json();
+  } catch {}
+  try {
+    const now = Date.now();
+    const response = await fetch(`https://count-pocket.a-line.workers.dev/api/live-feed?giftSince=${now}&alertSince=${now}&limit=1&check=${now}`, { cache: "no-store" });
+    countPocketOk = response.ok;
+  } catch {}
+
+  const diagnostics = health?.collector?.diagnostics?.collector || health?.collector?.diagnostics || {};
+  const receipt = diagnostics.receipt || {};
+  const checks = [
+    { label: "コメント表示サーバー", ok: Boolean(health?.ok), detail: health ? `稼働 ${formatDuration(health.uptimeSeconds || 0)}` : "Renderへ接続できません" },
+    { label: "リスナーデータベース", ok: Boolean(health?.database?.ready), detail: health?.database?.ready ? `保存待ち ${health.database.queuedEvents || 0}件` : "データベースが未接続です" },
+    { label: "note PCコレクター", ok: Boolean(health?.collector?.connected), detail: health?.collector?.connected ? `送信待ち ${diagnostics.pendingEvents || 0}件` : "TikFinityコレクターの待機信号がありません" },
+    { label: "レシートアプリ", ok: Boolean(receipt.reachable), detail: receipt.reachable ? `${receipt.printer || "プリンター"}・印刷待ち ${receipt.queueCount || 0}件` : "note PCのレシートアプリを確認できません" },
+    { label: "MP-B20", ok: Boolean(receipt.printerReady), detail: receipt.printerReady ? (receipt.printerVerified ? "接続確認済み" : "印刷キューを確認") : "プリンター電源とBluetoothを確認してください" },
+    { label: "スマホアプリ連携", ok: countPocketOk, detail: countPocketOk ? "Count Pocketの受信経路は正常です" : "Count Pocketの受信経路を確認できません" },
+    { label: "未送信データ", ok: Number(diagnostics.pendingEvents || 0) === 0 && Number(diagnostics.pendingReceiptEvents || 0) === 0 && Number(receipt.sharedReceiptPendingCount || 0) === 0, detail: `コメント等 ${diagnostics.pendingEvents || 0}件・印刷 ${diagnostics.pendingReceiptEvents || 0}件・台帳履歴 ${receipt.sharedReceiptPendingCount || 0}件` },
+  ];
+  systemCheckList.innerHTML = checks.map((check) => `
+    <div class="system-check-item ${check.ok ? "ok" : "ng"}">
+      <i>${check.ok ? "✓" : "!"}</i><strong>${escapeHtml(check.label)}</strong><span>${escapeHtml(check.detail)}</span>
+    </div>`).join("");
+  const failures = checks.filter((check) => !check.ok).length;
+  systemCheckSummary.textContent = failures === 0 ? "すべて正常です。このまま配信を開始できます。" : `${failures}項目を確認してください。正常な機能はそのまま使えます。`;
+  systemCheckRetryBtn.disabled = false;
+}
 
 async function stopSelectedSession() {
   if (!selectedSessionId) return;

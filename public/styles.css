@@ -106,6 +106,7 @@ input, select, textarea {
 .top-actions a { display: grid; place-items: center; }
 #settingsOpenBtn { background: var(--accent); color: var(--accent-ink); }
 #preflightTestBtn { background: #dff2ff; color: #07567e; }
+#systemCheckBtn { background: #d9f5ed; color: #08715f; }
 #previewStartBtn { background: #fff1b8; color: #795800; }
 .test-menu { position: relative; }
 .test-menu summary {
@@ -135,6 +136,47 @@ input, select, textarea {
   padding: 9px;
 }
 .test-menu-panel button { width: 100%; text-align: left; }
+
+.system-check-dialog {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 20, 25, .62);
+  padding: 18px;
+}
+.system-check-dialog[hidden] { display: none; }
+.system-check-card {
+  width: min(590px, 100%);
+  max-height: calc(100dvh - 36px);
+  overflow: auto;
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+.system-check-card header { display: flex; align-items: flex-start; gap: 12px; }
+.system-check-card header div { flex: 1; }
+.system-check-card small { color: var(--accent); font-weight: 900; }
+.system-check-card h2 { margin: 2px 0 0; }
+.system-check-card header button { width: 38px; height: 38px; padding: 0; background: var(--soft); }
+.system-check-card > p { color: var(--muted); font-weight: 800; }
+.system-check-list { display: grid; gap: 8px; margin: 14px 0; }
+.system-check-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+.system-check-item i { grid-row: 1 / 3; font-style: normal; font-size: 1.25rem; }
+.system-check-item strong { line-height: 1.2; }
+.system-check-item span { color: var(--muted); font-size: .85rem; }
+.system-check-item.ok { border-color: #9edacb; background: #effbf7; }
+.system-check-item.ng { border-color: #efafb4; background: #fff3f4; }
+#systemCheckRetryBtn { width: 100%; background: var(--ink); color: #fff; }
 
 .preview-key-dialog {
   position: fixed;

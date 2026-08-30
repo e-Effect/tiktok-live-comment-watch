@@ -50,9 +50,30 @@ test("database outages reconnect and queue realtime events without full snapshot
   assert.match(serverSource, /queueDatabaseEvent\(event\)/);
   assert.match(serverSource, /flushPendingDatabaseEvents\(\)/);
   assert.match(serverSource, /pendingDatabaseEvents\.length > 10000/);
-  assert.match(serverSource, /durable:\s*incoming\.length === 0 \|\| eventStore\.status\(\)\.ready/);
+  assert.match(serverSource, /const durable = incoming\.length === 0 \|\| await session\.awaitCollectorDurability\(\)/);
+  assert.match(serverSource, /async awaitCollectorDurability\(\)[\s\S]*?flushPendingDatabaseEvents\(\)/);
   assert.match(collectorSource, /\$delivery\.durable -ne \$true/);
   assert.match(collectorSource, /if \(-not \(Flush-PendingEvents -Config \$config\)\) \{ break \}/);
-  assert.match(collectorSource, /\$pending\.Count -ge 5000/);
   assert.match(collectorSource, /while \(\$pending\.Count -gt 0\)/);
+  assert.match(collectorSource, /collector-pending\.jsonl/);
+  assert.match(collectorSource, /function Load-PendingEvents/);
+  assert.match(collectorSource, /function Save-PendingEvents/);
+  assert.match(collectorSource, /function Add-PendingEvent/);
+  assert.match(collectorSource, /\$receiveTask\.Wait\(250\)/);
+  assert.doesNotMatch(collectorSource, /\$pending\.Count -ge 5000/);
+});
+
+test("listener admin authentication rate limits repeated failures", () => {
+  assert.match(serverSource, /const listenerAuthAttempts = new Map\(\)/);
+  assert.match(serverSource, /current\.count >= 20/);
+  assert.match(serverSource, /sendJson\(response, 429/);
+  assert.match(serverSource, /listenerAuthAttempts\.delete\(listenerAuthClientKey\(request\)\)/);
+});
+
+test("the viewer exposes one combined preflight system check", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  assert.match(html, /id="systemCheckBtn"[^>]*>配信前総合診断/);
+  assert.match(clientSource, /function runSystemCheck\(\)/);
+  assert.match(clientSource, /count-pocket\.a-line\.workers\.dev\/api\/live-feed/);
+  assert.match(clientSource, /sharedReceiptPendingCount/);
 });

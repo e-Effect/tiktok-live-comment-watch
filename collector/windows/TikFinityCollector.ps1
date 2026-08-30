@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
 $statusPath = Join-Path $PSScriptRoot 'collector-status.json'
 $logPath = Join-Path $PSScriptRoot 'collector.log'
+$pendingPath = Join-Path $PSScriptRoot 'collector-pending.jsonl'
 $receiptPendingPath = Join-Path $PSScriptRoot 'receipt-pending.jsonl'
 $tikFinityUrl = 'ws://127.0.0.1:21213/'
 $allowedEvents = @(
@@ -14,17 +15,27 @@ $allowedEvents = @(
     'roomuser', 'roomuserseq', 'streamend', 'control', 'room'
 )
 $http = New-Object System.Net.Http.HttpClient
-$http.Timeout = [TimeSpan]::FromSeconds(70)
+$http.Timeout = [TimeSpan]::FromSeconds(15)
 $receiptHttp = New-Object System.Net.Http.HttpClient
 $receiptHttp.Timeout = [TimeSpan]::FromMilliseconds(750)
 $lastReceiptAttemptAt = [DateTime]::MinValue
 $pending = New-Object 'System.Collections.Generic.Queue[string]'
+$lastPendingFlushAt = [DateTime]::MinValue
 $receiptPending = New-Object 'System.Collections.Generic.Queue[string]'
 $receiptPendingKeys = New-Object 'System.Collections.Generic.HashSet[string]'
 $collectorStartedAt = [DateTime]::UtcNow.ToString('o')
 $receivedCounts = @{}
 $forwardedCounts = @{}
 $unknownCounts = @{}
+$receiptDiagnostics = [ordered]@{
+    reachable = $false
+    printerReady = $false
+    printerVerified = $false
+    tikfinity = 'unknown'
+    queueCount = 0
+    sharedReceiptPendingCount = 0
+    checkedAt = $null
+}
 
 function Add-DiagnosticCount {
     param([hashtable]$Bucket, [string]$Name)
@@ -42,6 +53,9 @@ function Get-CollectorDiagnostics {
         receivedByType = $script:receivedCounts
         forwardedByType = $script:forwardedCounts
         unknownByType = $script:unknownCounts
+        pendingEvents = $script:pending.Count
+        pendingReceiptEvents = $script:receiptPending.Count
+        receipt = $script:receiptDiagnostics
     }
 }
 
@@ -160,9 +174,51 @@ function Send-LocalReceiptPayload {
             [void]$script:receiptPendingKeys.Remove($removed)
         }
         if ($take -gt 0) { Save-ReceiptPending }
+        if ($Heartbeat) { Update-ReceiptDiagnostics -ReceiptEndpoint $receiptEndpoint }
     }
     catch {
         # Receipt printing is local and optional; Render delivery must continue even while it is closed.
+    }
+    finally {
+        $request.Dispose()
+    }
+}
+
+function Update-ReceiptDiagnostics {
+    param([string]$ReceiptEndpoint)
+    $statusEndpoint = $ReceiptEndpoint -replace '/api/collector/events$', '/api/status'
+    $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $statusEndpoint)
+    try {
+        $response = $receiptHttp.SendAsync($request).GetAwaiter().GetResult()
+        $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) { throw "Receipt status $([int]$response.StatusCode)" }
+        $status = $text | ConvertFrom-Json
+        $script:receiptDiagnostics = [ordered]@{
+            reachable = $true
+            printerReady = $status.printerReady -eq $true
+            printerVerified = $status.printerVerified -eq $true
+            printer = [string]$status.printer
+            tikfinity = [string]$status.tikfinity
+            queueCount = [int]$status.queueCount
+            sharedReceiptPendingCount = [int]$status.sharedReceiptPendingCount
+            lastEvent = [string]$status.lastEvent
+            lastPrintAt = [string]$status.lastPrintAt
+            lastPrintError = [string]$status.lastPrintError
+            checkedAt = [DateTime]::UtcNow.ToString('o')
+        }
+        $response.Dispose()
+    }
+    catch {
+        $script:receiptDiagnostics = [ordered]@{
+            reachable = $false
+            printerReady = $false
+            printerVerified = $false
+            tikfinity = 'unknown'
+            queueCount = $script:receiptPending.Count
+            sharedReceiptPendingCount = 0
+            error = $_.Exception.Message
+            checkedAt = [DateTime]::UtcNow.ToString('o')
+        }
     }
     finally {
         $request.Dispose()
@@ -184,9 +240,38 @@ function Load-ReceiptPending {
     }
 }
 
+function Save-PendingEvents {
+    $tempPath = "$pendingPath.tmp"
+    @($script:pending.ToArray()) | Set-Content -LiteralPath $tempPath -Encoding UTF8
+    Move-Item -LiteralPath $tempPath -Destination $pendingPath -Force
+}
+
+function Load-PendingEvents {
+    if (-not (Test-Path -LiteralPath $pendingPath)) { return }
+    foreach ($line in Get-Content -LiteralPath $pendingPath -Encoding UTF8) {
+        $raw = [string]$line
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        try {
+            [void]($raw | ConvertFrom-Json)
+            $script:pending.Enqueue($raw)
+        }
+        catch {
+            "[$([DateTime]::Now.ToString('o'))] skipped unreadable pending event" | Add-Content -LiteralPath $logPath -Encoding UTF8
+        }
+    }
+}
+
+function Add-PendingEvent {
+    param([string]$Raw)
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return }
+    $Raw | Add-Content -LiteralPath $pendingPath -Encoding UTF8
+    $script:pending.Enqueue($Raw)
+}
+
 function Flush-PendingEvents {
     param($Config)
     if ($pending.Count -eq 0) { return }
+    $script:lastPendingFlushAt = [DateTime]::UtcNow
     $take = [Math]::Min(25, $pending.Count)
     $rawBatch = $pending.ToArray() | Select-Object -First $take
     $events = @()
@@ -195,15 +280,18 @@ function Flush-PendingEvents {
     }
     if ($events.Count -eq 0) {
         for ($i = 0; $i -lt $take; $i++) { [void]$pending.Dequeue() }
+        Save-PendingEvents
         return
     }
     $responseText = Send-CollectorPayload -Config $Config -Events $events
     $delivery = $responseText | ConvertFrom-Json
     if ($delivery.durable -ne $true) { return $false }
     for ($i = 0; $i -lt $take; $i++) { [void]$pending.Dequeue() }
+    Save-PendingEvents
     return $true
 }
 
+Load-PendingEvents
 Load-ReceiptPending
 Write-CollectorStatus -State 'starting' -Message 'Waiting for TikFinity.' -PendingCount ($pending.Count + $receiptPending.Count)
 
@@ -225,12 +313,20 @@ while ($true) {
             do {
                 $segment = [System.ArraySegment[byte]]::new($buffer)
                 $receiveTask = $socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
-                while (-not $receiveTask.Wait(60000)) {
-                    [void](Send-CollectorPayload -Config $config -Events @() -Heartbeat $true)
-                    while ($pending.Count -gt 0) {
-                        if (-not (Flush-PendingEvents -Config $config)) { break }
+                $lastHeartbeatAt = [DateTime]::UtcNow
+                while (-not $receiveTask.Wait(250)) {
+                    $now = [DateTime]::UtcNow
+                    if ($pending.Count -gt 0 -and ($now - $script:lastPendingFlushAt).TotalMilliseconds -ge 200) {
+                        [void](Flush-PendingEvents -Config $config)
                     }
-                    Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; waiting for events.' -PendingCount $pending.Count
+                    if (($now - $lastHeartbeatAt).TotalSeconds -ge 60) {
+                        [void](Send-CollectorPayload -Config $config -Events @() -Heartbeat $true)
+                        $lastHeartbeatAt = $now
+                        while ($pending.Count -gt 0) {
+                            if (-not (Flush-PendingEvents -Config $config)) { break }
+                        }
+                        Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; waiting for events.' -PendingCount $pending.Count
+                    }
                 }
                 $result = $receiveTask.GetAwaiter().GetResult()
                 if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
@@ -255,9 +351,8 @@ while ($true) {
             Add-DiagnosticCount -Bucket $script:receivedCounts -Name $eventType
             if ($allowedEvents -contains $eventType.ToLowerInvariant()) {
                 Add-DiagnosticCount -Bucket $script:forwardedCounts -Name $eventType
-                if ($pending.Count -ge 5000) { [void]$pending.Dequeue() }
-                $pending.Enqueue($raw)
-                Flush-PendingEvents -Config $config
+                Add-PendingEvent -Raw $raw
+                if ($pending.Count -ge 25) { [void](Flush-PendingEvents -Config $config) }
                 Write-CollectorStatus -State 'receiving' -Message "Received: $eventType" -PendingCount $pending.Count
             }
             else {

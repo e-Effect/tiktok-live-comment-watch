@@ -146,6 +146,7 @@ class LiveSession extends EventEmitter {
     this.pendingVisitChecks = new Map();
     this.pendingDatabaseEvents = [];
     this.databaseFlushPromise = null;
+    this.persistencePromises = new Set();
     this.collectorDiagnostics = null;
     this.ingestionStats = {
       accepted: 0,
@@ -274,7 +275,8 @@ class LiveSession extends EventEmitter {
       });
     });
 
-    connection.on(events.GIFT || "gift", async (data) => {
+    connection.on(events.GIFT || "gift", (data) => {
+      this.trackPersistence((async () => {
       const giftType = Number(data.giftType ?? data.giftDetails?.giftType ?? data.extendedGiftInfo?.giftType ?? 0);
       if (giftType === 1 && data.repeatEnd === false) return;
       const gift = parseGiftEvent(data, this.heartMeGiftIds);
@@ -290,6 +292,7 @@ class LiveSession extends EventEmitter {
       }
       this.markSeen({ userId: gift.userId, uniqueId: gift.uniqueId, nickname: gift.nickname, avatarUrl: gift.avatarUrl, signals: gift.signals }, gift.at, "gift");
       this.addGift(gift);
+      })());
     });
 
     connection.on(events.MEMBER || "member", (data) => {
@@ -378,7 +381,8 @@ class LiveSession extends EventEmitter {
       });
     });
 
-    connection.on(events.SUPER_FAN || "superFan", async (data) => {
+    connection.on(events.SUPER_FAN || "superFan", (data) => {
+      this.trackPersistence((async () => {
       const person = personFromEvent(data);
       const at = eventTime(data);
       this.markSeen(person, at, "heart_me");
@@ -389,6 +393,7 @@ class LiveSession extends EventEmitter {
         source: "super_fan_event",
         history
       });
+      })());
     });
 
     connection.on(events.SUPER_FAN_JOIN || "superFanJoin", (data) => {
@@ -828,7 +833,7 @@ class LiveSession extends EventEmitter {
     if (!eventStore.status().ready) {
       this.queueDatabaseEvent(event);
     } else {
-      eventStore.recordEvent(this, event)
+      this.trackPersistence(eventStore.recordEvent(this, event)
         .then((stored) => {
           if (!stored) this.queueDatabaseEvent(event);
           else {
@@ -836,9 +841,27 @@ class LiveSession extends EventEmitter {
             cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
           }
         })
-        .catch(() => this.queueDatabaseEvent(event));
+        .catch(() => this.queueDatabaseEvent(event)));
     }
     liveCue.publish(event);
+  }
+
+  trackPersistence(promise) {
+    const tracked = Promise.resolve(promise);
+    this.persistencePromises.add(tracked);
+    tracked.finally(() => this.persistencePromises.delete(tracked)).catch(() => {});
+    return tracked;
+  }
+
+  async awaitCollectorDurability() {
+    await Promise.allSettled([...this.persistencePromises]);
+    await this.retryPendingVisits();
+    await Promise.allSettled([...this.persistencePromises]);
+    await this.flushPendingDatabaseEvents();
+    return eventStore.status().ready
+      && this.pendingDatabaseEvents.length === 0
+      && this.pendingVisitChecks.size === 0
+      && this.persistencePromises.size === 0;
   }
 
   queueDatabaseEvent(event) {
@@ -1846,15 +1869,50 @@ function isAuthorizedListenerRequest(request) {
   return isAuthorizedWithKey(request, LISTENER_ADMIN_KEY);
 }
 
+const listenerAuthAttempts = new Map();
+
+function listenerAuthClientKey(request) {
+  return String(request.headers["cf-connecting-ip"] || request.headers["x-forwarded-for"] || request.socket?.remoteAddress || "unknown")
+    .split(",")[0]
+    .trim();
+}
+
+function listenerAuthBlocked(request) {
+  const key = listenerAuthClientKey(request);
+  const current = listenerAuthAttempts.get(key);
+  if (!current) return false;
+  if (current.blockedUntil > Date.now()) return true;
+  if (current.startedAt < Date.now() - 10 * 60 * 1000) listenerAuthAttempts.delete(key);
+  return false;
+}
+
+function noteListenerAuthFailure(request) {
+  const key = listenerAuthClientKey(request);
+  const now = Date.now();
+  const previous = listenerAuthAttempts.get(key);
+  const current = !previous || previous.startedAt < now - 10 * 60 * 1000
+    ? { count: 0, startedAt: now, blockedUntil: 0 }
+    : previous;
+  current.count += 1;
+  if (current.count >= 20) current.blockedUntil = now + 15 * 60 * 1000;
+  listenerAuthAttempts.set(key, current);
+}
+
 function requireListenerAdmin(request, response) {
   if (!LISTENER_ADMIN_KEY) {
     sendJson(response, 503, { error: "リスナー管理キーがまだ設定されていません" });
     return false;
   }
+  if (listenerAuthBlocked(request)) {
+    sendJson(response, 429, { error: "管理キーの入力回数が多すぎます。15分後に再試行してください" });
+    return false;
+  }
   if (!isAuthorizedListenerRequest(request)) {
+    noteListenerAuthFailure(request);
     sendJson(response, 401, { error: "管理キーを確認してください" });
     return false;
   }
+  listenerAuthAttempts.delete(listenerAuthClientKey(request));
   return true;
 }
 
@@ -2293,9 +2351,10 @@ const server = createServer(async (request, response) => {
         session.broadcastSummary("note PCのTikFinityコレクターから待機信号を受信しました。");
       }
       session.persistSession();
+      const durable = incoming.length === 0 || await session.awaitCollectorDurability();
       sendJson(response, 202, {
         ok: true,
-        durable: incoming.length === 0 || eventStore.status().ready,
+        durable,
         sessionId: session.id,
         preview: !session.recordingEnabled,
         status: session.status,
