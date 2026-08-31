@@ -38,6 +38,18 @@ test("event stream keepalives recover a silently stalled display without polling
   assert.doesNotMatch(watchdog, /fetch\s*\(/);
 });
 
+test("event stream subscribes before its initial snapshot so comments cannot fall into a connect gap", () => {
+  const streamRoute = serverSource.match(/if \(request\.method === "GET" && action === "events"\) \{[\s\S]*?\n\s*return;\n\s*\}/)?.[0] || "";
+  assert.ok(streamRoute.indexOf('session.on("event", send)') < streamRoute.indexOf('type: "snapshot"'));
+});
+
+test("busy comment streams throttle expensive secondary panels without delaying the comment list", () => {
+  assert.match(clientSource, /const lastHeavyRealtimeRenderAt = new Map\(\)/);
+  assert.match(clientSource, /now - lastHeavyAt >= 1000/);
+  assert.match(clientSource, /if \(dirty\("comment", "presence", "status"\)\) renderComments/);
+  assert.match(clientSource, /if \(heavyDue && dirty\("comment", "gift", "presence", "status"\)\)/);
+});
+
 test("the one-second clock updates live counters without rebuilding every panel", () => {
   const clock = clientSource.match(/function startSnapshotClock\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(clock, /renderSelectedSessionClock\(\)/);

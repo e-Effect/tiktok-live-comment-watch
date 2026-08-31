@@ -973,6 +973,8 @@ class LiveSession extends EventEmitter {
       receivedByType: cleanCounts(raw.receivedByType),
       forwardedByType: cleanCounts(raw.forwardedByType),
       unknownByType: cleanCounts(raw.unknownByType),
+      serverAccepted: Math.max(0, Number(raw.serverAccepted) || 0),
+      serverDropped: Math.max(0, Number(raw.serverDropped) || 0),
       pendingEvents: Math.max(0, Number(raw.pendingEvents) || 0),
       pendingReceiptEvents: Math.max(0, Number(raw.pendingReceiptEvents) || 0),
       receipt: {
@@ -2898,12 +2900,15 @@ const server = createServer(async (request, response) => {
         stream.write(`event: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
         if (acceptsGzip) stream.flush(zlibConstants.Z_SYNC_FLUSH);
       };
+      // Subscribe before taking the initial snapshot. This closes the tiny gap
+      // where a live event could previously arrive after the snapshot was made
+      // but before the stream listener was attached.
+      session.on("event", send);
       send({ type: "snapshot", payload: session.snapshot() });
       const keepAliveTimer = setInterval(() => {
         send({ type: "heartbeat", payload: { at: Date.now() } });
       }, 15000);
       keepAliveTimer.unref?.();
-      session.on("event", send);
       request.on("close", () => {
         clearInterval(keepAliveTimer);
         session.off("event", send);

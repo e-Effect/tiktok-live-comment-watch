@@ -168,6 +168,7 @@ let reconnectTimer = null;
 let snapshotFetchTick = 0;
 let clockRenderTick = 0;
 const realtimeRenderState = new Map();
+const lastHeavyRealtimeRenderAt = new Map();
 let giftRankingRequest = 0;
 let giftRankingRefreshTimer = null;
 let visitorDemoActive = false;
@@ -602,6 +603,7 @@ function closeSession(sessionId, { forget } = { forget: false }) {
   const pendingRender = realtimeRenderState.get(sessionId);
   if (pendingRender?.timer) clearTimeout(pendingRender.timer);
   realtimeRenderState.delete(sessionId);
+  lastHeavyRealtimeRenderAt.delete(sessionId);
   sessions.delete(sessionId);
 
   if (selectedSessionId === sessionId) {
@@ -1910,17 +1912,22 @@ function renderSelectedSession(options = {}) {
     renderTargetGiftRanking([]);
     return;
   }
+  const now = Date.now();
+  const lastHeavyAt = Number(lastHeavyRealtimeRenderAt.get(snapshot.id) || 0);
+  const heavyRequested = dirty("comment", "gift", "share", "presence", "status");
+  const heavyDue = fullRender || dirty("status") || (heavyRequested && now - lastHeavyAt >= 1000);
+  if (heavyDue) lastHeavyRealtimeRenderAt.set(snapshot.id, now);
   const cooldown = readRateLimitCooldown();
   const message = snapshot.errorCode === "rate_limited" && cooldown.active
     ? `${snapshot.message || statusMessage(snapshot)} 新規追加は${formatClock(cooldown.until)}頃まで止めています。`
     : snapshot.message || statusMessage(snapshot);
   setStatus(snapshot.status, message, modeLabel(snapshot));
-  renderActiveStreamer(selected, snapshot);
-  renderConnectionDetails(snapshot);
-  renderMetrics(snapshot);
-  renderReport(snapshot);
+  if (fullRender || dirty("status")) renderActiveStreamer(selected, snapshot);
+  if (fullRender || dirty("status", "presence")) renderConnectionDetails(snapshot);
+  if (fullRender || dirty("comment", "gift", "share", "presence", "status")) renderMetrics(snapshot);
+  if (heavyDue) renderReport(snapshot);
   if (dirty("comment", "presence", "status")) renderComments(snapshot.comments || []);
-  if (dirty("comment", "gift", "presence", "status")) {
+  if (heavyDue && dirty("comment", "gift", "presence", "status")) {
     renderWatchers(snapshot.topWatchers || []);
     renderSilentLongWatchers(snapshot.silentLongWatchers || []);
     renderUsers(snapshot.topUsers || []);

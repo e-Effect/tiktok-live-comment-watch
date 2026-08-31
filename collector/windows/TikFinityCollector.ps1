@@ -27,6 +27,8 @@ $collectorStartedAt = [DateTime]::UtcNow.ToString('o')
 $receivedCounts = @{}
 $forwardedCounts = @{}
 $unknownCounts = @{}
+$deliveryAccepted = [int64]0
+$deliveryDropped = [int64]0
 $receiptDiagnostics = [ordered]@{
     reachable = $false
     printerReady = $false
@@ -53,6 +55,8 @@ function Get-CollectorDiagnostics {
         receivedByType = $script:receivedCounts
         forwardedByType = $script:forwardedCounts
         unknownByType = $script:unknownCounts
+        serverAccepted = $script:deliveryAccepted
+        serverDropped = $script:deliveryDropped
         pendingEvents = $script:pending.Count
         pendingReceiptEvents = $script:receiptPending.Count
         receipt = $script:receiptDiagnostics
@@ -264,8 +268,20 @@ function Load-PendingEvents {
 function Add-PendingEvent {
     param([string]$Raw)
     if ([string]::IsNullOrWhiteSpace($Raw)) { return }
-    $Raw | Add-Content -LiteralPath $pendingPath -Encoding UTF8
-    $script:pending.Enqueue($Raw)
+    $queuedRaw = $Raw
+    try {
+        $eventEnvelope = $Raw | ConvertFrom-Json
+        if (-not ($eventEnvelope.PSObject.Properties.Name -contains 'collectorEventId')) {
+            $eventEnvelope | Add-Member -NotePropertyName collectorEventId -NotePropertyValue ([Guid]::NewGuid().ToString('N'))
+        }
+        $queuedRaw = $eventEnvelope | ConvertTo-Json -Depth 100 -Compress
+    }
+    catch {
+        # The caller already validates normal TikFinity envelopes. Keep the raw
+        # value as a last-resort queue entry if a future payload shape differs.
+    }
+    $queuedRaw | Add-Content -LiteralPath $pendingPath -Encoding UTF8
+    $script:pending.Enqueue($queuedRaw)
 }
 
 function Flush-PendingEvents {
@@ -286,6 +302,8 @@ function Flush-PendingEvents {
     $responseText = Send-CollectorPayload -Config $Config -Events $events
     $delivery = $responseText | ConvertFrom-Json
     if ($delivery.durable -ne $true) { return $false }
+    $script:deliveryAccepted += [int64]([Math]::Max(0, [int]$delivery.accepted))
+    $script:deliveryDropped += [int64]([Math]::Max(0, [int]$delivery.dropped))
     for ($i = 0; $i -lt $take; $i++) { [void]$pending.Dequeue() }
     Save-PendingEvents
     return $true

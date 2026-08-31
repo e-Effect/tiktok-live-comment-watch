@@ -12,6 +12,18 @@ test("normalizes TikFinity chat envelopes", () => {
   assert.equal(event.key, "chat:123");
 });
 
+test("uses collector event ids to keep distinct identical comments while preserving retry keys", () => {
+  const shared = {
+    event: "chat",
+    data: { createTime: 1_786_400_000, comment: "同じコメント", user: { uniqueId: "viewer" } }
+  };
+  const first = normalizeCollectorEvent({ ...shared, collectorEventId: "collector-1" });
+  const retry = normalizeCollectorEvent({ ...shared, collectorEventId: "collector-1" });
+  const second = normalizeCollectorEvent({ ...shared, collectorEventId: "collector-2" });
+  assert.equal(first.key, retry.key);
+  assert.notEqual(first.key, second.key);
+});
+
 test("maps common TikFinity aliases", () => {
   assert.equal(normalizeCollectorEvent({ eventType: "comment", comment: "x" }).type, "chat");
   assert.equal(normalizeCollectorEvent({ type: "join", userId: "1" }).type, "member");
