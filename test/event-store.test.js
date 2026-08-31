@@ -277,24 +277,20 @@ test("listener contribution rankings combine lifetime and recent activity and re
   assert.equal(second.generatedAt, first.generatedAt);
 });
 
-test("normal listener pages do not wait for a cold contribution-rank refresh", async () => {
+test("normal listener pages do not launch a cold contribution-rank refresh", async () => {
   const store = new EventStore();
   store.ready = true;
-  let resolveQuery;
+  let calls = 0;
   store.pool = {
     query() {
-      return new Promise((resolve) => { resolveQuery = resolve; });
+      calls += 1;
+      return Promise.resolve({ rows: [] });
     }
   };
 
   const result = await store.listenerContributionRankings({ waitForRefresh:false });
-  assert.equal(result.pending, true);
   assert.equal(result.generatedAt, 0);
-
-  resolveQuery({ rows: [] });
-  await new Promise((resolve) => setImmediate(resolve));
-  const cached = await store.listenerContributionRankings();
-  assert.ok(cached.generatedAt > 0);
+  assert.equal(calls, 0);
 });
 
 test("listener totals are counted in the background and then reused", async () => {
@@ -668,7 +664,8 @@ test("shared stamp polling returns a small unchanged response", async () => {
       if (/FROM shared_app_states/.test(sql)) {
         return { rows: [{ state: { users: [{ id: "saved" }] }, revision: "27", sourceRevision: "26", superFanRevision: "3:1000", updatedAt: new Date(1000) }] };
       }
-      if (/COUNT\(\*\) FILTER/.test(sql)) {
+      if (/COUNT\(\*\)::bigint AS count/.test(sql)) {
+        assert.match(sql, /WHERE is_super_fan = TRUE/);
         return { rows: [{ count: "3", changed: "1000" }] };
       }
       throw new Error(`Unexpected query: ${sql}`);

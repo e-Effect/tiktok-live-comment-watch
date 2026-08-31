@@ -39,6 +39,14 @@ test("listener and recent-event indexes support the default screen order", () =>
   assert.match(eventStoreSource, /live_events_time_idx/);
   assert.match(eventStoreSource, /listeners_first_seen_idx/);
   assert.match(eventStoreSource, /listeners_display_name_idx/);
+  assert.match(eventStoreSource, /listeners_super_fan_revision_idx/);
+});
+
+test("normal ledger use cannot start the all-listener ranking scan", () => {
+  assert.match(eventStoreSource, /if \(!waitForRefresh\) return cached \|\| emptyContributionRankings\(\)/);
+  assert.match(eventStoreSource, /listenerContributionForIds[\s\S]*?waitForRefresh: false/);
+  assert.doesNotMatch(serverSource, /Contribution rank warmup failed/);
+  assert.match(eventStoreSource, /FROM listeners\s+WHERE is_super_fan = TRUE/);
 });
 
 test("listener summary uses a short cache with an explicit fresh option", () => {
