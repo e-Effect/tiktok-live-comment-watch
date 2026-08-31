@@ -297,6 +297,29 @@ test("normal listener pages do not wait for a cold contribution-rank refresh", a
   assert.ok(cached.generatedAt > 0);
 });
 
+test("listener totals are counted in the background and then reused", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let resolveQuery;
+  let calls = 0;
+  store.pool = {
+    query() {
+      calls += 1;
+      return new Promise((resolve) => { resolveQuery = resolve; });
+    }
+  };
+
+  const pending = await store.listenerCount({ search:"viewer", waitForRefresh:false });
+  assert.deepEqual(pending, { total:null, pending:true });
+  resolveQuery({ rows: [{ total:"72956" }] });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const cached = await store.listenerCount({ search:"viewer" });
+  assert.equal(cached.total, 72956);
+  assert.equal(cached.pending, false);
+  assert.equal(calls, 1);
+});
+
 test("live events save the latest TikTok profile snapshot with the listener", async () => {
   const store = new EventStore();
   store.ready = true;

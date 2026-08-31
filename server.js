@@ -2727,7 +2727,9 @@ const server = createServer(async (request, response) => {
         offset: options.offset
       });
       const cached = listenerPageCache.get(cacheKey);
-      const cacheMs = cached?.value?.rankingPending ? LISTENER_PAGE_PENDING_CACHE_MS : LISTENER_PAGE_CACHE_MS;
+      const cacheMs = cached?.value?.rankingPending || cached?.value?.totalPending
+        ? LISTENER_PAGE_PENDING_CACHE_MS
+        : LISTENER_PAGE_CACHE_MS;
       if (!options.fresh && cached && cached.at >= Date.now() - cacheMs) {
         sendJson(response, 200, cached.value);
         return;
@@ -2738,14 +2740,12 @@ const server = createServer(async (request, response) => {
           if (options.sort === "contribution" || options.sort === "recent_contribution") {
             return eventStore.listenerContributionPage(options);
           }
-          const [result, ranks] = await Promise.all([
-            eventStore.listeners(options),
-            eventStore.listenerContributionRankings({
-              username: options.username,
-              fresh: options.fresh,
-              waitForRefresh: false
-            })
-          ]);
+          const result = await eventStore.listeners(options);
+          const ranks = await eventStore.listenerContributionRankings({
+            username: options.username,
+            fresh: options.fresh,
+            waitForRefresh: false
+          });
           return {
             ...result,
             items: result.items.map((item) => ({ ...item, ...publicContributionRank(ranks.byUserId.get(item.userId)) })),
@@ -3007,7 +3007,7 @@ server.listen(PORT, () => {
       eventStore.listenerContributionRankings().catch((error) => {
         console.error(`Contribution rank warmup failed: ${shortError(error)}`);
       });
-    }, 1000).unref?.();
+    }, 60000).unref?.();
   }
 });
 

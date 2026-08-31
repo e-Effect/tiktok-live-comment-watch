@@ -194,14 +194,16 @@ async function refreshListeners(options = {}) {
     state.listenerTotal = Number(data.total || 0);
     const start = state.listenerTotal ? state.listenerPage * state.listenerPageSize + 1 : 0;
     const end = Math.min(state.listenerTotal, start + state.items.length - 1);
-    el.resultCount.textContent = `${number.format(state.listenerTotal)}人中 ${number.format(start)}～${number.format(Math.max(start, end))}人`;
+    el.resultCount.textContent = data.totalPending
+      ? `${number.format(Math.max(0, end))}人以上（${number.format(start)}～${number.format(Math.max(start, end))}人を表示）`
+      : `${number.format(state.listenerTotal)}人中 ${number.format(start)}～${number.format(Math.max(start, end))}人`;
     el.listenerPage.textContent = `${number.format(state.listenerPage + 1)}ページ目`;
     el.listenerPrev.disabled = state.listenerPage <= 0;
     el.listenerNext.disabled = (state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal;
     el.emptyState.hidden = state.items.length > 0;
     renderListenerTable();
     clearTimeout(state.rankingRetryTimer);
-    state.rankingRetryTimer = data.rankingPending ? setTimeout(() => {
+    state.rankingRetryTimer = data.rankingPending || data.totalPending ? setTimeout(() => {
       if (state.key && !document.hidden && currentListenerSearch() === state.lastListenerSearch) refreshListeners();
     }, 10000) : null;
   } catch (error) {
