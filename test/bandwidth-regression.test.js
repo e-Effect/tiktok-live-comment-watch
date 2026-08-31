@@ -21,6 +21,14 @@ test("browser reconciles full state once per minute and consumes delta events", 
   assert.match(clientSource, /applyRealtimePayload\(sessionId,\s*"share"/);
 });
 
+test("realtime rendering prioritizes comments and gifts while batching noisy presence updates", () => {
+  assert.match(clientSource, /function scheduleRealtimeRender\(sessionId, type = "status"\)/);
+  assert.match(clientSource, /const urgent = \["comment", "gift", "share"\]\.includes\(type\)/);
+  assert.match(clientSource, /const delayMs = urgent \? 60 : 400/);
+  assert.match(clientSource, /renderSelectedSession\(\{ dirtyTypes: pending\.types \}\)/);
+  assert.match(clientSource, /if \(clockRenderTick % 5 === 0\)/);
+});
+
 test("event stream keepalives recover a silently stalled display without polling", () => {
   assert.match(serverSource, /send\(\{\s*type:\s*"heartbeat",\s*payload:\s*\{\s*at:\s*Date\.now\(\)\s*\}\s*\}\)/);
   assert.match(serverSource, /clearInterval\(keepAliveTimer\)/);
@@ -52,6 +60,9 @@ test("database outages reconnect and queue realtime events without full snapshot
   assert.match(serverSource, /pendingDatabaseEvents\.length > 10000/);
   assert.match(serverSource, /const durable = incoming\.length === 0 \|\| await session\.awaitCollectorDurability\(\)/);
   assert.match(serverSource, /async awaitCollectorDurability\(\)[\s\S]*?flushPendingDatabaseEvents\(\)/);
+  const durability = serverSource.match(/async awaitCollectorDurability\(\) \{[\s\S]*?\n\s*\}/)?.[0] || "";
+  assert.doesNotMatch(durability, /retryPendingVisits/);
+  assert.match(serverSource, /this\.persistenceTail[\s\S]*?eventStore\.recordEvent\(this, event\)/);
   assert.match(collectorSource, /\$delivery\.durable -ne \$true/);
   assert.match(collectorSource, /if \(-not \(Flush-PendingEvents -Config \$config\)\) \{ break \}/);
   assert.match(collectorSource, /while \(\$pending\.Count -gt 0\)/);

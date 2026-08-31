@@ -2,6 +2,29 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventStore, rangeStart } from "../lib/event-store.js";
 
+test("live event persistence retries a transient PostgreSQL deadlock", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let calls = 0;
+  store.pool = {
+    async query() {
+      calls += 1;
+      if (calls === 1) {
+        const error = new Error("deadlock detected");
+        error.code = "40P01";
+        throw error;
+      }
+      return { rows: [] };
+    }
+  };
+  const event = { id: "event-1", type: "comment", userId: "listener", at: Date.now(), text: "test" };
+  const stored = await store.recordEvent({ id: "session-1", username: "streamer" }, event);
+  assert.equal(stored, true);
+  assert.equal(calls, 2);
+  assert.equal(event.__databaseRetryCount, undefined);
+  assert.equal(store.status().lastError, "");
+});
+
 test("gift ranking converts database totals to numbers", async () => {
   const store = new EventStore();
   store.ready = true;

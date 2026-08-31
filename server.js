@@ -147,6 +147,7 @@ class LiveSession extends EventEmitter {
     this.pendingDatabaseEvents = [];
     this.databaseFlushPromise = null;
     this.persistencePromises = new Set();
+    this.persistenceTail = Promise.resolve();
     this.collectorDiagnostics = null;
     this.ingestionStats = {
       accepted: 0,
@@ -548,8 +549,9 @@ class LiveSession extends EventEmitter {
       } else {
         this.applyVisitSummary(userId, pending.visit, summary, { includeHeartMe: true });
       }
-      this.pendingVisitChecks.delete(userId);
-      return Boolean(summary?.visitHistoryKnown);
+      const known = Boolean(summary?.visitHistoryKnown);
+      if (known) this.pendingVisitChecks.delete(userId);
+      return known;
     } finally {
       pending.running = false;
     }
@@ -585,7 +587,12 @@ class LiveSession extends EventEmitter {
   }
 
   async retryPendingVisits() {
-    await Promise.all([...this.pendingVisitChecks.keys()].map((userId) => this.runVisitCheck(userId).catch(() => false)));
+    // Avoid a reconnect/maintenance tick launching hundreds of history
+    // queries at once. Sequential retries are background work and do not
+    // compete with new LIVE comments and gifts.
+    for (const userId of [...this.pendingVisitChecks.keys()]) {
+      await this.runVisitCheck(userId).catch(() => false);
+    }
   }
 
   async heartMeHistoryFor(userId) {
@@ -833,15 +840,23 @@ class LiveSession extends EventEmitter {
     if (!eventStore.status().ready) {
       this.queueDatabaseEvent(event);
     } else {
-      this.trackPersistence(eventStore.recordEvent(this, event)
-        .then((stored) => {
+      // Keep writes from one LIVE in event order. Bursts of member/like/chat
+      // events used to update the same listener rows concurrently, which could
+      // deadlock PostgreSQL and make the collector wait before sending the next
+      // batch.
+      const persistence = this.persistenceTail
+        .catch(() => {})
+        .then(async () => {
+          const stored = await eventStore.recordEvent(this, event);
           if (!stored) this.queueDatabaseEvent(event);
           else {
             this.noteIngestion("stored", event.type);
             cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
           }
         })
-        .catch(() => this.queueDatabaseEvent(event)));
+        .catch(() => this.queueDatabaseEvent(event));
+      this.persistenceTail = persistence;
+      this.trackPersistence(persistence);
     }
     liveCue.publish(event);
   }
@@ -855,12 +870,12 @@ class LiveSession extends EventEmitter {
 
   async awaitCollectorDurability() {
     await Promise.allSettled([...this.persistencePromises]);
-    await this.retryPendingVisits();
-    await Promise.allSettled([...this.persistencePromises]);
     await this.flushPendingDatabaseEvents();
+    // Visit-history enrichment is retryable auxiliary work. Waiting for every
+    // lookup here blocked the collector acknowledgement and delayed later
+    // comments/gifts after their raw events were already durable.
     return eventStore.status().ready
       && this.pendingDatabaseEvents.length === 0
-      && this.pendingVisitChecks.size === 0
       && this.persistencePromises.size === 0;
   }
 

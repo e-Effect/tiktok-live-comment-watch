@@ -166,6 +166,8 @@ let selectedSessionId = null;
 let clockTimer = null;
 let reconnectTimer = null;
 let snapshotFetchTick = 0;
+let clockRenderTick = 0;
+const realtimeRenderState = new Map();
 let giftRankingRequest = 0;
 let giftRankingRefreshTimer = null;
 let visitorDemoActive = false;
@@ -560,6 +562,7 @@ function startSnapshotClock() {
   clockTimer = setInterval(async () => {
     if (!sessions.size) return;
     snapshotFetchTick += 1;
+    clockRenderTick += 1;
     for (const session of sessions.values()) {
       if (!session.snapshot || session.snapshot.stoppedAt) continue;
       session.snapshot.elapsedSeconds = Math.floor((Date.now() - session.snapshot.startedAt) / 1000);
@@ -584,9 +587,11 @@ function renderSelectedSessionClock() {
   if (!snapshot) return;
   renderConnectionDetails(snapshot);
   renderMetrics(snapshot);
-  renderReport(snapshot);
-  renderWatchers(snapshot.topWatchers || []);
-  renderSilentLongWatchers(snapshot.silentLongWatchers || []);
+  if (clockRenderTick % 5 === 0) {
+    renderReport(snapshot);
+    renderWatchers(snapshot.topWatchers || []);
+    renderSilentLongWatchers(snapshot.silentLongWatchers || []);
+  }
 }
 
 function closeSession(sessionId, { forget } = { forget: false }) {
@@ -594,6 +599,9 @@ function closeSession(sessionId, { forget } = { forget: false }) {
   if (source) source.close();
   eventSources.delete(sessionId);
   eventStreamActivity.delete(sessionId);
+  const pendingRender = realtimeRenderState.get(sessionId);
+  if (pendingRender?.timer) clearTimeout(pendingRender.timer);
+  realtimeRenderState.delete(sessionId);
   sessions.delete(sessionId);
 
   if (selectedSessionId === sessionId) {
@@ -1657,7 +1665,30 @@ function applyRealtimePayload(sessionId, type, payload) {
   if (Array.isArray(payload?.topGifts)) next.topGifts = payload.topGifts;
 
   rebuildRealtimeLists(next, cache);
-  renderSnapshot(next, { preserveUserCache: true });
+  session.snapshot = next;
+  scheduleRealtimeRender(sessionId, type);
+}
+
+function scheduleRealtimeRender(sessionId, type = "status") {
+  const current = realtimeRenderState.get(sessionId) || { types: new Set(), timer: null, dueAt: 0 };
+  current.types.add(type);
+  const urgent = ["comment", "gift", "share"].includes(type);
+  const delayMs = urgent ? 60 : 400;
+  const dueAt = Date.now() + delayMs;
+  if (!current.timer || dueAt < current.dueAt) {
+    if (current.timer) clearTimeout(current.timer);
+    current.dueAt = dueAt;
+    current.timer = setTimeout(() => {
+      const pending = realtimeRenderState.get(sessionId);
+      realtimeRenderState.delete(sessionId);
+      if (!pending || !sessions.has(sessionId)) return;
+      renderSessionCards();
+      if (selectedSessionId === sessionId) {
+        renderSelectedSession({ dirtyTypes: pending.types });
+      }
+    }, delayMs);
+  }
+  realtimeRenderState.set(sessionId, current);
 }
 
 function prependRealtimeEvent(items, event) {
@@ -1854,9 +1885,12 @@ function renderSnapshot(snapshot, options = {}) {
   if (selectedSessionId === snapshot.id) renderSelectedSession();
 }
 
-function renderSelectedSession() {
+function renderSelectedSession(options = {}) {
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   const snapshot = selected?.snapshot;
+  const dirtyTypes = options.dirtyTypes instanceof Set ? options.dirtyTypes : null;
+  const fullRender = !dirtyTypes;
+  const dirty = (...types) => fullRender || types.some((type) => dirtyTypes.has(type));
   updateSelectedControls();
   if (!snapshot) {
     if (previewNotice) previewNotice.hidden = true;
@@ -1885,14 +1919,18 @@ function renderSelectedSession() {
   renderConnectionDetails(snapshot);
   renderMetrics(snapshot);
   renderReport(snapshot);
-  renderComments(snapshot.comments || []);
-  renderWatchers(snapshot.topWatchers || []);
-  renderSilentLongWatchers(snapshot.silentLongWatchers || []);
-  renderUsers(snapshot.topUsers || []);
-  renderGifters(snapshot.topGifters || []);
-  renderGiftHistory(snapshot.gifts || []);
-  renderShareHistory(snapshot.shares || []);
-  renderVisitorHistory(snapshot.visitors || []);
+  if (dirty("comment", "presence", "status")) renderComments(snapshot.comments || []);
+  if (dirty("comment", "gift", "presence", "status")) {
+    renderWatchers(snapshot.topWatchers || []);
+    renderSilentLongWatchers(snapshot.silentLongWatchers || []);
+    renderUsers(snapshot.topUsers || []);
+    renderVisitorHistory(snapshot.visitors || []);
+  }
+  if (dirty("gift", "status")) {
+    renderGifters(snapshot.topGifters || []);
+    renderGiftHistory(snapshot.gifts || []);
+  }
+  if (dirty("share", "status")) renderShareHistory(snapshot.shares || []);
   if (!targetGiftSelect?.dataset.sessionId || targetGiftSelect.dataset.sessionId !== snapshot.id) {
     targetGiftSelect.dataset.sessionId = snapshot.id;
     refreshTargetGiftRanking();
