@@ -5,7 +5,7 @@ const state = {
   seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null,
   searchController: null, realtimeItems: [], realtimeCursor: 0, realtimeInFlight: false,
   listenerPage: 0, listenerPageSize: 100, listenerTotal: 0,
-  lastListenerSearch: null, pendingListenerSearch: null
+  lastListenerSearch: null, pendingListenerSearch: null, rankingRetryTimer: null
 };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 const number = new Intl.NumberFormat("ja-JP");
@@ -87,6 +87,7 @@ function normalizeAdminKey(value) {
 function logout() {
   clearInterval(state.timer);
   clearTimeout(state.attentionExpiryTimer);
+  clearTimeout(state.rankingRetryTimer);
   localStorage.removeItem(storageKey);
   state.key = "";
   el.app.hidden = true;
@@ -199,6 +200,10 @@ async function refreshListeners(options = {}) {
     el.listenerNext.disabled = (state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal;
     el.emptyState.hidden = state.items.length > 0;
     renderListenerTable();
+    clearTimeout(state.rankingRetryTimer);
+    state.rankingRetryTimer = data.rankingPending ? setTimeout(() => {
+      if (state.key && !document.hidden && currentListenerSearch() === state.lastListenerSearch) refreshListeners();
+    }, 10000) : null;
   } catch (error) {
     if (error?.name !== "AbortError") {
       el.resultCount.textContent = "検索を完了できませんでした";

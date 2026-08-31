@@ -277,6 +277,26 @@ test("listener contribution rankings combine lifetime and recent activity and re
   assert.equal(second.generatedAt, first.generatedAt);
 });
 
+test("normal listener pages do not wait for a cold contribution-rank refresh", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let resolveQuery;
+  store.pool = {
+    query() {
+      return new Promise((resolve) => { resolveQuery = resolve; });
+    }
+  };
+
+  const result = await store.listenerContributionRankings({ waitForRefresh:false });
+  assert.equal(result.pending, true);
+  assert.equal(result.generatedAt, 0);
+
+  resolveQuery({ rows: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  const cached = await store.listenerContributionRankings();
+  assert.ok(cached.generatedAt > 0);
+});
+
 test("live events save the latest TikTok profile snapshot with the listener", async () => {
   const store = new EventStore();
   store.ready = true;

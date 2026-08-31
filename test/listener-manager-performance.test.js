@@ -24,10 +24,13 @@ test("default listener pages aggregate only the selected hundred listeners", () 
 
 test("listener pages share a short bounded cache and deduplicate concurrent requests", () => {
   assert.match(serverSource, /LISTENER_PAGE_CACHE_MS = 30000/);
+  assert.match(serverSource, /LISTENER_PAGE_PENDING_CACHE_MS = 10000/);
   assert.match(serverSource, /LISTENER_PAGE_CACHE_MAX = 100/);
   assert.match(serverSource, /listenerPagePromises\.get\(cacheKey\)/);
   assert.match(serverSource, /setBoundedCache\(listenerPageCache/);
   assert.match(serverSource, /if \(updated\) clearListenerCaches\(\)/);
+  assert.match(serverSource, /waitForRefresh: false/);
+  assert.match(clientSource, /data\.rankingPending \? setTimeout/);
 });
 
 test("listener and recent-event indexes support the default screen order", () => {
