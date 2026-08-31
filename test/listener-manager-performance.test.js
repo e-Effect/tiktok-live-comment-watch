@@ -24,13 +24,13 @@ test("default listener pages aggregate only the selected hundred listeners", () 
 
 test("listener pages share a short bounded cache and deduplicate concurrent requests", () => {
   assert.match(serverSource, /LISTENER_PAGE_CACHE_MS = 30000/);
-  assert.match(serverSource, /LISTENER_PAGE_PENDING_CACHE_MS = 10000/);
+  assert.match(serverSource, /LISTENER_TOTAL_PENDING_CACHE_MS = 10000/);
   assert.match(serverSource, /LISTENER_PAGE_CACHE_MAX = 100/);
   assert.match(serverSource, /listenerPagePromises\.get\(cacheKey\)/);
   assert.match(serverSource, /setBoundedCache\(listenerPageCache/);
   assert.match(serverSource, /if \(updated\) clearListenerCaches\(\)/);
   assert.match(serverSource, /waitForRefresh: false/);
-  assert.match(serverSource, /cached\?\.value\?\.rankingPending \|\| cached\?\.value\?\.totalPending/);
+  assert.match(serverSource, /cached\?\.value\?\.totalPending/);
   assert.match(clientSource, /data\.rankingPending \|\| data\.totalPending \? setTimeout/);
   assert.match(clientSource, /人以上/);
 });

@@ -37,7 +37,7 @@ const LISTENER_SUMMARY_CACHE_MS = 30000;
 const listenerPageCache = new Map();
 const listenerPagePromises = new Map();
 const LISTENER_PAGE_CACHE_MS = 30000;
-const LISTENER_PAGE_PENDING_CACHE_MS = 10000;
+const LISTENER_TOTAL_PENDING_CACHE_MS = 10000;
 const LISTENER_PAGE_CACHE_MAX = 100;
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
 const DATABASE_RETRY_MS = Number(globalThis.process?.env?.DATABASE_RETRY_MS || 15000);
@@ -2727,8 +2727,8 @@ const server = createServer(async (request, response) => {
         offset: options.offset
       });
       const cached = listenerPageCache.get(cacheKey);
-      const cacheMs = cached?.value?.rankingPending || cached?.value?.totalPending
-        ? LISTENER_PAGE_PENDING_CACHE_MS
+      const cacheMs = cached?.value?.totalPending
+        ? LISTENER_TOTAL_PENDING_CACHE_MS
         : LISTENER_PAGE_CACHE_MS;
       if (!options.fresh && cached && cached.at >= Date.now() - cacheMs) {
         sendJson(response, 200, cached.value);
