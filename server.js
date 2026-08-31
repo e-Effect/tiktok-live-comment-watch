@@ -459,6 +459,7 @@ class LiveSession extends EventEmitter {
   }
 
   markSeen(person, at, presenceSource = "event", { entryEvent = false } = {}) {
+    if (isAnonymousListenerIdentity(person)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     if (person.uniqueId) user.uniqueId = person.uniqueId;
@@ -480,9 +481,11 @@ class LiveSession extends EventEmitter {
     }
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
+    return true;
   }
 
   markHeartMe(person, at, { status, level = 0, source = "", history = null } = {}) {
+    if (isAnonymousListenerIdentity(person)) return false;
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     const resolvedStatus = status === "new_today"
       ? nextHeartMeStatusForGift(user.heartMeStatus)
@@ -515,6 +518,7 @@ class LiveSession extends EventEmitter {
       source: this.currentEventSource()
     });
     this.broadcastPresence([user]);
+    return true;
   }
 
   recordVisit(user, at, source) {
@@ -614,6 +618,7 @@ class LiveSession extends EventEmitter {
   }
 
   markFollowedToday(person, at) {
+    if (isAnonymousListenerIdentity(person)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     user.followedToday = true;
@@ -624,9 +629,11 @@ class LiveSession extends EventEmitter {
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
     this.broadcastPresence([user]);
+    return true;
   }
 
   addComment(comment) {
+    if (isAnonymousListenerIdentity(comment)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, comment.at);
     this.commentCount += 1;
     if (comment.source === "initial") this.initialCommentCount += 1;
@@ -644,9 +651,11 @@ class LiveSession extends EventEmitter {
       summary: this.summary(),
       users: [this.realtimeUser(current)]
     });
+    return true;
   }
 
   addGift(gift) {
+    if (isAnonymousListenerIdentity(gift)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, gift.at);
     const repeatCount = Math.max(1, Number(gift.repeatCount || 1));
     const diamondCount = Math.max(0, Number(gift.diamondCount || 0));
@@ -713,9 +722,11 @@ class LiveSession extends EventEmitter {
       users: [this.realtimeUser(user)],
       topGifts: this.currentTopGifts()
     });
+    return true;
   }
 
   addShare(share) {
+    if (isAnonymousListenerIdentity(share)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, share.at);
     this.shareCount += 1;
     this.shares.unshift(share);
@@ -731,6 +742,7 @@ class LiveSession extends EventEmitter {
       summary: this.summary(),
       users: [this.realtimeUser(user)]
     });
+    return true;
   }
 
   async checkFirstVisitClaim(comment) {
@@ -793,6 +805,7 @@ class LiveSession extends EventEmitter {
   async checkSuperLurker(event) {
     if (
       !this.recordingEnabled
+      || isAnonymousListenerIdentity(event)
       || event.source === "initial"
       || !SUPER_LURKER_ALERT_TYPES.has(event.type)
     ) return false;
@@ -836,6 +849,10 @@ class LiveSession extends EventEmitter {
 
   emitNormalized(event) {
     if (!this.recordingEnabled) return;
+    // TikFinity can occasionally emit member events with no TikTok identity.
+    // They are useful for transport diagnostics but must never become a
+    // listener, visit, rank, or alert under the shared placeholder "unknown".
+    if (isAnonymousListenerIdentity(event)) return;
     if (event?.type !== "super_lurker_alert") this.checkSuperLurker(event).catch(() => {});
     if (!eventStore.status().ready) {
       this.queueDatabaseEvent(event);
@@ -1648,6 +1665,14 @@ function personFromEvent(data) {
     avatarUrl: avatarUrlFromUser(rawUser),
     signals: userSignalsFromRawUser(rawUser)
   };
+}
+
+function isAnonymousListenerIdentity(value = {}) {
+  const userId = String(value.userId || "").trim().toLowerCase();
+  const uniqueId = String(value.uniqueId || "").trim().replace(/^@/, "").toLowerCase();
+  const nickname = String(value.nickname || "").trim().toLowerCase();
+  const missing = (part) => !part || part === "unknown";
+  return missing(userId) && missing(uniqueId) && missing(nickname);
 }
 
 function parseGiftEvent(data, knownHeartMeGiftIds = []) {

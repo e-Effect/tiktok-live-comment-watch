@@ -25,6 +25,52 @@ test("live event persistence retries a transient PostgreSQL deadlock", async () 
   assert.equal(store.status().lastError, "");
 });
 
+test("identity-less unknown events are consumed without creating a listener", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let calls = 0;
+  store.pool = {
+    async query() {
+      calls += 1;
+      return { rows: [] };
+    }
+  };
+
+  const stored = await store.recordEvent({ id: "session-1", username: "streamer" }, {
+    id: "anonymous-member-1",
+    type: "join",
+    userId: "unknown",
+    uniqueId: "",
+    nickname: "unknown",
+    at: Date.now()
+  });
+
+  assert.equal(stored, true);
+  assert.equal(calls, 0);
+});
+
+test("identity-less unknown visits are ignored", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let calls = 0;
+  store.pool = {
+    async query() {
+      calls += 1;
+      return { rows: [] };
+    }
+  };
+
+  const result = await store.recordVisit({ id: "session-1", username: "streamer" }, {
+    userId: "unknown",
+    uniqueId: "",
+    nickname: "unknown",
+    at: Date.now()
+  });
+
+  assert.equal(result.visitHistoryKnown, false);
+  assert.equal(calls, 0);
+});
+
 test("gift ranking converts database totals to numbers", async () => {
   const store = new EventStore();
   store.ready = true;
@@ -81,6 +127,7 @@ test("listener search narrows people before aggregating their stream totals", as
   store.pool = {
     async query(sql, values) {
       assert.match(sql, /WITH matched_listeners AS MATERIALIZED/);
+      assert.match(sql, /LOWER\(l\.user_id\) <> 'unknown'/);
       assert.ok(sql.indexOf("FROM listeners l") < sql.indexOf("FROM listener_stream_stats s"));
       assert.match(sql, /JOIN matched_listeners m ON m\.user_id = s\.user_id/);
       assert.deepEqual(values, ["streamer", "viewer", 250, 0]);
