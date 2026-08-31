@@ -11,10 +11,29 @@ test("default listener pages aggregate only the selected hundred listeners", () 
   assert.match(eventStoreSource, /fastSortColumns/);
   assert.match(eventStoreSource, /page AS MATERIALIZED/);
   assert.match(eventStoreSource, /JOIN page p ON p\.user_id = s\.user_id/);
+  assert.match(eventStoreSource, /matched_count AS/);
+  const fastPath = eventStoreSource.match(/if \(fastOrderBy\) \{([\s\S]*?)\n    const result = await this\.pool\.query/);
+  assert.ok(fastPath, "default listener fast path should exist");
+  assert.doesNotMatch(fastPath[1], /COUNT\(\*\) OVER\(\)/);
+  assert.ok(fastPath[1].indexOf("LIMIT $2 OFFSET $3") < fastPath[1].indexOf("JOIN page p"));
   assert.match(clientSource, /listenerPageSize: 100/);
   assert.match(clientSource, /offset:String\(state\.listenerPage \* state\.listenerPageSize\)/);
   assert.match(htmlSource, /id="listenerPrev"/);
   assert.match(htmlSource, /id="listenerNext"/);
+});
+
+test("listener pages share a short bounded cache and deduplicate concurrent requests", () => {
+  assert.match(serverSource, /LISTENER_PAGE_CACHE_MS = 30000/);
+  assert.match(serverSource, /LISTENER_PAGE_CACHE_MAX = 100/);
+  assert.match(serverSource, /listenerPagePromises\.get\(cacheKey\)/);
+  assert.match(serverSource, /setBoundedCache\(listenerPageCache/);
+  assert.match(serverSource, /if \(updated\) clearListenerCaches\(\)/);
+});
+
+test("listener and recent-event indexes support the default screen order", () => {
+  assert.match(eventStoreSource, /live_events_time_idx/);
+  assert.match(eventStoreSource, /listeners_first_seen_idx/);
+  assert.match(eventStoreSource, /listeners_display_name_idx/);
 });
 
 test("listener summary uses a short cache with an explicit fresh option", () => {

@@ -34,6 +34,10 @@ const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
 const listenerSummaryCache = new Map();
 const LISTENER_SUMMARY_CACHE_MS = 30000;
+const listenerPageCache = new Map();
+const listenerPagePromises = new Map();
+const LISTENER_PAGE_CACHE_MS = 30000;
+const LISTENER_PAGE_CACHE_MAX = 100;
 const SESSION_TTL_MS = Number(globalThis.process?.env?.SESSION_TTL_MS || 1000 * 60 * 60 * 24);
 const DATABASE_RETRY_MS = Number(globalThis.process?.env?.DATABASE_RETRY_MS || 15000);
 const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_HEARTBEAT_STALE_MS || 150000);
@@ -1874,6 +1878,19 @@ function sendJson(response, status, body) {
   response.end(payload);
 }
 
+function setBoundedCache(cache, key, value, maxEntries) {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    cache.delete(cache.keys().next().value);
+  }
+}
+
+function clearListenerCaches() {
+  listenerPageCache.clear();
+  listenerSummaryCache.clear();
+}
+
 function normalizeListenerSearch(value) {
   return String(value || "").normalize("NFKC").trim().replace(/^@/, "");
 }
@@ -2617,10 +2634,12 @@ const server = createServer(async (request, response) => {
     if (!requireListenerAdmin(request, response)) return;
     try {
       const body = await readBody(request);
-      sendJson(response, 200, await backfillListenerAvatars({
+      const result = await backfillListenerAvatars({
         limit: Number(body.limit || 10),
         offset: Number(body.offset || 0)
-      }));
+      });
+      clearListenerCaches();
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -2631,7 +2650,9 @@ const server = createServer(async (request, response) => {
     if (!requireListenerAdmin(request, response)) return;
     try {
       const body = await readBody(request);
-      sendJson(response, 200, await importResolvedListenerAvatars(body.items));
+      const result = await importResolvedListenerAvatars(body.items);
+      clearListenerCaches();
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 400, { error: shortError(error) });
     }
@@ -2642,10 +2663,12 @@ const server = createServer(async (request, response) => {
     if (!requireListenerAdmin(request, response)) return;
     try {
       const body = await readBody(request);
-      sendJson(response, 200, await compactListenerAvatars({
+      const result = await compactListenerAvatars({
         limit: Number(body.limit || 25),
         after: String(body.after || "")
-      }));
+      });
+      clearListenerCaches();
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -2656,10 +2679,12 @@ const server = createServer(async (request, response) => {
     if (!requireListenerAdmin(request, response)) return;
     try {
       const body = await readBody(request);
-      sendJson(response, 200, await eventStore.importListeners(body.items, {
+      const result = await eventStore.importListeners(body.items, {
         username: normalizeTikTokUsername(body.username || ""),
         source: String(body.source || "import")
-      }));
+      });
+      clearListenerCaches();
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -2669,7 +2694,9 @@ const server = createServer(async (request, response) => {
   if (url.pathname === "/api/listeners/maintenance/clear-imported-super-fans" && request.method === "POST") {
     if (!requireListenerAdmin(request, response)) return;
     try {
-      sendJson(response, 200, await eventStore.clearImportedSuperFans());
+      const result = await eventStore.clearImportedSuperFans();
+      clearListenerCaches();
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -2689,19 +2716,45 @@ const server = createServer(async (request, response) => {
         offset: Number(url.searchParams.get("offset") || 0),
         fresh: url.searchParams.get("fresh") === "1"
       };
-      if (options.sort === "contribution" || options.sort === "recent_contribution") {
-        sendJson(response, 200, await eventStore.listenerContributionPage(options));
+      const cacheKey = JSON.stringify({
+        username: options.username,
+        search: options.search,
+        sort: options.sort,
+        direction: options.direction,
+        classification: options.classification,
+        limit: options.limit,
+        offset: options.offset
+      });
+      const cached = listenerPageCache.get(cacheKey);
+      if (!options.fresh && cached && cached.at >= Date.now() - LISTENER_PAGE_CACHE_MS) {
+        sendJson(response, 200, cached.value);
         return;
       }
-      const [result, ranks] = await Promise.all([
-        eventStore.listeners(options),
-        eventStore.listenerContributionRankings({ username: options.username, fresh: options.fresh })
-      ]);
-      sendJson(response, 200, {
-        ...result,
-        items: result.items.map((item) => ({ ...item, ...publicContributionRank(ranks.byUserId.get(item.userId)) })),
-        rankingGeneratedAt: ranks.generatedAt
-      });
+      let pending = !options.fresh ? listenerPagePromises.get(cacheKey) : null;
+      if (!pending) {
+        pending = (async () => {
+          if (options.sort === "contribution" || options.sort === "recent_contribution") {
+            return eventStore.listenerContributionPage(options);
+          }
+          const [result, ranks] = await Promise.all([
+            eventStore.listeners(options),
+            eventStore.listenerContributionRankings({ username: options.username, fresh: options.fresh })
+          ]);
+          return {
+            ...result,
+            items: result.items.map((item) => ({ ...item, ...publicContributionRank(ranks.byUserId.get(item.userId)) })),
+            rankingGeneratedAt: ranks.generatedAt
+          };
+        })();
+        listenerPagePromises.set(cacheKey, pending);
+      }
+      try {
+        const value = await pending;
+        setBoundedCache(listenerPageCache, cacheKey, { at: Date.now(), value }, LISTENER_PAGE_CACHE_MAX);
+        sendJson(response, 200, value);
+      } finally {
+        if (listenerPagePromises.get(cacheKey) === pending) listenerPagePromises.delete(cacheKey);
+      }
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -2767,6 +2820,7 @@ const server = createServer(async (request, response) => {
       }
       if (request.method === "PATCH") {
         const updated = await eventStore.updateListener(userId, await readBody(request));
+        if (updated) clearListenerCaches();
         sendJson(response, updated ? 200 : 404, updated || { error: "リスナーが見つかりません" });
         return;
       }
