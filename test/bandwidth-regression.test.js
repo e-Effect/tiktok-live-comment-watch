@@ -74,8 +74,8 @@ test("database outages reconnect and queue realtime events without full snapshot
   assert.match(serverSource, /async awaitCollectorDurability\(\)[\s\S]*?flushPendingDatabaseEvents\(\)/);
   const durability = serverSource.match(/async awaitCollectorDurability\(\) \{[\s\S]*?\n\s*\}/)?.[0] || "";
   assert.doesNotMatch(durability, /retryPendingVisits/);
-  assert.match(serverSource, /while \(this\.persistencePromises\.size > 0 && Date\.now\(\) < deadline\)/);
-  assert.match(serverSource, /Promise\.race\(\[[\s\S]*?Promise\.allSettled\(current\)/);
+  assert.doesNotMatch(durability, /await Promise\.allSettled/);
+  assert.match(durability, /return eventStore\.status\(\)\.ready/);
   assert.match(serverSource, /this\.persistenceTail[\s\S]*?eventStore\.recordEvent\(this, event\)/);
   assert.match(collectorSource, /\$delivery\.durable -ne \$true/);
   assert.match(collectorSource, /function Start-CollectorDelivery/);
