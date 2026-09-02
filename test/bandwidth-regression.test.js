@@ -74,16 +74,35 @@ test("database outages reconnect and queue realtime events without full snapshot
   assert.match(serverSource, /async awaitCollectorDurability\(\)[\s\S]*?flushPendingDatabaseEvents\(\)/);
   const durability = serverSource.match(/async awaitCollectorDurability\(\) \{[\s\S]*?\n\s*\}/)?.[0] || "";
   assert.doesNotMatch(durability, /retryPendingVisits/);
+  assert.match(serverSource, /while \(this\.persistencePromises\.size > 0 && Date\.now\(\) < deadline\)/);
+  assert.match(serverSource, /Promise\.race\(\[[\s\S]*?Promise\.allSettled\(current\)/);
   assert.match(serverSource, /this\.persistenceTail[\s\S]*?eventStore\.recordEvent\(this, event\)/);
   assert.match(collectorSource, /\$delivery\.durable -ne \$true/);
-  assert.match(collectorSource, /if \(-not \(Flush-PendingEvents -Config \$config\)\) \{ break \}/);
-  assert.match(collectorSource, /while \(\$pending\.Count -gt 0\)/);
+  assert.match(collectorSource, /function Start-CollectorDelivery/);
+  assert.match(collectorSource, /function Complete-CollectorDelivery/);
+  assert.match(collectorSource, /function Invoke-CollectorDeliveryPump/);
   assert.match(collectorSource, /collector-pending\.jsonl/);
   assert.match(collectorSource, /function Load-PendingEvents/);
   assert.match(collectorSource, /function Save-PendingEvents/);
   assert.match(collectorSource, /function Add-PendingEvent/);
-  assert.match(collectorSource, /\$receiveTask\.Wait\(250\)/);
+  assert.match(collectorSource, /\$receiveTask\.Wait\(50\)/);
   assert.doesNotMatch(collectorSource, /\$pending\.Count -ge 5000/);
+});
+
+test("collector keeps reading TikFinity while Render delivery is slow or unavailable", () => {
+  assert.match(collectorSource, /\$script:deliveryTask = \$http\.SendAsync\(\$request\)/);
+  assert.match(collectorSource, /if \(\$null -eq \$script:deliveryTask -or -not \$script:deliveryTask\.IsCompleted\) \{ return \$false \}/);
+  assert.match(collectorSource, /Render is unavailable; buffering \$\(\$script:pending\.Count\) events locally/);
+  assert.match(collectorSource, /Only a TikFinity\/WebSocket failure reaches this outer handler/);
+  assert.doesNotMatch(collectorSource, /\$http\.SendAsync\(\$request\)\.GetAwaiter\(\)\.GetResult\(\)/);
+});
+
+test("collector persists each event before background delivery and throttles status disk writes", () => {
+  const receiveBranch = collectorSource.match(/if \(\$allowedEvents -contains[\s\S]*?else \{/i)?.[0] || "";
+  assert.ok(receiveBranch.indexOf("Add-PendingEvent -Raw $raw") < receiveBranch.indexOf("Invoke-CollectorDeliveryPump -Config $config"));
+  assert.match(collectorSource, /\$nowValue - \$script:lastStatusWriteAt\)\.TotalMilliseconds -lt 1000/);
+  assert.match(collectorSource, /Write-CollectorStatus -State 'receiving'[\s\S]*?-PendingCount \$pending\.Count/);
+  assert.match(collectorSource, /\[IO\.File\]::WriteAllLines\(\$tempPath, \$lines, \[Text\.Encoding\]::UTF8\)/);
 });
 
 test("listener admin authentication rate limits repeated failures", () => {

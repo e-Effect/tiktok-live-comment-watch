@@ -891,7 +891,19 @@ class LiveSession extends EventEmitter {
   }
 
   async awaitCollectorDurability() {
-    await Promise.allSettled([...this.persistencePromises]);
+    // Gift/history handlers may register a second persistence promise while
+    // the first set is being awaited. Drain those follow-up writes too instead
+    // of immediately returning durable=false and forcing the collector to
+    // resend the whole batch. Keep a margin below the collector's HTTP timeout.
+    const deadline = Date.now() + 10_000;
+    while (this.persistencePromises.size > 0 && Date.now() < deadline) {
+      const current = [...this.persistencePromises];
+      const remaining = Math.max(1, deadline - Date.now());
+      await Promise.race([
+        Promise.allSettled(current),
+        delay(remaining)
+      ]);
+    }
     await this.flushPendingDatabaseEvents();
     // Visit-history enrichment is retryable auxiliary work. Waiting for every
     // lookup here blocked the collector acknowledgement and delayed later

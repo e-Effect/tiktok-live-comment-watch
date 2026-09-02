@@ -20,7 +20,6 @@ $receiptHttp = New-Object System.Net.Http.HttpClient
 $receiptHttp.Timeout = [TimeSpan]::FromMilliseconds(750)
 $lastReceiptAttemptAt = [DateTime]::MinValue
 $pending = New-Object 'System.Collections.Generic.Queue[string]'
-$lastPendingFlushAt = [DateTime]::MinValue
 $receiptPending = New-Object 'System.Collections.Generic.Queue[string]'
 $receiptPendingKeys = New-Object 'System.Collections.Generic.HashSet[string]'
 $collectorStartedAt = [DateTime]::UtcNow.ToString('o')
@@ -29,6 +28,17 @@ $forwardedCounts = @{}
 $unknownCounts = @{}
 $deliveryAccepted = [int64]0
 $deliveryDropped = [int64]0
+$deliveryTask = $null
+$deliveryRequest = $null
+$deliveryBatchCount = 0
+$deliveryRetryAt = [DateTime]::MinValue
+$deliveryFailureCount = 0
+$lastDeliveryAttemptAt = [DateTime]::MinValue
+$lastRenderSuccessAt = $null
+$lastRenderError = ''
+$lastStatusWriteAt = [DateTime]::MinValue
+$lastReceiptHeartbeatAt = [DateTime]::MinValue
+$lastReceivedEventType = ''
 $receiptDiagnostics = [ordered]@{
     reachable = $false
     printerReady = $false
@@ -59,13 +69,21 @@ function Get-CollectorDiagnostics {
         serverDropped = $script:deliveryDropped
         pendingEvents = $script:pending.Count
         pendingReceiptEvents = $script:receiptPending.Count
+        deliveryInFlight = $null -ne $script:deliveryTask
+        renderState = if ($null -ne $script:deliveryTask) { 'sending' } elseif ($script:pending.Count -gt 0) { 'buffering' } else { 'connected' }
+        lastRenderSuccessAt = $script:lastRenderSuccessAt
+        lastRenderError = $script:lastRenderError
+        renderRetryAt = if ($script:deliveryRetryAt -gt [DateTime]::UtcNow) { $script:deliveryRetryAt.ToString('o') } else { $null }
         receipt = $script:receiptDiagnostics
     }
 }
 
 function Write-CollectorStatus {
-    param([string]$State, [string]$Message, [int]$PendingCount = 0)
-    $now = [DateTime]::Now.ToString('o')
+    param([string]$State, [string]$Message, [int]$PendingCount = 0, [switch]$Force)
+    $nowValue = [DateTime]::Now
+    if (-not $Force -and ($nowValue - $script:lastStatusWriteAt).TotalMilliseconds -lt 1000) { return }
+    $script:lastStatusWriteAt = $nowValue
+    $now = $nowValue.ToString('o')
     $status = [ordered]@{
         state = $State
         message = $Message
@@ -92,31 +110,116 @@ function Read-CollectorConfig {
     return $config
 }
 
-function Send-CollectorPayload {
-    param($Config, [object[]]$Events, [bool]$Heartbeat = $false)
+function Start-CollectorDelivery {
+    param($Config, [bool]$Heartbeat = $false)
+    if ($null -ne $script:deliveryTask) { return $false }
+    if ([DateTime]::UtcNow -lt $script:deliveryRetryAt) { return $false }
+
+    $take = [Math]::Min(25, $script:pending.Count)
+    if ($take -eq 0 -and -not $Heartbeat) { return $false }
+    $rawBatch = @($script:pending.ToArray() | Select-Object -First $take)
+    $events = @()
+    foreach ($raw in $rawBatch) {
+        try { $events += ($raw | ConvertFrom-Json) } catch {}
+    }
+    if ($take -gt 0 -and $events.Count -eq 0) {
+        for ($index = 0; $index -lt $take; $index++) { [void]$script:pending.Dequeue() }
+        Save-PendingEvents
+        return $false
+    }
+
     $payload = [ordered]@{
         streamUsername = [string]$Config.streamUsername
         collectorId = [string]$env:COMPUTERNAME
-        heartbeat = $Heartbeat
-        events = @($Events)
+        heartbeat = $Heartbeat -and $events.Count -eq 0
+        events = @($events)
         diagnostics = Get-CollectorDiagnostics
     } | ConvertTo-Json -Depth 100 -Compress
-
-    Send-LocalReceiptPayload -Config $Config -Events $Events -Heartbeat $Heartbeat
-
     $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, [string]$Config.endpoint)
     $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', [string]$Config.key)
     $request.Content = [System.Net.Http.StringContent]::new($payload, [Text.Encoding]::UTF8, 'application/json')
+    $script:deliveryRequest = $request
+    $script:deliveryBatchCount = $take
+    $script:lastDeliveryAttemptAt = [DateTime]::UtcNow
     try {
-        $response = $http.SendAsync($request).GetAwaiter().GetResult()
+        # Keep the HTTP request asynchronous. TikFinity's WebSocket must keep
+        # being read while Render is slow or temporarily unavailable.
+        $script:deliveryTask = $http.SendAsync($request)
+        return $true
+    }
+    catch {
+        $request.Dispose()
+        $script:deliveryRequest = $null
+        $script:deliveryBatchCount = 0
+        throw
+    }
+}
+
+function Complete-CollectorDelivery {
+    if ($null -eq $script:deliveryTask -or -not $script:deliveryTask.IsCompleted) { return $false }
+    $response = $null
+    $completedBatchCount = $script:deliveryBatchCount
+    $deliverySucceeded = $false
+    try {
+        $response = $script:deliveryTask.GetAwaiter().GetResult()
         $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode) {
             throw "Render response $([int]$response.StatusCode): $text"
         }
-        return $text
+        $delivery = $text | ConvertFrom-Json
+        if ($delivery.durable -ne $true) { throw 'Render did not confirm durable storage.' }
+        $script:deliveryAccepted += [int64]([Math]::Max(0, [int]$delivery.accepted))
+        $script:deliveryDropped += [int64]([Math]::Max(0, [int]$delivery.dropped))
+        for ($index = 0; $index -lt $script:deliveryBatchCount; $index++) {
+            if ($script:pending.Count -gt 0) { [void]$script:pending.Dequeue() }
+        }
+        if ($script:deliveryBatchCount -gt 0) { Save-PendingEvents }
+        $script:deliveryFailureCount = 0
+        $script:deliveryRetryAt = [DateTime]::MinValue
+        $script:lastRenderSuccessAt = [DateTime]::UtcNow.ToString('o')
+        $script:lastRenderError = ''
+        $deliverySucceeded = $true
+    }
+    catch {
+        $script:deliveryFailureCount++
+        $delaySeconds = [Math]::Min(60, [Math]::Max(3, [Math]::Pow(2, [Math]::Min(5, $script:deliveryFailureCount - 1)) * 3))
+        $script:deliveryRetryAt = [DateTime]::UtcNow.AddSeconds($delaySeconds)
+        $script:lastRenderError = $_.Exception.Message
+        Write-CollectorStatus -State 'receiving' -Message "Render is unavailable; buffering $($script:pending.Count) events locally." -PendingCount $script:pending.Count -Force
     }
     finally {
-        $request.Dispose()
+        if ($response) { $response.Dispose() }
+        if ($script:deliveryRequest) { $script:deliveryRequest.Dispose() }
+        $script:deliveryTask = $null
+        $script:deliveryRequest = $null
+        $script:deliveryBatchCount = 0
+    }
+    if ($deliverySucceeded) {
+        $state = if ($completedBatchCount -gt 0) { 'receiving' } else { 'connected' }
+        $message = if ($script:pending.Count -gt 0) {
+            "Delivered $completedBatchCount events; $($script:pending.Count) remain buffered."
+        }
+        elseif ($completedBatchCount -gt 0) {
+            "Delivered $completedBatchCount events; local buffer is empty."
+        }
+        else {
+            'Connected to TikFinity and Render; waiting for events.'
+        }
+        Write-CollectorStatus -State $state -Message $message -PendingCount $script:pending.Count -Force
+    }
+    return $true
+}
+
+function Invoke-CollectorDeliveryPump {
+    param($Config, [bool]$Heartbeat = $false)
+    [void](Complete-CollectorDelivery)
+    if ($null -ne $script:deliveryTask -or [DateTime]::UtcNow -lt $script:deliveryRetryAt) { return }
+    $heartbeatDue = $Heartbeat -or ([DateTime]::UtcNow - $script:lastDeliveryAttemptAt).TotalSeconds -ge 60
+    if ($script:pending.Count -gt 0) {
+        [void](Start-CollectorDelivery -Config $Config)
+    }
+    elseif ($heartbeatDue) {
+        [void](Start-CollectorDelivery -Config $Config -Heartbeat $true)
     }
 }
 
@@ -231,7 +334,8 @@ function Update-ReceiptDiagnostics {
 
 function Save-ReceiptPending {
     $tempPath = "$receiptPendingPath.tmp"
-    @($script:receiptPending.ToArray()) | Set-Content -LiteralPath $tempPath -Encoding UTF8
+    $lines = [string[]]@($script:receiptPending.ToArray())
+    [IO.File]::WriteAllLines($tempPath, $lines, [Text.Encoding]::UTF8)
     Move-Item -LiteralPath $tempPath -Destination $receiptPendingPath -Force
 }
 
@@ -246,7 +350,8 @@ function Load-ReceiptPending {
 
 function Save-PendingEvents {
     $tempPath = "$pendingPath.tmp"
-    @($script:pending.ToArray()) | Set-Content -LiteralPath $tempPath -Encoding UTF8
+    $lines = [string[]]@($script:pending.ToArray())
+    [IO.File]::WriteAllLines($tempPath, $lines, [Text.Encoding]::UTF8)
     Move-Item -LiteralPath $tempPath -Destination $pendingPath -Force
 }
 
@@ -282,36 +387,12 @@ function Add-PendingEvent {
     }
     $queuedRaw | Add-Content -LiteralPath $pendingPath -Encoding UTF8
     $script:pending.Enqueue($queuedRaw)
-}
-
-function Flush-PendingEvents {
-    param($Config)
-    if ($pending.Count -eq 0) { return }
-    $script:lastPendingFlushAt = [DateTime]::UtcNow
-    $take = [Math]::Min(25, $pending.Count)
-    $rawBatch = $pending.ToArray() | Select-Object -First $take
-    $events = @()
-    foreach ($raw in $rawBatch) {
-        try { $events += ($raw | ConvertFrom-Json) } catch {}
-    }
-    if ($events.Count -eq 0) {
-        for ($i = 0; $i -lt $take; $i++) { [void]$pending.Dequeue() }
-        Save-PendingEvents
-        return
-    }
-    $responseText = Send-CollectorPayload -Config $Config -Events $events
-    $delivery = $responseText | ConvertFrom-Json
-    if ($delivery.durable -ne $true) { return $false }
-    $script:deliveryAccepted += [int64]([Math]::Max(0, [int]$delivery.accepted))
-    $script:deliveryDropped += [int64]([Math]::Max(0, [int]$delivery.dropped))
-    for ($i = 0; $i -lt $take; $i++) { [void]$pending.Dequeue() }
-    Save-PendingEvents
-    return $true
+    return $queuedRaw
 }
 
 Load-PendingEvents
 Load-ReceiptPending
-Write-CollectorStatus -State 'starting' -Message 'Waiting for TikFinity.' -PendingCount ($pending.Count + $receiptPending.Count)
+Write-CollectorStatus -State 'starting' -Message 'Waiting for TikFinity.' -PendingCount ($pending.Count + $receiptPending.Count) -Force
 
 while ($true) {
     $socket = $null
@@ -319,11 +400,10 @@ while ($true) {
         $config = Read-CollectorConfig
         $socket = New-Object System.Net.WebSockets.ClientWebSocket
         $socket.ConnectAsync([Uri]$tikFinityUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
-        [void](Send-CollectorPayload -Config $config -Events @() -Heartbeat $true)
-        while ($pending.Count -gt 0) {
-            if (-not (Flush-PendingEvents -Config $config)) { break }
-        }
-        Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity and Render.' -PendingCount $pending.Count
+        Invoke-CollectorDeliveryPump -Config $config -Heartbeat $true
+        Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $true
+        $script:lastReceiptHeartbeatAt = [DateTime]::UtcNow
+        Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; Render delivery runs in background.' -PendingCount $pending.Count -Force
 
         $buffer = New-Object byte[] 65536
         while ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
@@ -331,19 +411,17 @@ while ($true) {
             do {
                 $segment = [System.ArraySegment[byte]]::new($buffer)
                 $receiveTask = $socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
-                $lastHeartbeatAt = [DateTime]::UtcNow
-                while (-not $receiveTask.Wait(250)) {
+                while (-not $receiveTask.Wait(50)) {
                     $now = [DateTime]::UtcNow
-                    if ($pending.Count -gt 0 -and ($now - $script:lastPendingFlushAt).TotalMilliseconds -ge 200) {
-                        [void](Flush-PendingEvents -Config $config)
+                    Invoke-CollectorDeliveryPump -Config $config
+                    if (-not [string]::IsNullOrWhiteSpace($script:lastReceivedEventType) -and ($now - $script:lastStatusWriteAt.ToUniversalTime()).TotalMilliseconds -ge 1000) {
+                        Write-CollectorStatus -State 'receiving' -Message "Received: $($script:lastReceivedEventType)" -PendingCount $pending.Count
+                        $script:lastReceivedEventType = ''
                     }
-                    if (($now - $lastHeartbeatAt).TotalSeconds -ge 60) {
-                        [void](Send-CollectorPayload -Config $config -Events @() -Heartbeat $true)
-                        $lastHeartbeatAt = $now
-                        while ($pending.Count -gt 0) {
-                            if (-not (Flush-PendingEvents -Config $config)) { break }
-                        }
-                        Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; waiting for events.' -PendingCount $pending.Count
+                    if (($now - $script:lastReceiptHeartbeatAt).TotalSeconds -ge 60) {
+                        Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $true
+                        $script:lastReceiptHeartbeatAt = $now
+                        Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; waiting for events.' -PendingCount $pending.Count -Force
                     }
                 }
                 $result = $receiveTask.GetAwaiter().GetResult()
@@ -367,10 +445,14 @@ while ($true) {
                 $eventType = ''
             }
             Add-DiagnosticCount -Bucket $script:receivedCounts -Name $eventType
+            $script:lastReceivedEventType = $eventType
             if ($allowedEvents -contains $eventType.ToLowerInvariant()) {
                 Add-DiagnosticCount -Bucket $script:forwardedCounts -Name $eventType
-                Add-PendingEvent -Raw $raw
-                if ($pending.Count -ge 25) { [void](Flush-PendingEvents -Config $config) }
+                $queuedRaw = Add-PendingEvent -Raw $raw
+                if ($eventType -ieq 'gift') {
+                    try { Send-LocalReceiptPayload -Config $config -Events @(($queuedRaw | ConvertFrom-Json)) -Heartbeat $false } catch {}
+                }
+                Invoke-CollectorDeliveryPump -Config $config
                 Write-CollectorStatus -State 'receiving' -Message "Received: $eventType" -PendingCount $pending.Count
             }
             else {
@@ -380,7 +462,10 @@ while ($true) {
         }
     }
     catch {
-        Write-CollectorStatus -State 'waiting' -Message $_.Exception.Message -PendingCount $pending.Count
+        # Only a TikFinity/WebSocket failure reaches this outer handler.
+        # Render delivery failures are absorbed by the background pump so they
+        # cannot disconnect TikFinity or stop comment collection.
+        Write-CollectorStatus -State 'waiting' -Message $_.Exception.Message -PendingCount $pending.Count -Force
     }
     finally {
         if ($socket) { $socket.Dispose() }
