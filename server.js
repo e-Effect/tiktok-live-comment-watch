@@ -2127,13 +2127,13 @@ function publicContributionRank(rank) {
 }
 
 function listenerRowsToCsv(rows = []) {
-  const output = [["ユーザーID", "TikTok ID", "表示名", "あなたをフォロー", "本人のフォロー数", "本人のフォロワー数", "プロフィール確認日時", "来訪回数", "コメント数", "ギフト個数", "ギフトコイン", "シェア回数", "スーパーファン", "初回来訪", "最終来訪", "タグ", "メモ"]];
+  const output = [["ユーザーID", "TikTok ID", "表示名", "あなたをフォロー", "本人のフォロー数", "本人のフォロワー数", "プロフィール確認日時", "来訪回数", "コメント数", "ギフト個数", "ギフトコイン", "シェア回数", "スーパーファン", "ブロック済み", "初回来訪", "最終来訪", "タグ", "メモ"]];
   for (const item of rows) {
     output.push([
       item.userId, item.uniqueId, item.nickname, ({following:"フォロー中",not_following:"未フォロー"})[item.hostFollowStatus] || "未確認",
       item.followingCount ?? "", item.followerCount ?? "", item.profileCountsUpdatedAt ? new Date(item.profileCountsUpdatedAt).toISOString() : "",
       item.visits, item.comments, item.gifts,
-      item.coins, item.shares, item.isSuperFan ? "はい" : "",
+      item.coins, item.shares, item.isSuperFan ? "はい" : "", item.isBlocked ? "はい" : "",
       item.firstSeenAt ? new Date(item.firstSeenAt).toISOString() : "",
       item.lastSeenAt ? new Date(item.lastSeenAt).toISOString() : "",
       (item.tags || []).join(" / "), item.notes || ""
@@ -3009,6 +3009,7 @@ const server = createServer(async (request, response) => {
         sort: url.searchParams.get("sort") || "last_seen",
         direction: url.searchParams.get("direction") || "desc",
         classification: url.searchParams.get("classification") || "all",
+        blocked: url.searchParams.get("blocked") || "all",
         limit: Number(url.searchParams.get("limit") || 100),
         offset: Number(url.searchParams.get("offset") || 0),
         fresh: url.searchParams.get("fresh") === "1"
@@ -3019,6 +3020,7 @@ const server = createServer(async (request, response) => {
         sort: options.sort,
         direction: options.direction,
         classification: options.classification,
+        blocked: options.blocked,
         limit: options.limit,
         offset: options.offset
       });

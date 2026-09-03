@@ -123,3 +123,14 @@ test("listener manager exposes a manual super lurker flag", () => {
   assert.match(serverSource, /type: "super_lurker_alert"/);
   assert.match(serverSource, /this\.superLurkerAlertedIds\.add/);
 });
+
+test("listener manager exposes a persistent blocked flag and filter", () => {
+  assert.match(htmlSource, /id="blockFilter"/);
+  assert.match(htmlSource, /value="blocked">ブロック済みのみ/);
+  assert.match(htmlSource, /<th>ブロック<\/th>/);
+  assert.match(clientSource, /class="blocked-toggle"/);
+  assert.match(clientSource, /isBlocked:Boolean\(input\.checked\)/);
+  assert.match(clientSource, /ブロック済みとして管理/);
+  assert.match(eventStoreSource, /ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT FALSE/);
+  assert.match(eventStoreSource, /blockedSqlCondition/);
+});

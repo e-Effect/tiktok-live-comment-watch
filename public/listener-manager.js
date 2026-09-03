@@ -32,6 +32,7 @@ el.streamUsername.addEventListener("change", () => {
 });
 el.sort.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
 el.classificationFilter.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
+el.blockFilter.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
 el.listenerPrev.addEventListener("click", () => {
   if (state.listenerPage <= 0) return;
   state.listenerPage -= 1;
@@ -162,6 +163,7 @@ async function refreshSummary(options = {}) {
     const cards = [
       ["記録リスナー", state.summary.listeners], ["本日活動", state.summary.activeToday],
       ["リピーター", state.summary.returning], ["スーパーファン", state.summary.superFans],
+      ["ブロック済み", state.summary.blocked],
       ["潜り人", state.summary.lurkers],
       ["アイコン取得済み", state.summary.avatars],
       ["来訪回数", state.summary.visits], ["コメント", state.summary.comments],
@@ -181,7 +183,7 @@ async function refreshListeners(options = {}) {
     el.listenerRows.setAttribute("aria-busy", "true");
     el.resultCount.textContent = search ? `「${search}」を検索中…` : "一覧を読み込み中…";
     const query = new URLSearchParams({
-      search, sort:el.sort.value, classification:el.classificationFilter.value,
+      search, sort:el.sort.value, classification:el.classificationFilter.value, blocked:el.blockFilter.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
       limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
     });
@@ -285,7 +287,7 @@ function rowHtml(item, attentionActive = false) {
   const rawName = item.nickname || item.uniqueId || item.userId;
   const name = escapeHtml(rawName);
   const sub = item.uniqueId ? `@${escapeHtml(item.uniqueId)}` : escapeHtml(item.userId);
-  return `<tr class="listener-row ${item.isLurker?"lurker-row":""} ${attentionActive?"attention-active":""}" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isSuperFan?'<span class="fan">スパファン</span>':''}${item.isSuperLurker?'<span class="super-lurker-badge">スーパー潜り人</span>':''}${item.isLurker?'<span class="lurker-badge">潜り人</span>':''}${item.needsAttention?'<span class="attention-badge">要確認</span>':''}</strong><small>${sub}${attentionActive?'・<b class="attention-now">いま反応あり</b>':''}</small></div></div></td><td class="contribution-cell">${contributionCell(item)}</td><td class="follow-status-cell">${followBadge(item.hostFollowStatus)}</td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td class="attention-cell"><input class="attention-toggle" type="checkbox" ${item.needsAttention?"checked":""} aria-label="${escapeAttr(rawName)}を要確認として管理"></td><td class="super-lurker-cell"><input class="super-lurker-toggle" type="checkbox" ${item.isSuperLurker?"checked":""} aria-label="${escapeAttr(rawName)}をスーパー潜り人として管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
+  return `<tr class="listener-row ${item.isLurker?"lurker-row":""} ${item.isBlocked?"blocked-row":""} ${attentionActive?"attention-active":""}" data-user-id="${escapeAttr(item.userId)}"><td><div class="person">${avatar(item)}<div><strong>${name}${item.isBlocked?'<span class="blocked-badge">ブロック済み</span>':''}${item.isSuperFan?'<span class="fan">スパファン</span>':''}${item.isSuperLurker?'<span class="super-lurker-badge">スーパー潜り人</span>':''}${item.isLurker?'<span class="lurker-badge">潜り人</span>':''}${item.needsAttention?'<span class="attention-badge">要確認</span>':''}</strong><small>${sub}${attentionActive?'・<b class="attention-now">いま反応あり</b>':''}</small></div></div></td><td class="contribution-cell">${contributionCell(item)}</td><td class="follow-status-cell">${followBadge(item.hostFollowStatus)}</td><td class="fan-cell"><input class="fan-toggle" type="checkbox" ${item.isSuperFan?"checked":""} aria-label="${escapeAttr(rawName)}をスーパーファンとして管理"></td><td class="attention-cell"><input class="attention-toggle" type="checkbox" ${item.needsAttention?"checked":""} aria-label="${escapeAttr(rawName)}を要確認として管理"></td><td class="super-lurker-cell"><input class="super-lurker-toggle" type="checkbox" ${item.isSuperLurker?"checked":""} aria-label="${escapeAttr(rawName)}をスーパー潜り人として管理"></td><td class="blocked-cell"><input class="blocked-toggle" type="checkbox" ${item.isBlocked?"checked":""} aria-label="${escapeAttr(rawName)}をブロック済みとして管理"></td><td>${number.format(item.visits||0)}</td><td>${number.format(item.comments||0)}</td><td>${number.format(item.gifts||0)}</td><td>${number.format(item.coins||0)}</td><td>${formatDate(item.lastSeenAt)}</td></tr>`;
 }
 
 function contributionCell(item) {
@@ -309,10 +311,11 @@ function renderListenerTable() {
   el.listenerRows.innerHTML = rows.map(({item,active}) => rowHtml(item,active)).join("");
   hydrateAvatars(el.listenerRows);
   el.listenerRows.querySelectorAll("tr[data-user-id]").forEach((row) => row.addEventListener("click", () => openDetail(row.dataset.userId)));
-  el.listenerRows.querySelectorAll(".fan-cell,.attention-cell,.super-lurker-cell").forEach((cell) => cell.addEventListener("click", (event) => event.stopPropagation()));
+  el.listenerRows.querySelectorAll(".fan-cell,.attention-cell,.super-lurker-cell,.blocked-cell").forEach((cell) => cell.addEventListener("click", (event) => event.stopPropagation()));
   el.listenerRows.querySelectorAll(".fan-toggle").forEach((input) => input.addEventListener("change", () => setInlineSuperFan(input)));
   el.listenerRows.querySelectorAll(".attention-toggle").forEach((input) => input.addEventListener("change", () => setInlineAttention(input)));
   el.listenerRows.querySelectorAll(".super-lurker-toggle").forEach((input) => input.addEventListener("change", () => setInlineSuperLurker(input)));
+  el.listenerRows.querySelectorAll(".blocked-toggle").forEach((input) => input.addEventListener("change", () => setInlineBlocked(input)));
   clearTimeout(state.attentionExpiryTimer);
   const nextExpiry = Math.min(...[...state.attentionExpires.values()].filter((value) => value > now));
   if (Number.isFinite(nextExpiry)) state.attentionExpiryTimer = setTimeout(renderListenerTable, Math.max(50, nextExpiry-now+50));
@@ -413,6 +416,33 @@ async function setInlineSuperLurker(input) {
   }
 }
 
+async function setInlineBlocked(input) {
+  const row = input.closest("tr[data-user-id]");
+  const userId = row?.dataset.userId || "";
+  const item = state.items.find((candidate) => candidate.userId === userId);
+  if (!row || !item) return;
+  const previous = Boolean(item.isBlocked);
+  input.disabled = true;
+  try {
+    const response = await api(`/api/listeners/${encodeURIComponent(userId)}`, {
+      method:"PATCH", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({isBlocked:Boolean(input.checked)})
+    });
+    if (!response.ok) throw new Error("ブロック済み設定を保存できませんでした");
+    const updated = await response.json();
+    item.isBlocked = Boolean(updated.isBlocked);
+    input.checked = item.isBlocked;
+    if (el.blockFilter.value === "all") renderListenerTable();
+    else await refreshListeners({fresh:true});
+    await refreshSummary({fresh:true});
+  } catch (error) {
+    input.checked = previous;
+    showConnectionError(error);
+  } finally {
+    input.disabled = false;
+  }
+}
+
 function eventHtml(item) {
   const label = ({comment:"コメント",gift:"ギフト",share:"シェア",follow:"フォロー",join:"入室",like:"いいね",subscribe:"サブスク"})[item.type] || item.type;
   const text = item.type === "comment" ? item.text : item.type === "gift" ? `${item.giftName || "ギフト"} × ${number.format(item.count||1)}（${number.format(item.coins||0)}コイン）` : label;
@@ -450,7 +480,7 @@ function renderDetail(data) {
     <div class="detail-metrics">${textMetric("分類",lurking.isLurker?"潜り人":"通常")}${metric("コメント／来訪",lurking.commentsPerVisit)}${metric("全コイン／来訪",lurking.allCoinsPerVisit)}${textMetric("総合ランク",contributionDetail(item,"lifetime"))}${textMetric("直近30日",contributionDetail(item,"recent"))}${metric("ランキング対象コイン",item.contributionCoins)}${metric("1来訪あたり対象コイン",item.contributionCoinsPerVisit)}${metric("30日対象コイン",item.recentContributionCoins)}${metric("30日・1来訪あたり",item.recentContributionCoinsPerVisit)}${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("全ギフトコイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
     <p class="lurker-rule ${lurking.isLurker?"matched":""}">${lurking.isLurker?"潜り人に自動分類されています。":"潜り人の条件には該当していません。"} 判定基準：来訪5回以上・1来訪あたりコメント0.5件未満・1来訪あたり全ギフトコイン10未満。</p>
     <section class="detail-section"><h3>TikTokプロフィール</h3><div class="profile-facts"><div class="profile-fact"><span>あなたをフォロー</span><strong>${followBadge(item.hostFollowStatus)}</strong><small>${item.hostFollowStatusUpdatedAt?`最終確認 ${escapeHtml(formatHistoryDate(item.hostFollowStatusUpdatedAt))}`:"まだ確認できていません"}</small></div><div class="profile-fact"><span>本人のフォロー数</span><strong>${profileCount(item.followingCount)}</strong></div><div class="profile-fact"><span>本人のフォロワー数</span><strong>${profileCount(item.followerCount)}</strong></div><div class="profile-fact"><span>人数の更新</span><strong class="profile-updated">${item.profileCountsUpdatedAt?escapeHtml(formatHistoryDate(item.profileCountsUpdatedAt)):"未取得"}</strong></div></div><p class="profile-note">TikTokから最後に受信できたプロフィール情報です。未確認は未フォローという意味ではありません。</p></section>
-    <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label class="check attention-check"><input id="detailNeedsAttention" type="checkbox" ${item.needsAttention?"checked":""}> 要確認（配信中に反応したら30秒間、赤く上部表示）</label><label class="check super-lurker-check"><input id="detailSuperLurker" type="checkbox" ${item.isSuperLurker?"checked":""}> スーパー潜り人（配信中に来たらスマホへ大きく表示）</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
+    <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check blocked-check"><input id="detailBlocked" type="checkbox" ${item.isBlocked?"checked":""}> ブロック済みとして管理</label><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label class="check attention-check"><input id="detailNeedsAttention" type="checkbox" ${item.needsAttention?"checked":""}> 要確認（配信中に反応したら30秒間、赤く上部表示）</label><label class="check super-lurker-check"><input id="detailSuperLurker" type="checkbox" ${item.isSuperLurker?"checked":""}> スーパー潜り人（配信中に来たらスマホへ大きく表示）</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
     ${historySection("visits",data.visitHistory)}
     <section class="detail-section"><h3>スタンプカード履歴</h3><div>${(data.stamps||[]).map(s=>`<div class="history-item"><time>${formatDate(s.stampedAt)}</time><strong>${escapeHtml(stampLabel(s.stampType))} × ${number.format(s.quantity||1)}</strong>${s.note?`<p>${escapeHtml(s.note)}</p>`:""}</div>`).join("")||'<p class="empty">スタンプ履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>レシート印刷履歴</h3><div>${(data.receiptPrints||[]).map(p=>`<div class="history-item"><time>${formatDate(p.printedAt)}</time><strong>${escapeHtml(p.giftName||"ギフト")} × ${number.format(p.count||1)}</strong><p>${number.format(p.coins||0)}コイン${p.templateId?`・テンプレート ${escapeHtml(p.templateId)}`:""}</p></div>`).join("")||'<p class="empty">レシート印刷履歴なし</p>'}</div></section>
@@ -503,10 +533,11 @@ async function saveDetail(event) {
   const superFan = document.getElementById("detailSuperFan");
   const needsAttention = document.getElementById("detailNeedsAttention");
   const superLurker = document.getElementById("detailSuperLurker");
+  const blocked = document.getElementById("detailBlocked");
   const notes = document.getElementById("detailNotes");
   const tags = document.getElementById("detailTags");
   const saveStatus = document.getElementById("detailSaveStatus");
-  const payload = { isSuperFan:Boolean(superFan?.checked), needsAttention:Boolean(needsAttention?.checked), isSuperLurker:Boolean(superLurker?.checked), notes:notes?.value || "", tags:(tags?.value || "").split(",").map(v=>v.trim()).filter(Boolean) };
+  const payload = { isSuperFan:Boolean(superFan?.checked), needsAttention:Boolean(needsAttention?.checked), isSuperLurker:Boolean(superLurker?.checked), isBlocked:Boolean(blocked?.checked), notes:notes?.value || "", tags:(tags?.value || "").split(",").map(v=>v.trim()).filter(Boolean) };
   const response = await api(`/api/listeners/${encodeURIComponent(state.selectedUserId)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
   if (saveStatus) saveStatus.textContent = response.ok ? "保存しました" : "保存できませんでした";
   if (response.ok) refreshAll();
