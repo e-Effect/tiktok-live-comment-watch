@@ -376,8 +376,19 @@ function Add-PendingEvent {
     $queuedRaw = $Raw
     try {
         $eventEnvelope = $Raw | ConvertFrom-Json
+        $receivedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         if (-not ($eventEnvelope.PSObject.Properties.Name -contains 'collectorEventId')) {
             $eventEnvelope | Add-Member -NotePropertyName collectorEventId -NotePropertyValue ([Guid]::NewGuid().ToString('N'))
+        }
+        if (-not ($eventEnvelope.PSObject.Properties.Name -contains 'collectorReceivedAt')) {
+            $eventEnvelope | Add-Member -NotePropertyName collectorReceivedAt -NotePropertyValue $receivedAt
+        }
+        $queuedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if ($eventEnvelope.PSObject.Properties.Name -contains 'collectorQueuedAt') {
+            $eventEnvelope.collectorQueuedAt = $queuedAt
+        }
+        else {
+            $eventEnvelope | Add-Member -NotePropertyName collectorQueuedAt -NotePropertyValue $queuedAt
         }
         $queuedRaw = $eventEnvelope | ConvertTo-Json -Depth 100 -Compress
     }

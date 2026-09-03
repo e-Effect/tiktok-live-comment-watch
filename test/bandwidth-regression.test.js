@@ -76,7 +76,10 @@ test("database outages reconnect and queue realtime events without full snapshot
   assert.doesNotMatch(durability, /retryPendingVisits/);
   assert.doesNotMatch(durability, /await Promise\.allSettled/);
   assert.match(durability, /return eventStore\.status\(\)\.ready/);
-  assert.match(serverSource, /this\.persistenceTail[\s\S]*?eventStore\.recordEvent\(this, event\)/);
+  assert.match(serverSource, /this\.persistenceQueues = \{ critical: \[\], background: \[\] \}/);
+  assert.match(serverSource, /CRITICAL_PERSISTENCE_TYPES\.has\(event\?\.type\)/);
+  assert.match(serverSource, /this\.persistenceQueues\.critical\.shift\(\) \|\| this\.persistenceQueues\.background\.shift\(\)/);
+  assert.match(serverSource, /eventStore\.recordEvent\(this, event\)/);
   assert.match(collectorSource, /\$delivery\.durable -ne \$true/);
   assert.match(collectorSource, /function Start-CollectorDelivery/);
   assert.match(collectorSource, /function Complete-CollectorDelivery/);
@@ -87,6 +90,18 @@ test("database outages reconnect and queue realtime events without full snapshot
   assert.match(collectorSource, /function Add-PendingEvent/);
   assert.match(collectorSource, /\$receiveTask\.Wait\(50\)/);
   assert.doesNotMatch(collectorSource, /\$pending\.Count -ge 5000/);
+});
+
+test("gifts and mobile slot events bypass database persistence latency", () => {
+  assert.match(serverSource, /publishRealtimeIntegrationEvent\(this, event\)/);
+  assert.match(serverSource, /\/api\/integrations\/live-ticket/);
+  assert.match(serverSource, /\/api\/integrations\/live-events/);
+  assert.match(serverSource, /event: live_event/);
+  const giftHandler = serverSource.match(/connection\.on\(events\.GIFT[\s\S]*?\n\s*\}\);/)?.[0] || "";
+  assert.match(giftHandler, /this\.addGift\(gift\)/);
+  assert.doesNotMatch(giftHandler, /await this\.heartMeHistoryFor/);
+  assert.match(collectorSource, /collectorReceivedAt/);
+  assert.match(collectorSource, /collectorQueuedAt/);
 });
 
 test("collector keeps reading TikFinity while Render delivery is slow or unavailable", () => {

@@ -45,6 +45,13 @@ const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_H
 const COLLECTOR_RECEIVING_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_RECEIVING_STALE_MS || 15 * 60 * 1000);
 const COLLECTOR_NEW_LIVE_GAP_MS = Number(globalThis.process?.env?.COLLECTOR_NEW_LIVE_GAP_MS || 3 * 60 * 60 * 1000);
 const SUPER_LURKER_ALERT_TYPES = new Set(["join", "comment", "gift", "share", "like", "follow", "subscribe"]);
+const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert"]);
+const CRITICAL_PERSISTENCE_TYPES = new Set(["comment", "gift", "first_visit_claim_alert", "super_lurker_alert"]);
+const REALTIME_INTEGRATION_TICKET_MS = Number(globalThis.process?.env?.REALTIME_INTEGRATION_TICKET_MS || 8 * 60 * 60 * 1000);
+const REALTIME_INTEGRATION_REPLAY_LIMIT = 1000;
+const realtimeIntegrationBus = new EventEmitter();
+const realtimeIntegrationReplay = [];
+const realtimeIntegrationTickets = new Map();
 let connectionPauseUntil = 0;
 let databaseRecoveryPending = false;
 const TIKTOOLS_SESSION_COOKIE = String(globalThis.process?.env?.TIKTOOLS_SESSION_COOKIE || "").trim();
@@ -149,10 +156,14 @@ class LiveSession extends EventEmitter {
     this.lastCollectorEventAt = null;
     this.recordingEnabled = options.recordingEnabled !== false;
     this.pendingVisitChecks = new Map();
+    this.visitCheckQueues = { critical: [], background: [] };
+    this.visitCheckQueuedIds = new Set();
+    this.visitCheckWorkerPromise = null;
     this.pendingDatabaseEvents = [];
     this.databaseFlushPromise = null;
     this.persistencePromises = new Set();
-    this.persistenceTail = Promise.resolve();
+    this.persistenceQueues = { critical: [], background: [] };
+    this.persistenceWorkerPromise = null;
     this.collectorDiagnostics = null;
     this.ingestionStats = {
       accepted: 0,
@@ -163,6 +174,7 @@ class LiveSession extends EventEmitter {
       duplicateByType: {},
       storedByType: {},
       queuedByType: {},
+      lastPipelineByType: {},
       lastAcceptedAt: null,
       lastStoredAt: null,
       lastQueuedAt: null
@@ -277,28 +289,31 @@ class LiveSession extends EventEmitter {
         text: data.comment || "",
         at,
         source: this.currentEventSource(),
-        signals: person.signals
+        signals: person.signals,
+        ...pipelineTimestamps(data)
       });
     });
 
     connection.on(events.GIFT || "gift", (data) => {
-      this.trackPersistence((async () => {
       const giftType = Number(data.giftType ?? data.giftDetails?.giftType ?? data.extendedGiftInfo?.giftType ?? 0);
       if (giftType === 1 && data.repeatEnd === false) return;
       const gift = parseGiftEvent(data, this.heartMeGiftIds);
+      Object.assign(gift, pipelineTimestamps(data));
       gift.source = this.currentEventSource();
       const previousUser = this.userStats.get(gift.userId);
       gift.previousHeartMeStatus = previousUser?.heartMeStatus || null;
       if (gift.isHeartMe) {
         if (gift.giftId) this.heartMeGiftIds.add(String(gift.giftId));
-        const history = await this.heartMeHistoryFor(gift.userId);
-        gift.heartMeHistoryKnown = history.known;
-        gift.pastHeartMeGiftCount = history.pastCount;
-        gift.lastPastHeartMeAt = history.lastAt;
+        // Do not hold the gift/slot/receipt path behind a history query. The
+        // history badge is enriched shortly afterwards and broadcast as a
+        // presence update.
+        gift.heartMeHistoryKnown = false;
+        gift.pastHeartMeGiftCount = 0;
+        gift.lastPastHeartMeAt = null;
       }
       this.markSeen({ userId: gift.userId, uniqueId: gift.uniqueId, nickname: gift.nickname, avatarUrl: gift.avatarUrl, signals: gift.signals }, gift.at, "gift");
       this.addGift(gift);
-      })());
+      if (gift.isHeartMe) this.enrichHeartMeGiftHistory(gift).catch(() => {});
     });
 
     connection.on(events.MEMBER || "member", (data) => {
@@ -484,6 +499,9 @@ class LiveSession extends EventEmitter {
       user.lastJoinAt = at;
       user.entryEventCount = Number(user.entryEventCount || 0) + 1;
     }
+    if (["comment", "gift"].includes(presenceSource) && this.pendingVisitChecks.has(user.userId)) {
+      this.enqueueVisitCheck(user.userId, true);
+    }
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
     return true;
@@ -539,7 +557,38 @@ class LiveSession extends EventEmitter {
         source
       }
     });
-    this.runVisitCheck(user.userId).catch(() => {});
+    this.enqueueVisitCheck(user.userId, ["comment", "gift"].includes(source));
+  }
+
+  enqueueVisitCheck(userId, critical = false) {
+    if (!userId || !this.pendingVisitChecks.has(userId)) return;
+    if (critical) {
+      const backgroundIndex = this.visitCheckQueues.background.indexOf(userId);
+      if (backgroundIndex >= 0) this.visitCheckQueues.background.splice(backgroundIndex, 1);
+      if (!this.visitCheckQueues.critical.includes(userId)) this.visitCheckQueues.critical.push(userId);
+      this.visitCheckQueuedIds.add(userId);
+    } else if (!this.visitCheckQueuedIds.has(userId)) {
+      this.visitCheckQueues.background.push(userId);
+      this.visitCheckQueuedIds.add(userId);
+    }
+    this.drainVisitCheckQueue();
+  }
+
+  drainVisitCheckQueue() {
+    if (this.visitCheckWorkerPromise) return this.visitCheckWorkerPromise;
+    const worker = (async () => {
+      while (this.visitCheckQueues.critical.length || this.visitCheckQueues.background.length) {
+        const userId = this.visitCheckQueues.critical.shift() || this.visitCheckQueues.background.shift();
+        this.visitCheckQueuedIds.delete(userId);
+        await this.runVisitCheck(userId).catch(() => false);
+      }
+    })();
+    this.visitCheckWorkerPromise = worker;
+    worker.finally(() => {
+      if (this.visitCheckWorkerPromise === worker) this.visitCheckWorkerPromise = null;
+      if (this.visitCheckQueues.critical.length || this.visitCheckQueues.background.length) this.drainVisitCheckQueue();
+    }).catch(() => {});
+    return worker;
   }
 
   async runVisitCheck(userId) {
@@ -599,9 +648,8 @@ class LiveSession extends EventEmitter {
     // Avoid a reconnect/maintenance tick launching hundreds of history
     // queries at once. Sequential retries are background work and do not
     // compete with new LIVE comments and gifts.
-    for (const userId of [...this.pendingVisitChecks.keys()]) {
-      await this.runVisitCheck(userId).catch(() => false);
-    }
+    for (const userId of [...this.pendingVisitChecks.keys()]) this.enqueueVisitCheck(userId, false);
+    await this.visitCheckWorkerPromise?.catch(() => {});
   }
 
   async heartMeHistoryFor(userId) {
@@ -620,6 +668,19 @@ class LiveSession extends EventEmitter {
     const history = await lookup;
     if (!history.known) this.heartMeHistoryLookups.delete(key);
     return history;
+  }
+
+  async enrichHeartMeGiftHistory(gift) {
+    const history = await this.heartMeHistoryFor(gift.userId);
+    const user = this.userStats.get(gift.userId);
+    if (!user || !history.known) return false;
+    user.heartMeHistoryKnown = true;
+    user.pastHeartMeGiftCount = Math.max(0, Number(history.pastCount || 0));
+    user.lastPastHeartMeAt = history.lastAt || null;
+    user.heartMeHistoryStatus = user.pastHeartMeGiftCount > 0 ? "returning" : "first_ever";
+    this.userStats.set(user.userId, user);
+    this.broadcastPresence([user]);
+    return true;
   }
 
   markFollowedToday(person, at) {
@@ -858,29 +919,62 @@ class LiveSession extends EventEmitter {
     // They are useful for transport diagnostics but must never become a
     // listener, visit, rank, or alert under the shared placeholder "unknown".
     if (isAnonymousListenerIdentity(event)) return;
+    event.serverReceivedAt ||= Date.now();
+    publishRealtimeIntegrationEvent(this, event);
     if (event?.type !== "super_lurker_alert") this.checkSuperLurker(event).catch(() => {});
     if (!eventStore.status().ready) {
       this.queueDatabaseEvent(event);
     } else {
-      // Keep writes from one LIVE in event order. Bursts of member/like/chat
-      // events used to update the same listener rows concurrently, which could
-      // deadlock PostgreSQL and make the collector wait before sending the next
-      // batch.
-      const persistence = this.persistenceTail
-        .catch(() => {})
-        .then(async () => {
-          const stored = await eventStore.recordEvent(this, event);
-          if (!stored) this.queueDatabaseEvent(event);
-          else {
-            this.noteIngestion("stored", event.type);
-            cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
-          }
-        })
-        .catch(() => this.queueDatabaseEvent(event));
-      this.persistenceTail = persistence;
-      this.trackPersistence(persistence);
+      this.enqueuePersistence(event);
     }
     liveCue.publish(event);
+  }
+
+  enqueuePersistence(event) {
+    const queue = CRITICAL_PERSISTENCE_TYPES.has(event?.type)
+      ? this.persistenceQueues.critical
+      : this.persistenceQueues.background;
+    queue.push(event);
+    this.drainPersistenceQueue();
+  }
+
+  drainPersistenceQueue() {
+    if (this.persistenceWorkerPromise) return this.persistenceWorkerPromise;
+    if (this.databaseFlushPromise) {
+      return this.databaseFlushPromise.finally(() => this.drainPersistenceQueue()).catch(() => {});
+    }
+    const worker = (async () => {
+      while (this.persistenceQueues.critical.length || this.persistenceQueues.background.length) {
+        const event = this.persistenceQueues.critical.shift() || this.persistenceQueues.background.shift();
+        if (!eventStore.status().ready) {
+          this.queueDatabaseEvent(event);
+          for (const queued of [...this.persistenceQueues.critical, ...this.persistenceQueues.background]) {
+            this.queueDatabaseEvent(queued);
+          }
+          this.persistenceQueues.critical.length = 0;
+          this.persistenceQueues.background.length = 0;
+          break;
+        }
+        event.persistenceStartedAt = Date.now();
+        const stored = await eventStore.recordEvent(this, event).catch(() => false);
+        event.persistedAt = Date.now();
+        if (!stored) this.queueDatabaseEvent(event);
+        else {
+          this.noteIngestion("stored", event.type);
+          this.notePipelineLatency(event);
+          cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
+        }
+      }
+    })();
+    this.persistenceWorkerPromise = worker;
+    this.trackPersistence(worker);
+    worker.finally(() => {
+      if (this.persistenceWorkerPromise === worker) this.persistenceWorkerPromise = null;
+      if (this.persistenceQueues.critical.length || this.persistenceQueues.background.length) {
+        this.drainPersistenceQueue();
+      }
+    }).catch(() => {});
+    return worker;
   }
 
   trackPersistence(promise) {
@@ -910,13 +1004,23 @@ class LiveSession extends EventEmitter {
 
   async flushPendingDatabaseEvents() {
     if (this.databaseFlushPromise) return this.databaseFlushPromise;
+    if (this.persistenceWorkerPromise) {
+      return this.persistenceWorkerPromise
+        .catch(() => {})
+        .then(() => this.flushPendingDatabaseEvents());
+    }
     this.databaseFlushPromise = (async () => {
       while (this.pendingDatabaseEvents.length && eventStore.status().ready) {
-        const pending = this.pendingDatabaseEvents[0];
+        const criticalIndex = this.pendingDatabaseEvents.findIndex((item) => CRITICAL_PERSISTENCE_TYPES.has(item.event?.type));
+        const pendingIndex = criticalIndex >= 0 ? criticalIndex : 0;
+        const pending = this.pendingDatabaseEvents[pendingIndex];
+        pending.event.persistenceStartedAt = Date.now();
         const stored = await eventStore.recordEvent(this, pending.event);
+        pending.event.persistedAt = Date.now();
         if (!stored) break;
-        this.pendingDatabaseEvents.shift();
+        this.pendingDatabaseEvents.splice(pendingIndex, 1);
         this.noteIngestion("stored", pending.event?.type);
+        this.notePipelineLatency(pending.event);
         cacheListenerAvatar(pending.event.userId, pending.event.avatarUrl).catch(() => {});
       }
       return this.pendingDatabaseEvents.length === 0;
@@ -952,6 +1056,25 @@ class LiveSession extends EventEmitter {
       this.ingestionStats.queuedByType[type] = Number(this.ingestionStats.queuedByType[type] || 0) + 1;
       this.ingestionStats.lastQueuedAt = now;
     }
+  }
+
+  notePipelineLatency(event = {}) {
+    const type = String(event.type || "unknown").slice(0, 40) || "unknown";
+    const collectorReceivedAt = pipelineTimestamp(event.collectorReceivedAt);
+    const collectorQueuedAt = pipelineTimestamp(event.collectorQueuedAt);
+    const serverReceivedAt = pipelineTimestamp(event.serverReceivedAt);
+    const persistenceStartedAt = pipelineTimestamp(event.persistenceStartedAt);
+    const persistedAt = pipelineTimestamp(event.persistedAt) || Date.now();
+    this.ingestionStats.lastPipelineByType[type] = {
+      collectorReceivedAt,
+      collectorQueuedAt,
+      serverReceivedAt,
+      persistenceStartedAt,
+      persistedAt,
+      collectorToServerMs: collectorReceivedAt && serverReceivedAt ? Math.max(0, serverReceivedAt - collectorReceivedAt) : null,
+      persistenceQueueMs: serverReceivedAt && persistenceStartedAt ? Math.max(0, persistenceStartedAt - serverReceivedAt) : null,
+      persistenceWriteMs: persistenceStartedAt ? Math.max(0, persistedAt - persistenceStartedAt) : null
+    };
   }
 
   updateCollectorDiagnostics(raw) {
@@ -997,7 +1120,12 @@ class LiveSession extends EventEmitter {
       duplicateByType: { ...this.ingestionStats.duplicateByType },
       storedByType: { ...this.ingestionStats.storedByType },
       queuedByType: { ...this.ingestionStats.queuedByType },
+      lastPipelineByType: { ...this.ingestionStats.lastPipelineByType },
       pendingDatabaseEvents: this.pendingDatabaseEvents.length,
+      criticalPersistenceQueued: this.persistenceQueues.critical.length,
+      backgroundPersistenceQueued: this.persistenceQueues.background.length,
+      criticalVisitChecksQueued: this.visitCheckQueues.critical.length,
+      backgroundVisitChecksQueued: this.visitCheckQueues.background.length,
       collector: this.collectorDiagnostics ? {
         ...this.collectorDiagnostics,
         receivedByType: { ...this.collectorDiagnostics.receivedByType },
@@ -1879,6 +2007,102 @@ function sendJson(response, status, body) {
   response.end(payload);
 }
 
+function pipelineTimestamp(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function pipelineTimestamps(data = {}) {
+  const collectorReceivedAt = pipelineTimestamp(data.collectorReceivedAt ?? data._pipeline?.collectorReceivedAt);
+  const collectorQueuedAt = pipelineTimestamp(data.collectorQueuedAt ?? data._pipeline?.collectorQueuedAt);
+  const serverReceivedAt = pipelineTimestamp(data.serverReceivedAt ?? data._pipeline?.serverReceivedAt);
+  return {
+    ...(collectorReceivedAt ? { collectorReceivedAt } : {}),
+    ...(collectorQueuedAt ? { collectorQueuedAt } : {}),
+    ...(serverReceivedAt ? { serverReceivedAt } : {})
+  };
+}
+
+function realtimeIntegrationPayload(session, event) {
+  if (!REALTIME_INTEGRATION_TYPES.has(event?.type)) return null;
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const at = pipelineTimestamp(event.at) || Date.now();
+  return {
+    id: `${session.id}:${event.id}`.slice(0, 300),
+    type: event.type,
+    at,
+    userId: String(event.userId || "").slice(0, 120),
+    uniqueId: String(event.uniqueId || "").slice(0, 120),
+    nickname: String(event.nickname || event.uniqueId || "TikTokユーザー").slice(0, 250),
+    avatarUrl: String(event.avatarUrl || "").slice(0, 2000),
+    giftId: String(event.giftId || "").slice(0, 120),
+    giftName: String(event.giftName || "").slice(0, 250),
+    giftImageUrl: String(event.giftImageUrl || "").slice(0, 2000),
+    count: Math.max(1, Number(event.repeatCount || event.count || 1)),
+    coins: Math.max(0, Number(event.totalDiamonds ?? event.diamonds ?? 0)),
+    text: String(event.text || "").slice(0, 500),
+    originalComment: String(payload.originalComment || "").slice(0, 500),
+    priorVisitCount: Math.max(0, Number(payload.priorVisitCount || 0)),
+    lastPriorVisitAt: pipelineTimestamp(payload.lastPriorVisitAt),
+    streamUsername: String(session.username || "").slice(0, 120),
+    collectorReceivedAt: pipelineTimestamp(event.collectorReceivedAt),
+    collectorQueuedAt: pipelineTimestamp(event.collectorQueuedAt),
+    serverReceivedAt: pipelineTimestamp(event.serverReceivedAt) || Date.now(),
+    realtimePublishedAt: Date.now()
+  };
+}
+
+function publishRealtimeIntegrationEvent(session, event) {
+  const item = realtimeIntegrationPayload(session, event);
+  if (!item) return false;
+  realtimeIntegrationReplay.push(item);
+  if (realtimeIntegrationReplay.length > REALTIME_INTEGRATION_REPLAY_LIMIT) realtimeIntegrationReplay.shift();
+  realtimeIntegrationBus.emit("event", item);
+  return true;
+}
+
+function pruneRealtimeIntegrationTickets() {
+  const now = Date.now();
+  for (const [ticket, expiresAt] of realtimeIntegrationTickets) {
+    if (expiresAt <= now) realtimeIntegrationTickets.delete(ticket);
+  }
+  while (realtimeIntegrationTickets.size > 1000) {
+    realtimeIntegrationTickets.delete(realtimeIntegrationTickets.keys().next().value);
+  }
+}
+
+function issueRealtimeIntegrationTicket() {
+  pruneRealtimeIntegrationTickets();
+  const ticket = `${randomUUID()}${randomUUID()}`.replaceAll("-", "");
+  const expiresAt = Date.now() + Math.max(5 * 60 * 1000, REALTIME_INTEGRATION_TICKET_MS);
+  realtimeIntegrationTickets.set(ticket, expiresAt);
+  return { ticket, expiresAt };
+}
+
+function validRealtimeIntegrationTicket(value) {
+  pruneRealtimeIntegrationTickets();
+  const ticket = String(value || "");
+  const expiresAt = Number(realtimeIntegrationTickets.get(ticket) || 0);
+  return ticket.length >= 32 && expiresAt > Date.now();
+}
+
+function realtimeIntegrationOrigin(request) {
+  const origin = String(request.headers.origin || "");
+  const configured = String(globalThis.process?.env?.REALTIME_INTEGRATION_ORIGINS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const allowed = new Set([
+    "https://count-pocket.a-line.workers.dev",
+    "http://localhost:4265",
+    "http://127.0.0.1:4265",
+    ...configured
+  ]);
+  return allowed.has(origin) ? origin : "";
+}
+
 function setBoundedCache(cache, key, value, maxEntries) {
   cache.delete(key);
   cache.set(key, value);
@@ -2378,6 +2602,72 @@ async function serveStatic(response, urlPath) {
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
+  if (request.method === "POST" && url.pathname === "/api/integrations/live-ticket") {
+    if (!requireListenerAdmin(request, response)) return;
+    const issued = issueRealtimeIntegrationTicket();
+    const forwardedProtocol = String(request.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+    const protocol = forwardedProtocol === "http" ? "http" : "https";
+    const host = String(request.headers["x-forwarded-host"] || request.headers.host || "tiktok-live-comment-watch.onrender.com").split(",")[0].trim();
+    sendJson(response, 200, {
+      streamUrl: `${protocol}://${host}/api/integrations/live-events?ticket=${encodeURIComponent(issued.ticket)}`,
+      expiresAt: issued.expiresAt,
+      transport: "sse"
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/integrations/live-events") {
+    const allowedOrigin = realtimeIntegrationOrigin(request);
+    if (request.headers.origin && !allowedOrigin) {
+      sendJson(response, 403, { error: "この画面からはリアルタイム受信を開始できません" });
+      return;
+    }
+    if (!validRealtimeIntegrationTicket(url.searchParams.get("ticket"))) {
+      sendJson(response, 401, { error: "リアルタイム接続チケットを更新してください" });
+      return;
+    }
+
+    const requestedSince = Math.max(
+      0,
+      Number(url.searchParams.get("since") || 0),
+      Number(request.headers["last-event-id"] || 0)
+    );
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+      ...(allowedOrigin ? { "Access-Control-Allow-Origin": allowedOrigin, Vary: "Origin" } : {})
+    });
+    const send = (item) => {
+      response.write(`id: ${Math.max(1, Number(item.at) || Date.now())}\nevent: live_event\ndata: ${JSON.stringify(item)}\n\n`);
+    };
+    const buffered = [];
+    let replaying = true;
+    const onEvent = (item) => {
+      if (replaying) buffered.push(item);
+      else send(item);
+    };
+    realtimeIntegrationBus.on("event", onEvent);
+    for (const item of realtimeIntegrationReplay) {
+      if (Number(item.at || 0) > requestedSince) send(item);
+    }
+    replaying = false;
+    for (const item of buffered) {
+      if (Number(item.at || 0) > requestedSince) send(item);
+    }
+    response.write(`event: ready\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
+    const keepAliveTimer = setInterval(() => {
+      response.write(`event: heartbeat\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`);
+    }, 15000);
+    keepAliveTimer.unref?.();
+    request.on("close", () => {
+      clearInterval(keepAliveTimer);
+      realtimeIntegrationBus.off("event", onEvent);
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/collector/events") {
     if (!EXTERNAL_COLLECTOR_ENABLED) {
       sendJson(response, 503, { error: "外部コレクターが設定されていません。" });
@@ -2416,7 +2706,10 @@ const server = createServer(async (request, response) => {
         }
         activateCollectorSession(session);
         session.noteIngestion("accepted", normalized.type);
-        session.collectorBridge.emit(normalized.type, normalized.data);
+        session.collectorBridge.emit(normalized.type, {
+          ...normalized.data,
+          serverReceivedAt: Date.now()
+        });
         if (normalized.roomId) session.roomId = String(normalized.roomId);
         session.lastCollectorEventAt = Math.max(Number(session.lastCollectorEventAt || 0), Number(normalized.at || Date.now()));
         accepted += 1;
@@ -2513,7 +2806,10 @@ const server = createServer(async (request, response) => {
       database: {
         ...eventStore.status(),
         visitJudgmentMode: "early-result-v2",
-        queuedEvents: [...sessions.values()].reduce((total, session) => total + session.pendingDatabaseEvents.length, 0),
+        queuedEvents: [...sessions.values()].reduce((total, session) => total
+          + session.pendingDatabaseEvents.length
+          + session.persistenceQueues.critical.length
+          + session.persistenceQueues.background.length, 0),
         pendingVisitChecks: [...sessions.values()].reduce((total, session) => total + session.pendingVisitChecks.size, 0)
       },
       listenerManagement: {
