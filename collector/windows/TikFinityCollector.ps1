@@ -37,6 +37,9 @@ $lastDeliveryAttemptAt = [DateTime]::MinValue
 $lastRenderSuccessAt = $null
 $lastRenderError = ''
 $lastStatusWriteAt = [DateTime]::MinValue
+$lastStatusLogAt = [DateTime]::MinValue
+$lastPendingSaveAt = [DateTime]::UtcNow
+$pendingFileDirty = $false
 $lastReceiptHeartbeatAt = [DateTime]::MinValue
 $lastReceivedEventType = ''
 $receiptDiagnostics = [ordered]@{
@@ -92,10 +95,13 @@ function Write-CollectorStatus {
         diagnostics = Get-CollectorDiagnostics
     }
     $status | ConvertTo-Json -Compress | Set-Content -LiteralPath $statusPath -Encoding UTF8
-    "[$now] $State - $Message" | Add-Content -LiteralPath $logPath -Encoding UTF8
-    if ((Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue).Length -gt 1048576) {
-        Get-Content -LiteralPath $logPath -Tail 500 | Set-Content -LiteralPath "$logPath.tmp" -Encoding UTF8
-        Move-Item -LiteralPath "$logPath.tmp" -Destination $logPath -Force
+    if ($Force -or ($nowValue - $script:lastStatusLogAt).TotalSeconds -ge 10) {
+        $script:lastStatusLogAt = $nowValue
+        "[$now] $State - $Message" | Add-Content -LiteralPath $logPath -Encoding UTF8
+        if ((Get-Item -LiteralPath $logPath -ErrorAction SilentlyContinue).Length -gt 1048576) {
+            Get-Content -LiteralPath $logPath -Tail 500 | Set-Content -LiteralPath "$logPath.tmp" -Encoding UTF8
+            Move-Item -LiteralPath "$logPath.tmp" -Destination $logPath -Force
+        }
     }
 }
 
@@ -124,7 +130,8 @@ function Start-CollectorDelivery {
     }
     if ($take -gt 0 -and $events.Count -eq 0) {
         for ($index = 0; $index -lt $take; $index++) { [void]$script:pending.Dequeue() }
-        Save-PendingEvents
+        $script:pendingFileDirty = $true
+        Save-PendingEventsIfDue -Force
         return $false
     }
 
@@ -173,7 +180,7 @@ function Complete-CollectorDelivery {
         for ($index = 0; $index -lt $script:deliveryBatchCount; $index++) {
             if ($script:pending.Count -gt 0) { [void]$script:pending.Dequeue() }
         }
-        if ($script:deliveryBatchCount -gt 0) { Save-PendingEvents }
+        if ($script:deliveryBatchCount -gt 0) { $script:pendingFileDirty = $true }
         $script:deliveryFailureCount = 0
         $script:deliveryRetryAt = [DateTime]::MinValue
         $script:lastRenderSuccessAt = [DateTime]::UtcNow.ToString('o')
@@ -205,7 +212,7 @@ function Complete-CollectorDelivery {
         else {
             'Connected to TikFinity and Render; waiting for events.'
         }
-        Write-CollectorStatus -State $state -Message $message -PendingCount $script:pending.Count -Force
+        Write-CollectorStatus -State $state -Message $message -PendingCount $script:pending.Count
     }
     return $true
 }
@@ -213,6 +220,7 @@ function Complete-CollectorDelivery {
 function Invoke-CollectorDeliveryPump {
     param($Config, [bool]$Heartbeat = $false)
     [void](Complete-CollectorDelivery)
+    Save-PendingEventsIfDue
     if ($null -ne $script:deliveryTask -or [DateTime]::UtcNow -lt $script:deliveryRetryAt) { return }
     $heartbeatDue = $Heartbeat -or ([DateTime]::UtcNow - $script:lastDeliveryAttemptAt).TotalSeconds -ge 60
     if ($script:pending.Count -gt 0) {
@@ -355,6 +363,16 @@ function Save-PendingEvents {
     Move-Item -LiteralPath $tempPath -Destination $pendingPath -Force
 }
 
+function Save-PendingEventsIfDue {
+    param([switch]$Force)
+    if (-not $script:pendingFileDirty) { return }
+    $now = [DateTime]::UtcNow
+    if (-not $Force -and ($now - $script:lastPendingSaveAt).TotalMilliseconds -lt 1000) { return }
+    Save-PendingEvents
+    $script:lastPendingSaveAt = $now
+    $script:pendingFileDirty = $false
+}
+
 function Load-PendingEvents {
     if (-not (Test-Path -LiteralPath $pendingPath)) { return }
     foreach ($line in Get-Content -LiteralPath $pendingPath -Encoding UTF8) {
@@ -432,7 +450,6 @@ while ($true) {
                     if (($now - $script:lastReceiptHeartbeatAt).TotalSeconds -ge 60) {
                         Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $true
                         $script:lastReceiptHeartbeatAt = $now
-                        Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; waiting for events.' -PendingCount $pending.Count -Force
                     }
                 }
                 $result = $receiveTask.GetAwaiter().GetResult()
@@ -480,6 +497,7 @@ while ($true) {
     }
     finally {
         if ($socket) { $socket.Dispose() }
+        Save-PendingEventsIfDue -Force
     }
     Start-Sleep -Seconds 3
 }

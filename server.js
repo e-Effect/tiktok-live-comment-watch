@@ -1245,7 +1245,10 @@ class LiveSession extends EventEmitter {
     });
 
     const rankedUserIds = new Set(rankedUsers.map(({ user }) => user.userId));
-    for (const user of this.userStats.values()) {
+    const affectedUserIds = new Set([...previousRanks.keys(), ...rankedUserIds]);
+    for (const userId of affectedUserIds) {
+      const user = this.userStats.get(userId);
+      if (!user) continue;
       updateRankedPresence(user, rankedUserIds.has(user.userId), at);
       user.currentViewerRank = null;
     }

@@ -1662,7 +1662,12 @@ function applyRealtimePayload(sessionId, type, payload) {
     const current = cache.get(String(userId));
     if (current) cache.set(String(userId), { ...current, isCurrentlyRanked: false, currentViewerRank: null });
   }
-  for (const user of payload?.users || []) upsertRealtimeUser(cache, user);
+  if (!session.pendingDisplayUserIds) session.pendingDisplayUserIds = new Set();
+  for (const user of payload?.users || []) {
+    upsertRealtimeUser(cache, user);
+    const userId = String(user?.userId || "");
+    if (userId) session.pendingDisplayUserIds.add(userId);
+  }
 
   if (type === "comment" && payload?.comment) {
     next.comments = prependRealtimeEvent(next.comments, payload.comment);
@@ -1691,7 +1696,9 @@ function scheduleRealtimeRender(sessionId, type = "status") {
       const pending = realtimeRenderState.get(sessionId);
       realtimeRenderState.delete(sessionId);
       if (!pending || !sessions.has(sessionId)) return;
-      renderSessionCards();
+      if ([...pending.types].some((dirtyType) => ["comment", "gift", "share", "status"].includes(dirtyType))) {
+        renderSessionCards();
+      }
       if (selectedSessionId === sessionId) {
         renderSelectedSession({ dirtyTypes: pending.types });
       }
@@ -1709,8 +1716,9 @@ function scheduleRealtimeListRebuild(sessionId) {
     const session = sessions.get(sessionId);
     if (!session?.snapshot) return;
     rebuildRealtimeLists(session.snapshot, session.userCache || new Map());
+    refreshVisibleCommentRows(session.snapshot.comments || [], session.pendingDisplayUserIds || new Set());
+    session.pendingDisplayUserIds?.clear();
     lastRealtimeListRebuildAt.set(sessionId, Date.now());
-    renderSessionCards();
     if (selectedSessionId === sessionId) {
       renderSelectedSession({ dirtyTypes: new Set(["lists"]) });
     }
@@ -1860,6 +1868,27 @@ function refreshEventDisplayState(events, cache) {
   });
 }
 
+function refreshVisibleCommentRows(comments, changedUserIds) {
+  if (visitorDemoActive || !changedUserIds?.size || !commentList) return;
+  const commentsByUser = new Map();
+  for (const comment of comments || []) {
+    const userId = String(comment?.userId || "");
+    if (!changedUserIds.has(userId)) continue;
+    const items = commentsByUser.get(userId) || [];
+    items.push(comment);
+    commentsByUser.set(userId, items);
+  }
+  const usedByUser = new Map();
+  for (const row of commentList.querySelectorAll("article.comment[data-user-id]")) {
+    const userId = String(row.dataset.userId || "");
+    if (!changedUserIds.has(userId)) continue;
+    const index = usedByUser.get(userId) || 0;
+    const comment = commentsByUser.get(userId)?.[index];
+    if (comment) row.outerHTML = commentArticleHtml(comment);
+    usedByUser.set(userId, index + 1);
+  }
+}
+
 function updateCachedWatchTimes(session) {
   if (!session?.snapshot || !session.userCache?.size) return;
   const now = Number(session.snapshot.stoppedAt || Date.now());
@@ -1951,7 +1980,7 @@ function renderSelectedSession(options = {}) {
   if (fullRender || dirty("status", "presence")) renderConnectionDetails(snapshot);
   if (fullRender || dirty("comment", "gift", "share", "presence", "status")) renderMetrics(snapshot);
   if (heavyDue) renderReport(snapshot);
-  if (dirty("comment", "presence", "status")) renderComments(snapshot.comments || []);
+  if (dirty("comment", "status")) renderComments(snapshot.comments || []);
   if (heavyDue && dirty("comment", "gift", "presence", "status", "lists")) {
     renderWatchers(snapshot.topWatchers || []);
     renderSilentLongWatchers(snapshot.silentLongWatchers || []);
@@ -2239,8 +2268,12 @@ function renderComments(comments) {
     commentList.innerHTML = `<p class="empty">接続するとコメントがここに流れます。</p>`;
     return;
   }
-  commentList.innerHTML = comments.map((comment) => `
-    <article class="comment ${commentVisitClass(comment)}">
+  commentList.innerHTML = comments.map(commentArticleHtml).join("");
+}
+
+function commentArticleHtml(comment) {
+  return `
+    <article class="comment ${commentVisitClass(comment)}" data-user-id="${escapeHtml(String(comment?.userId || ""))}">
       <header>
         ${renderEventAvatar(comment)}
         <span class="name">${renderDecoratedName(comment)}</span>
@@ -2251,7 +2284,7 @@ function renderComments(comments) {
       </header>
       <p>${eventSourceBadge(comment)}${escapeHtml(comment.text)}</p>
     </article>
-  `).join("");
+  `;
 }
 
 function commentVisitClass(comment) {

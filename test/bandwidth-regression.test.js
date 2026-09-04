@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { EventStore } from "../lib/event-store.js";
 
 const serverSource = await readFile(new URL("../server.js", import.meta.url), "utf8");
 const clientSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
@@ -65,8 +66,34 @@ test("event stream subscribes before its initial snapshot so comments cannot fal
 test("busy comment streams throttle expensive secondary panels without delaying the comment list", () => {
   assert.match(clientSource, /const lastHeavyRealtimeRenderAt = new Map\(\)/);
   assert.match(clientSource, /now - lastHeavyAt >= 1000/);
-  assert.match(clientSource, /if \(dirty\("comment", "presence", "status"\)\) renderComments/);
+  assert.match(clientSource, /if \(dirty\("comment", "status"\)\) renderComments/);
+  assert.doesNotMatch(clientSource, /if \(dirty\("comment", "presence", "status"\)\) renderComments/);
+  assert.match(clientSource, /function refreshVisibleCommentRows\(comments, changedUserIds\)/);
+  assert.match(clientSource, /data-user-id=/);
   assert.match(clientSource, /if \(heavyDue && dirty\("comment", "gift", "presence", "status", "lists"\)\)/);
+});
+
+test("presence-only updates avoid rebuilding session cards", () => {
+  const realtimeRender = clientSource.match(/function scheduleRealtimeRender\(sessionId, type = "status"\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const listRebuild = clientSource.match(/function scheduleRealtimeListRebuild\(sessionId\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(realtimeRender, /\["comment", "gift", "share", "status"\]\.includes\(dirtyType\)/);
+  assert.doesNotMatch(listRebuild, /renderSessionCards\(\)/);
+});
+
+test("viewer ranking updates touch only current and previously ranked users", () => {
+  const rankingUpdate = serverSource.match(/updateCurrentViewerRank\(data, at\) \{[\s\S]*?\n  \}/)?.[0] || "";
+  assert.match(rankingUpdate, /const affectedUserIds = new Set\(\[\.\.\.previousRanks\.keys\(\), \.\.\.rankedUserIds\]\)/);
+  assert.doesNotMatch(rankingUpdate, /for \(const user of this\.userStats\.values\(\)\)/);
+});
+
+test("listener identity lookup is cached for repeated events", async () => {
+  let queries = 0;
+  const store = new EventStore();
+  store.ready = true;
+  store.pool = { query: async () => { queries += 1; return { rows: [] }; } };
+  assert.equal(await store.resolveListenerId("123456789", "ExampleUser"), "123456789");
+  assert.equal(await store.resolveListenerId("123456789", "exampleuser"), "123456789");
+  assert.equal(queries, 1);
 });
 
 test("the one-second clock updates live counters without rebuilding every panel", () => {
@@ -139,6 +166,12 @@ test("collector persists each event before background delivery and throttles sta
   assert.match(collectorSource, /\$nowValue - \$script:lastStatusWriteAt\)\.TotalMilliseconds -lt 1000/);
   assert.match(collectorSource, /Write-CollectorStatus -State 'receiving'[\s\S]*?-PendingCount \$pending\.Count/);
   assert.match(collectorSource, /\[IO\.File\]::WriteAllLines\(\$tempPath, \$lines, \[Text\.Encoding\]::UTF8\)/);
+  assert.match(collectorSource, /function Save-PendingEventsIfDue/);
+  assert.match(collectorSource, /\$script:pendingFileDirty = \$true/);
+  assert.match(collectorSource, /TotalMilliseconds -lt 1000/);
+  assert.match(collectorSource, /TotalSeconds -ge 10/);
+  const deliveryCompletion = collectorSource.match(/function Complete-CollectorDelivery \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(deliveryCompletion, /Save-PendingEvents\s*\}/);
 });
 
 test("listener admin authentication rate limits repeated failures", () => {
