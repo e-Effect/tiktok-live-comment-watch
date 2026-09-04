@@ -584,16 +584,6 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .heart-inactive { background: #111827; color: #fff; }
 .follow-mark { background: var(--accent); color: var(--accent-ink); }
 .source-badge { display: inline-block; margin-right: 6px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: .7rem; font-weight: 900; padding: 2px 6px; vertical-align: 1px; }
-.silent-row.silent-yellow { background: #fff4bd; }
-.silent-row.silent-green { background: #dff7df; }
-.silent-row.silent-red { background: #ffd9d9; }
-.silent-row.silent-yellow .rank { background: #f7c948; color: #3b2f00; }
-.silent-row.silent-green .rank { background: #54c477; color: #082713; }
-.silent-row.silent-red .rank { background: #f45b5b; color: #fff; }
-.silent-row .count { font-weight: 900; color: var(--ink); }
-.silent-count { display: grid; justify-items: end; gap: 2px; margin-left: auto; white-space: nowrap; }
-.silent-count strong { color: var(--ink); }
-.silent-count small { color: var(--muted); font-size: .66rem; font-weight: 900; }
 
 .single-mode [data-panel="candidates"] { display: none !important; }
 .single-mode .session-list { display: none; }

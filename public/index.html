@@ -116,8 +116,6 @@
             <label><input type="checkbox" data-panel-toggle="candidates" checked> 候補発掘</label>
             <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
             <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
-            <label><input type="checkbox" data-panel-toggle="watchers" checked> 確認済み滞在ランキング</label>
-            <label><input type="checkbox" data-panel-toggle="silent" checked> 滞在中コメ無</label>
             <label><input type="checkbox" data-panel-toggle="gifts" checked> ギフトランキング</label>
             <label><input type="checkbox" data-panel-toggle="targetGift" checked> ギフト別ランキング</label>
             <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
@@ -215,8 +213,6 @@
           <article><span>ギフト数</span><strong id="giftCount">0</strong></article>
           <article><span>推定ダイヤ</span><strong id="giftDiamonds">0</strong></article>
           <article><span>計測時間</span><strong id="elapsedTime">00:00</strong></article>
-          <article><span>現在視聴</span><strong id="currentViewers">-</strong></article>
-          <article><span>推定滞在</span><strong id="watchTime">-</strong></article>
           <article><span>確認来訪</span><strong id="visitorCount">0</strong></article>
         </div>
 
@@ -292,20 +288,6 @@
             <h2>シェアしたユーザー</h2>
             <div id="shareHistory" class="list small">
               <p class="empty">シェアされるとユーザー名と時刻がここに表示されます。</p>
-            </div>
-          </section>
-
-          <section data-panel="watchers">
-            <h2>確認済み滞在時間ランキング</h2>
-            <div id="watcherList" class="list small">
-              <p class="empty">ランキングで確認できた滞在時間はまだありません。</p>
-            </div>
-          </section>
-
-          <section data-panel="silent">
-            <h2>滞在中コメ無</h2>
-            <div id="silentList" class="list small">
-              <p class="empty">15分以上・コメントなしの対象者はいません。</p>
             </div>
           </section>
 

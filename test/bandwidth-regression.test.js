@@ -5,6 +5,7 @@ import { EventStore } from "../lib/event-store.js";
 
 const serverSource = await readFile(new URL("../server.js", import.meta.url), "utf8");
 const clientSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const collectorSource = await readFile(new URL("../collector/windows/TikFinityCollector.ps1", import.meta.url), "utf8");
 
 test("realtime events send deltas instead of repeating the complete snapshot", () => {
@@ -31,12 +32,10 @@ test("realtime rendering prioritizes comments and gifts while batching noisy pre
   assert.match(clientSource, /Math\.max\(0, 1000 - \(Date\.now\(\) - lastRebuildAt\)\)/);
   const realtimePayload = clientSource.match(/function applyRealtimePayload\(sessionId, type, payload\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.doesNotMatch(realtimePayload, /rebuildRealtimeLists\(/);
-  assert.match(clientSource, /if \(clockRenderTick % 5 === 0\)/);
 });
 
-test("server limits super lurker checks to entry events and coalesces noisy presence", () => {
+test("server limits super lurker checks to entry events and coalesces presence updates", () => {
   assert.match(serverSource, /const SUPER_LURKER_ALERT_TYPES = new Set\(\["join"\]\)/);
-  assert.match(serverSource, /this\.scheduleRoomUserUpdate\(data, now\)/);
   assert.match(serverSource, /PRESENCE_BROADCAST_INTERVAL_MS/);
   assert.match(serverSource, /this\.presenceBroadcastTimer = setTimeout\(\(\) => this\.flushPresenceBroadcast\(\), waitMs\)/);
   assert.match(serverSource, /SECONDARY_SUMMARY_INTERVAL_MS/);
@@ -80,12 +79,6 @@ test("presence-only updates avoid rebuilding session cards", () => {
   assert.doesNotMatch(listRebuild, /renderSessionCards\(\)/);
 });
 
-test("viewer ranking updates touch only current and previously ranked users", () => {
-  const rankingUpdate = serverSource.match(/updateCurrentViewerRank\(data, at\) \{[\s\S]*?\n  \}/)?.[0] || "";
-  assert.match(rankingUpdate, /const affectedUserIds = new Set\(\[\.\.\.previousRanks\.keys\(\), \.\.\.rankedUserIds\]\)/);
-  assert.doesNotMatch(rankingUpdate, /for \(const user of this\.userStats\.values\(\)\)/);
-});
-
 test("listener identity lookup is cached for repeated events", async () => {
   let queries = 0;
   const store = new EventStore();
@@ -100,10 +93,15 @@ test("the one-second clock updates live counters without rebuilding every panel"
   const clock = clientSource.match(/function startSnapshotClock\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(clock, /renderSelectedSessionClock\(\)/);
   assert.doesNotMatch(clock, /renderSelectedSession\(\)|renderSessionCards\(\)/);
-  assert.match(clientSource, /function renderSelectedSessionClock\(\) \{[\s\S]*?renderMetrics\(snapshot\)[\s\S]*?renderWatchers\(/);
-  const watchUpdate = clientSource.match(/function updateCachedWatchTimes\(session\) \{[\s\S]*?\n\}/)?.[0] || "";
-  assert.doesNotMatch(watchUpdate, /rebuildRealtimeWatchLists\(/);
-  assert.match(clientSource, /if \(clockRenderTick % 5 === 0\) \{[\s\S]*?rebuildRealtimeWatchLists\(/);
+  const clockRender = clientSource.match(/function renderSelectedSessionClock\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(clockRender, /renderMetrics\(snapshot\)/);
+  assert.doesNotMatch(clockRender, /renderReport|renderWatchers|rebuildRealtimeWatchLists/);
+});
+
+test("unreliable viewer-presence panels and counters are removed", () => {
+  assert.doesNotMatch(indexSource, /確認済み滞在|滞在中コメ無|現在視聴|推定滞在/);
+  assert.doesNotMatch(clientSource, /currentViewers|watchTime|silentLongWatchers|currentViewerRanking|renderWatchers/);
+  assert.doesNotMatch(serverSource, /scheduleRoomUserUpdate|updateCurrentViewerRank|estimatedWatchSeconds|confirmedWatchSeconds/);
 });
 
 test("large JSON and event streams enable gzip compression", () => {
@@ -170,6 +168,8 @@ test("collector persists each event before background delivery and throttles sta
   assert.match(collectorSource, /\$script:pendingFileDirty = \$true/);
   assert.match(collectorSource, /TotalMilliseconds -lt 1000/);
   assert.match(collectorSource, /TotalSeconds -ge 10/);
+  assert.match(collectorSource, /\$localOnlyEvents = @\('roomuser', 'roomuserseq'\)/);
+  assert.match(collectorSource, /do not use disk\/network/);
   const deliveryCompletion = collectorSource.match(/function Complete-CollectorDelivery \{[\s\S]*?\n\}/)?.[0] || "";
   assert.doesNotMatch(deliveryCompletion, /Save-PendingEvents\s*\}/);
 });

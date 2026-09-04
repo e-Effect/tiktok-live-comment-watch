@@ -27,7 +27,7 @@ test("uses collector event ids to keep distinct identical comments while preserv
 test("maps common TikFinity aliases", () => {
   assert.equal(normalizeCollectorEvent({ eventType: "comment", comment: "x" }).type, "chat");
   assert.equal(normalizeCollectorEvent({ type: "join", userId: "1" }).type, "member");
-  assert.equal(normalizeCollectorEvent({ event: "roomUserSeq", data: {} }).type, "roomUser");
+  assert.equal(normalizeCollectorEvent({ event: "roomUserSeq", data: {} }), null);
 });
 
 test("keeps pending and completed gift streak events distinct", () => {

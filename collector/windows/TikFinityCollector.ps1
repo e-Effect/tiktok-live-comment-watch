@@ -12,8 +12,9 @@ $tikFinityUrl = 'ws://127.0.0.1:21213/'
 $allowedEvents = @(
     'chat', 'comment', 'gift', 'member', 'join', 'follow', 'share', 'social',
     'like', 'subscribe', 'subscription', 'superfan', 'superfanjoin',
-    'roomuser', 'roomuserseq', 'streamend', 'control', 'room'
+    'streamend', 'control', 'room'
 )
+$localOnlyEvents = @('roomuser', 'roomuserseq')
 $http = New-Object System.Net.Http.HttpClient
 $http.Timeout = [TimeSpan]::FromSeconds(15)
 $receiptHttp = New-Object System.Net.Http.HttpClient
@@ -474,7 +475,13 @@ while ($true) {
             }
             Add-DiagnosticCount -Bucket $script:receivedCounts -Name $eventType
             $script:lastReceivedEventType = $eventType
-            if ($allowedEvents -contains $eventType.ToLowerInvariant()) {
+            if ($localOnlyEvents -contains $eventType.ToLowerInvariant()) {
+                # Viewer-count events contain no dependable full viewer roster.
+                # Keep the local diagnostic count, but do not use disk/network
+                # bandwidth for data that is no longer shown by the viewer.
+                $script:lastReceivedEventType = ''
+            }
+            elseif ($allowedEvents -contains $eventType.ToLowerInvariant()) {
                 Add-DiagnosticCount -Bucket $script:forwardedCounts -Name $eventType
                 $queuedRaw = Add-PendingEvent -Raw $raw
                 if ($eventType -ieq 'gift') {

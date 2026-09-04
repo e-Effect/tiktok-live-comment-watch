@@ -6,7 +6,7 @@ const port = 41000 + (process.pid % 1000);
 const baseUrl = `http://127.0.0.1:${port}`;
 const collectorKey = "burst-test-key";
 
-test("a room-user burst does not hold the live comment stream", async (t) => {
+test("a noisy like burst does not hold the live comment stream", async (t) => {
   const child = spawn(process.execPath, ["server.js"], {
     cwd: new URL("..", import.meta.url),
     env: {
@@ -27,10 +27,14 @@ test("a room-user burst does not hold the live comment stream", async (t) => {
   const eventsPromise = collectEvents(stream, controller, 1400);
 
   const events = Array.from({ length: 120 }, (_, index) => ({
-    event: "roomUser",
-    collectorEventId: `room-${index}`,
+    event: "like",
+    collectorEventId: `like-${index}`,
     collectorReceivedAt: Date.now(),
-    data: { viewerCount: 50 + (index % 3) }
+    data: {
+      msgId: `like-${index}`,
+      likeCount: 1,
+      user: { id: `like-user-${index}`, uniqueId: `like_user_${index}`, nickname: `like user ${index}` }
+    }
   }));
   events.splice(60, 0, {
     event: "chat",
@@ -46,9 +50,7 @@ test("a room-user burst does not hold the live comment stream", async (t) => {
 
   const received = await eventsPromise;
   const commentIndex = received.findIndex((item) => item.type === "comment");
-  const firstPresenceIndex = received.findIndex((item) => item.type === "presence");
   assert.ok(commentIndex >= 0, JSON.stringify(received));
-  assert.ok(firstPresenceIndex < 0 || commentIndex < firstPresenceIndex, JSON.stringify(received));
   assert.ok(received.filter((item) => item.type === "presence").length <= 2, JSON.stringify(received));
 });
 

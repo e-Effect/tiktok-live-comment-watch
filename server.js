@@ -8,8 +8,6 @@ import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
-import { isSilentWatcher, silentWatcherPresenceMode } from "./lib/silent-watchers.js";
-import { confirmedRankedWatchSeconds, updateRankedPresence } from "./lib/ranked-watch.js";
 import {
   heartMeLevelFromEvent,
   heartMeStateFromUser,
@@ -131,22 +129,10 @@ class LiveSession extends EventEmitter {
     this.heartMeGiftIds = new Set();
     this.heartMeHistoryLookups = new Map();
     this.viewerStats = {
-      current: 0,
-      peak: 0,
       knownJoins: 0,
-      totalLikes: 0,
-      estimatedWatchSeconds: 0,
-      currentRanked: 0,
-      rankUpdatedAt: null
+      totalLikes: 0
     };
-    this.currentViewerIds = new Set();
-    this.currentViewerRankUpdatedAt = null;
-    this.pendingRoomUserUpdate = null;
-    this.roomUserUpdateTimer = null;
-    this.lastRoomUserUpdateAt = 0;
     this.pendingPresenceUsers = new Map();
-    this.pendingPresenceRemovedUserIds = new Set();
-    this.pendingPresenceReplaceRanking = false;
     this.presenceBroadcastTimer = null;
     this.lastPresenceBroadcastAt = 0;
     this.notice = "";
@@ -443,16 +429,6 @@ class LiveSession extends EventEmitter {
         level: heartMeLevelFromEvent(data),
         source: "super_fan_join"
       });
-    });
-
-    connection.on(events.ROOM_USER || "roomUser", (data) => {
-      const now = Date.now();
-      const current = Number(data.viewerCount || data.userCount || 0);
-      if (current > 0) {
-        this.viewerStats.current = current;
-        this.viewerStats.peak = Math.max(this.viewerStats.peak, current);
-      }
-      this.scheduleRoomUserUpdate(data, now);
     });
 
     connection.on(events.STREAM_END || "streamEnd", () => {
@@ -993,7 +969,7 @@ class LiveSession extends EventEmitter {
   async awaitCollectorDurability() {
     // Acknowledge the collector as soon as the database is available. Event
     // persistence continues in the ordered background queue. Waiting for a
-    // busy member/roomUser burst here blocked the collector's only HTTP request
+    // A busy entry/like burst here previously blocked the collector's only HTTP request
     // and made later live comments appear many seconds late.
     this.flushPendingDatabaseEvents().catch(() => {});
     return eventStore.status().ready;
@@ -1190,11 +1166,6 @@ class LiveSession extends EventEmitter {
       firstVisitAt: null,
       lastVisitAt: null,
       previousVisitAt: null,
-      watchSeconds: 0,
-      confirmedWatchSeconds: 0,
-      confirmedWatchMilliseconds: 0,
-      rankedPresenceUpdatedAt: null,
-      rankedVisitCount: 0,
       followedToday: false,
       followedAt: null,
       isFollowingHost: null,
@@ -1212,10 +1183,7 @@ class LiveSession extends EventEmitter {
       heartMeHistoryKnown: false,
       heartMeHistoryStatus: "unknown",
       pastHeartMeGiftCount: 0,
-      lastPastHeartMeAt: null,
-      isCurrentlyRanked: false,
-      currentViewerRank: null,
-      currentViewerRankedAt: null
+      lastPastHeartMeAt: null
     };
     current.nickname = nickname || current.nickname;
     current.firstSeenAt = Math.min(current.firstSeenAt, at);
@@ -1224,76 +1192,11 @@ class LiveSession extends EventEmitter {
     return current;
   }
 
-  updateCurrentViewerRank(data, at) {
-    const { hasPayload, entries } = rankedViewerEntries(data);
-    if (!hasPayload) return null;
-
-    const previousRanks = new Map(
-      [...this.currentViewerIds].map((userId) => [userId, this.userStats.get(userId)?.currentViewerRank ?? null])
-    );
-
-    const rankedUsers = [];
-    entries.forEach((entry, index) => {
-      const person = personFromRankedViewer(entry);
-      if (!person) return;
-      this.markSeen(person, at, "viewer_ranking");
-      const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
-      user.lastSeenAt = Math.max(user.lastSeenAt, at);
-      user.currentViewerRankedAt = at;
-      rankedUsers.push({ user, rank: rankedViewerPosition(entry, index) });
-      this.userStats.set(user.userId, user);
-    });
-
-    const rankedUserIds = new Set(rankedUsers.map(({ user }) => user.userId));
-    const affectedUserIds = new Set([...previousRanks.keys(), ...rankedUserIds]);
-    for (const userId of affectedUserIds) {
-      const user = this.userStats.get(userId);
-      if (!user) continue;
-      updateRankedPresence(user, rankedUserIds.has(user.userId), at);
-      user.currentViewerRank = null;
-    }
-    this.currentViewerIds.clear();
-    for (const { user, rank } of rankedUsers) {
-      user.currentViewerRank = rank;
-      this.currentViewerIds.add(user.userId);
-    }
-
-    this.currentViewerRankUpdatedAt = at;
-    this.viewerStats.currentRanked = this.currentViewerIds.size;
-    this.viewerStats.rankUpdatedAt = at;
-    const changedUsers = [...this.currentViewerIds]
-      .map((userId) => this.userStats.get(userId))
-      .filter((user) => user && previousRanks.get(user.userId) !== user.currentViewerRank);
-    const removedUserIds = [...previousRanks.keys()].filter((userId) => !this.currentViewerIds.has(userId));
-    const removedUsers = removedUserIds.map((userId) => this.userStats.get(userId)).filter(Boolean);
-    return { count: this.currentViewerIds.size, users: [...changedUsers, ...removedUsers], removedUserIds };
-  }
-
-  scheduleRoomUserUpdate(data, at = Date.now()) {
-    this.pendingRoomUserUpdate = { data, at };
-    if (this.roomUserUpdateTimer) return;
-    const waitMs = Math.max(0, PRESENCE_BROADCAST_INTERVAL_MS - (Date.now() - this.lastRoomUserUpdateAt));
-    this.roomUserUpdateTimer = setTimeout(() => {
-      this.roomUserUpdateTimer = null;
-      const pending = this.pendingRoomUserUpdate;
-      this.pendingRoomUserUpdate = null;
-      if (!pending || this.stoppedAt) return;
-      this.lastRoomUserUpdateAt = Date.now();
-      const rankedUpdate = this.updateCurrentViewerRank(pending.data, pending.at);
-      this.broadcastPresence(rankedUpdate?.users || [], {
-        replaceCurrentRanking: Boolean(rankedUpdate),
-        removedCurrentViewerIds: rankedUpdate?.removedUserIds || []
-      });
-    }, waitMs);
-    this.roomUserUpdateTimer.unref?.();
-  }
-
   secondarySummary({ force = false } = {}) {
     const now = Date.now();
     if (!force && now - this.secondarySummaryUpdatedAt < SECONDARY_SUMMARY_INTERVAL_MS) {
       return this.secondarySummaryCache;
     }
-    this.updateEstimatedWatch();
     const users = [...this.userStats.values()];
     this.secondarySummaryCache = {
       followedTodayCount: users.filter((user) => user.followedToday).length,
@@ -1338,12 +1241,7 @@ class LiveSession extends EventEmitter {
   }
 
   realtimeUser(user) {
-    const silent = isSilentWatcher(user);
-    return {
-      ...user,
-      isSilentWatcher: silent,
-      presenceMode: silent ? silentWatcherPresenceMode(user) : ""
-    };
+    return { ...user };
   }
 
   currentTopGifts() {
@@ -1364,19 +1262,6 @@ class LiveSession extends EventEmitter {
       .filter((user) => user.gifts > 0 || user.diamonds > 0)
       .sort((a, b) => b.diamonds - a.diamonds || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 30);
-    const topWatchers = [...users]
-      .filter((user) => user.confirmedWatchSeconds > 0)
-      .sort((a, b) => b.confirmedWatchSeconds - a.confirmedWatchSeconds || b.comments - a.comments || b.lastSeenAt - a.lastSeenAt)
-      .slice(0, 30);
-    const silentLongWatchers = [...users]
-      .filter((user) => isSilentWatcher(user))
-      .sort((a, b) => b.watchSeconds - a.watchSeconds || a.currentViewerRank - b.currentViewerRank || b.lastSeenAt - a.lastSeenAt)
-      .map((user) => ({ ...user, presenceMode: silentWatcherPresenceMode(user) }))
-      .slice(0, 100);
-    const currentViewerRanking = [...users]
-      .filter((user) => user.isCurrentlyRanked)
-      .sort((a, b) => a.currentViewerRank - b.currentViewerRank || b.confirmedWatchSeconds - a.confirmedWatchSeconds || b.lastSeenAt - a.lastSeenAt)
-      .slice(0, 100);
     const visitors = [...users]
       .filter((user) => user.hasJoined)
       .sort((a, b) => b.firstJoinAt - a.firstJoinAt || b.lastSeenAt - a.lastSeenAt)
@@ -1410,9 +1295,6 @@ class LiveSession extends EventEmitter {
       shares: this.shares.map((share) => this.decorateUserEvent(share)),
       topUsers,
       topGifters,
-      topWatchers,
-      silentLongWatchers,
-      currentViewerRanking,
       visitors,
       topGifts,
       followedTodayCount: secondary.followedTodayCount,
@@ -1428,17 +1310,6 @@ class LiveSession extends EventEmitter {
   decorateUserEvent(event) {
     const user = this.userStats.get(event.userId);
     return user ? { ...event, ...userDisplayState(user) } : event;
-  }
-
-  updateEstimatedWatch() {
-    const now = this.stoppedAt || Date.now();
-    let total = 0;
-    for (const user of this.userStats.values()) {
-      user.watchSeconds = Math.floor(Math.max(0, now - user.firstSeenAt) / 1000);
-      user.confirmedWatchSeconds = confirmedRankedWatchSeconds(user, now);
-      total += user.watchSeconds;
-    }
-    this.viewerStats.estimatedWatchSeconds = total;
   }
 
   currentGiftCatalog() {
@@ -1489,10 +1360,8 @@ class LiveSession extends EventEmitter {
     this.broadcast("status", { summary: this.summary(message) });
   }
 
-  broadcastPresence(users = [], options = {}) {
+  broadcastPresence(users = []) {
     for (const user of users.filter(Boolean)) this.pendingPresenceUsers.set(user.userId, user);
-    for (const userId of options.removedCurrentViewerIds || []) this.pendingPresenceRemovedUserIds.add(userId);
-    this.pendingPresenceReplaceRanking ||= Boolean(options.replaceCurrentRanking);
     if (this.presenceBroadcastTimer) return;
     const waitMs = Math.max(0, PRESENCE_BROADCAST_INTERVAL_MS - (Date.now() - this.lastPresenceBroadcastAt));
     this.presenceBroadcastTimer = setTimeout(() => this.flushPresenceBroadcast(), waitMs);
@@ -1504,17 +1373,11 @@ class LiveSession extends EventEmitter {
     this.presenceBroadcastTimer = null;
     if (this.stoppedAt) return;
     const users = [...this.pendingPresenceUsers.values()];
-    const removedCurrentViewerIds = [...this.pendingPresenceRemovedUserIds];
-    const replaceCurrentRanking = this.pendingPresenceReplaceRanking;
     this.pendingPresenceUsers.clear();
-    this.pendingPresenceRemovedUserIds.clear();
-    this.pendingPresenceReplaceRanking = false;
     this.lastPresenceBroadcastAt = Date.now();
     this.broadcast("presence", {
       summary: this.summary(),
-      users: users.map((user) => this.realtimeUser(user)),
-      replaceCurrentRanking,
-      removedCurrentViewerIds
+      users: users.map((user) => this.realtimeUser(user))
     });
   }
 
@@ -1541,9 +1404,7 @@ class LiveSession extends EventEmitter {
   stop(message = "停止しました。") {
     if (this.stoppedAt) return;
     this.stoppedAt = Date.now();
-    if (this.roomUserUpdateTimer) clearTimeout(this.roomUserUpdateTimer);
     if (this.presenceBroadcastTimer) clearTimeout(this.presenceBroadcastTimer);
-    this.roomUserUpdateTimer = null;
     this.presenceBroadcastTimer = null;
     this.status = this.status === "ended" ? "ended" : "stopped";
     if (this.connection?.disconnect) {
@@ -1554,7 +1415,7 @@ class LiveSession extends EventEmitter {
   }
 
   toCsv() {
-    const rows = [["type", "source", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "watch_seconds", "followed_today", "follows_host", "heart_me_status", "heart_me_level"]];
+    const rows = [["type", "source", "time", "user_id", "nickname", "text_or_gift", "count", "diamonds", "followed_today", "follows_host", "heart_me_status", "heart_me_level"]];
     for (const comment of [...this.comments].reverse()) {
       const user = this.userStats.get(comment.userId);
       rows.push([
@@ -1566,7 +1427,6 @@ class LiveSession extends EventEmitter {
         comment.text,
         "",
         "",
-        user?.watchSeconds || "",
         user?.followedToday ? "yes" : "",
         user?.isFollowingHost === null ? "" : user?.isFollowingHost ? "yes" : "no",
         user?.heartMeStatus || "",
@@ -1584,7 +1444,6 @@ class LiveSession extends EventEmitter {
         gift.giftName || gift.giftId,
         gift.repeatCount,
         gift.totalDiamonds,
-        user?.watchSeconds || "",
         user?.followedToday ? "yes" : "",
         user?.isFollowingHost === null ? "" : user?.isFollowingHost ? "yes" : "no",
         user?.heartMeStatus || "",
@@ -1602,7 +1461,6 @@ class LiveSession extends EventEmitter {
         share.label || "share",
         1,
         "",
-        user?.watchSeconds || "",
         user?.followedToday ? "yes" : "",
         user?.isFollowingHost === null ? "" : user?.isFollowingHost ? "yes" : "no",
         user?.heartMeStatus || "",
@@ -1714,62 +1572,6 @@ function findNestedDisplayName(value, depth = 0, seen = new Set()) {
     if (nested) return nested;
   }
   return "";
-}
-
-function rankedViewerEntries(data) {
-  // A roomUser payload may also contain top-gifter rankings. Those users are not
-  // proof of current presence, so only consume fields that explicitly describe
-  // the current audience.
-  const candidates = [
-    data?.currentViewers,
-    data?.viewerList,
-    data?.onlineUsers,
-    data?.audienceList,
-    data?.data?.currentViewers,
-    data?.data?.viewerList,
-    data?.data?.onlineUsers,
-    data?.data?.audienceList,
-    data?.message?.currentViewers,
-    data?.message?.viewerList,
-    data?.message?.onlineUsers,
-    data?.message?.audienceList
-  ];
-  const entries = candidates.find((value) => Array.isArray(value));
-  return {
-    hasPayload: Boolean(entries),
-    entries: entries || []
-  };
-}
-
-function personFromRankedViewer(entry) {
-  if (!entry || typeof entry !== "object") return null;
-  const rawUser = entry.user || entry.userInfo || entry.viewer || entry.author || entry.data?.user || entry;
-  const nickname = firstText(
-    rawUser.nickname,
-    rawUser.displayName,
-    rawUser.uniqueId,
-    entry.nickname,
-    entry.uniqueId
-  );
-  const userId = firstText(
-    rawUser.id,
-    rawUser.userId,
-    rawUser.uniqueId,
-    entry.userId,
-    entry.uniqueId,
-    nickname
-  );
-  if (!userId || cleanDisplayName(userId) === "unknown") return null;
-  return {
-    userId: cleanUserId(userId),
-    nickname: cleanDisplayName(nickname || userId),
-    signals: userSignalsFromRawUser(rawUser)
-  };
-}
-
-function rankedViewerPosition(entry, index) {
-  const rank = Number(entry.rank || entry.rankIndex || entry.position || 0);
-  return Number.isFinite(rank) && rank > 0 ? rank : index + 1;
 }
 
 function firstText(...values) {
@@ -2455,8 +2257,6 @@ function addPreviewDemoEvents(session) {
     at: at + 3,
     source: "preview"
   });
-  session.viewerStats.current = 1;
-  session.viewerStats.peak = Math.max(1, session.viewerStats.peak);
   session.broadcastPresence([session.userStats.get(person.userId)]);
   session.broadcastSummary("配信前テストを表示しました。データベース・印刷・外部連携には保存されません。");
   return true;

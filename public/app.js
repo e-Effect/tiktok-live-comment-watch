@@ -28,8 +28,6 @@ const initialCount = document.querySelector("#initialCount");
 const giftCount = document.querySelector("#giftCount");
 const giftDiamonds = document.querySelector("#giftDiamonds");
 const elapsedTime = document.querySelector("#elapsedTime");
-const currentViewers = document.querySelector("#currentViewers");
-const watchTime = document.querySelector("#watchTime");
 const visitorCount = document.querySelector("#visitorCount");
 const commentList = document.querySelector("#commentList");
 const userList = document.querySelector("#userList");
@@ -57,8 +55,6 @@ const giftRankingRange = document.querySelector("#giftRankingRange");
 const giftRankingRefresh = document.querySelector("#giftRankingRefresh");
 const giftRankingStatus = document.querySelector("#giftRankingStatus");
 const targetGiftRanking = document.querySelector("#targetGiftRanking");
-const watcherList = document.querySelector("#watcherList");
-const silentList = document.querySelector("#silentList");
 const reportList = document.querySelector("#reportList");
 const recentIds = document.querySelector("#recentIds");
 const recentIdList = document.querySelector("#recentIdList");
@@ -132,8 +128,6 @@ const DEFAULT_PANEL_SIZES = {
   visitors: "medium",
   comments: "large",
   shares: "medium",
-  watchers: "medium",
-  silent: "medium",
   gifts: "medium",
   users: "medium",
   giftHistory: "medium"
@@ -166,7 +160,6 @@ let selectedSessionId = null;
 let clockTimer = null;
 let reconnectTimer = null;
 let snapshotFetchTick = 0;
-let clockRenderTick = 0;
 const realtimeRenderState = new Map();
 const lastHeavyRealtimeRenderAt = new Map();
 const lastRealtimeListRebuildAt = new Map();
@@ -565,11 +558,9 @@ function startSnapshotClock() {
   clockTimer = setInterval(async () => {
     if (!sessions.size) return;
     snapshotFetchTick += 1;
-    clockRenderTick += 1;
     for (const session of sessions.values()) {
       if (!session.snapshot || session.snapshot.stoppedAt) continue;
       session.snapshot.elapsedSeconds = Math.floor((Date.now() - session.snapshot.startedAt) / 1000);
-      updateCachedWatchTimes(session);
     }
     renderSelectedSessionClock();
     if (document.hidden || snapshotFetchTick % 60 !== 0) return;
@@ -590,12 +581,6 @@ function renderSelectedSessionClock() {
   if (!snapshot) return;
   renderConnectionDetails(snapshot);
   renderMetrics(snapshot);
-  if (clockRenderTick % 5 === 0) {
-    rebuildRealtimeWatchLists(snapshot, selected.userCache || new Map());
-    renderReport(snapshot);
-    renderWatchers(snapshot.topWatchers || []);
-    renderSilentLongWatchers(snapshot.silentLongWatchers || []);
-  }
 }
 
 function closeSession(sessionId, { forget } = { forget: false }) {
@@ -1658,10 +1643,6 @@ function applyRealtimePayload(sessionId, type, payload) {
   };
   const cache = session.userCache || seedSessionUserCache(session, session.snapshot);
 
-  for (const userId of payload?.removedCurrentViewerIds || []) {
-    const current = cache.get(String(userId));
-    if (current) cache.set(String(userId), { ...current, isCurrentlyRanked: false, currentViewerRank: null });
-  }
   if (!session.pendingDisplayUserIds) session.pendingDisplayUserIds = new Set();
   for (const user of payload?.users || []) {
     upsertRealtimeUser(cache, user);
@@ -1736,9 +1717,6 @@ function seedSessionUserCache(session, snapshot) {
   const groups = [
     snapshot?.topUsers,
     snapshot?.topGifters,
-    snapshot?.topWatchers,
-    snapshot?.silentLongWatchers,
-    snapshot?.currentViewerRanking,
     snapshot?.visitors
   ];
   for (const users of groups) {
@@ -1752,23 +1730,6 @@ function upsertRealtimeUser(cache, user) {
   const userId = String(user?.userId || "");
   if (!userId) return;
   cache.set(userId, { ...(cache.get(userId) || {}), ...user, userId });
-}
-
-function realtimePresence(user) {
-  if (user?.isCurrentlyRanked) return "viewer_ranking";
-  if (Number(user?.entryEventCount || 0) > 0) return "entry_estimate";
-  return "";
-}
-
-function normalizeRealtimeUser(user) {
-  const presenceMode = realtimePresence(user);
-  return {
-    ...user,
-    presenceMode,
-    isSilentWatcher: Number(user?.comments || 0) === 0
-      && Number(user?.watchSeconds || 0) >= 15 * 60
-      && Boolean(presenceMode)
-  };
 }
 
 function markEventStreamActivity(sessionId) {
@@ -1802,7 +1763,6 @@ function rebuildRealtimeLists(snapshot, cache) {
       || Number(b.gifts || 0) - Number(a.gifts || 0)
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 30);
-  applyRealtimeWatchLists(snapshot, users);
   snapshot.visitors = [...users]
     .filter((user) => user.hasJoined)
     .sort((a, b) => Number(b.firstJoinAt || 0) - Number(a.firstJoinAt || 0)
@@ -1813,35 +1773,8 @@ function rebuildRealtimeLists(snapshot, cache) {
   snapshot.shares = refreshEventDisplayState(snapshot.shares, cache);
 }
 
-function rebuildRealtimeWatchLists(snapshot, cache) {
-  applyRealtimeWatchLists(snapshot, normalizedRealtimeUsers(cache));
-}
-
 function normalizedRealtimeUsers(cache) {
-  const users = [...cache.values()].map(normalizeRealtimeUser);
-  for (const user of users) cache.set(user.userId, user);
-  return users;
-}
-
-function applyRealtimeWatchLists(snapshot, users) {
-  snapshot.topWatchers = [...users]
-    .filter((user) => Number(user.confirmedWatchSeconds || 0) > 0)
-    .sort((a, b) => Number(b.confirmedWatchSeconds || 0) - Number(a.confirmedWatchSeconds || 0)
-      || Number(b.comments || 0) - Number(a.comments || 0)
-      || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
-    .slice(0, 30);
-  snapshot.silentLongWatchers = [...users]
-    .filter((user) => user.isSilentWatcher)
-    .sort((a, b) => Number(b.watchSeconds || 0) - Number(a.watchSeconds || 0)
-      || Number(a.currentViewerRank ?? Number.MAX_SAFE_INTEGER) - Number(b.currentViewerRank ?? Number.MAX_SAFE_INTEGER)
-      || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
-    .slice(0, 100);
-  snapshot.currentViewerRanking = [...users]
-    .filter((user) => user.isCurrentlyRanked)
-    .sort((a, b) => Number(a.currentViewerRank || Number.MAX_SAFE_INTEGER) - Number(b.currentViewerRank || Number.MAX_SAFE_INTEGER)
-      || Number(b.confirmedWatchSeconds || 0) - Number(a.confirmedWatchSeconds || 0)
-      || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
-    .slice(0, 100);
+  return [...cache.values()];
 }
 
 function refreshEventDisplayState(events, cache) {
@@ -1887,26 +1820,6 @@ function refreshVisibleCommentRows(comments, changedUserIds) {
     if (comment) row.outerHTML = commentArticleHtml(comment);
     usedByUser.set(userId, index + 1);
   }
-}
-
-function updateCachedWatchTimes(session) {
-  if (!session?.snapshot || !session.userCache?.size) return;
-  const now = Number(session.snapshot.stoppedAt || Date.now());
-  for (const [userId, user] of session.userCache) {
-    if (!user.firstSeenAt) continue;
-    session.userCache.set(userId, {
-      ...user,
-      watchSeconds: Math.floor(Math.max(0, now - Number(user.firstSeenAt)) / 1000),
-      confirmedWatchSeconds: clientConfirmedWatchSeconds(user, now)
-    });
-  }
-}
-
-function clientConfirmedWatchSeconds(user, now = Date.now()) {
-  let milliseconds = Math.max(0, Number(user?.confirmedWatchMilliseconds || 0));
-  const previousAt = Math.max(0, Number(user?.rankedPresenceUpdatedAt || 0));
-  if (user?.isCurrentlyRanked && previousAt > 0 && now >= previousAt) milliseconds += now - previousAt;
-  return Math.floor(milliseconds / 1000);
 }
 
 function renderSnapshot(snapshot, options = {}) {
@@ -1956,8 +1869,6 @@ function renderSelectedSession(options = {}) {
     renderMetrics(emptySnapshot());
     renderReport(null);
     renderComments([]);
-    renderWatchers([]);
-    renderSilentLongWatchers([]);
     renderUsers([]);
     renderGifters([]);
     renderGiftHistory([]);
@@ -1982,8 +1893,6 @@ function renderSelectedSession(options = {}) {
   if (heavyDue) renderReport(snapshot);
   if (dirty("comment", "status")) renderComments(snapshot.comments || []);
   if (heavyDue && dirty("comment", "gift", "presence", "status", "lists")) {
-    renderWatchers(snapshot.topWatchers || []);
-    renderSilentLongWatchers(snapshot.silentLongWatchers || []);
     renderUsers(snapshot.topUsers || []);
     renderVisitorHistory(snapshot.visitors || []);
   }
@@ -2223,8 +2132,6 @@ function renderReport(snapshot) {
   }
   const topCommenter = snapshot.topUsers?.[0];
   const topGifter = snapshot.topGifters?.[0];
-  const topWatcher = snapshot.topWatchers?.[0];
-  const silentCount = Number(snapshot.silentLongWatchers?.length || 0);
   const followedCount = Number(snapshot.followedTodayCount || 0);
   const shareCount = Number(snapshot.shareCount || snapshot.shares?.length || 0);
   const visitors = Number(snapshot.viewerStats?.knownJoins || 0);
@@ -2240,12 +2147,9 @@ function renderReport(snapshot) {
     ${statusCards}
     <article><span>コメント最多</span><strong>${escapeHtml(topCommenter?.nickname || topCommenter?.userId || "-")}</strong><small>${formatNumber(topCommenter?.comments || 0)}件</small></article>
     <article><span>ギフト最多</span><strong>${escapeHtml(topGifter?.nickname || topGifter?.userId || "-")}</strong><small>${formatNumber(topGifter?.diamonds || 0)}ダイヤ</small></article>
-    <article><span>最長確認滞在</span><strong>${escapeHtml(topWatcher?.nickname || topWatcher?.userId || "-")}</strong><small>${formatDuration(topWatcher?.confirmedWatchSeconds || 0)}</small></article>
-    <article><span>現視聴15分無言</span><strong>${formatNumber(silentCount)}</strong><small>人</small></article>
     <article><span>シェア</span><strong>${formatNumber(shareCount)}</strong><small>回</small></article>
     <article><span>本日フォロー</span><strong>${formatNumber(followedCount)}</strong><small>人</small></article>
     <article><span>確認来訪</span><strong>${formatNumber(visitors)}</strong><small>この配信</small></article>
-    <article><span>計測時間</span><strong>${formatDuration(snapshot.elapsedSeconds)}</strong><small>${escapeHtml(snapshot.displayName || snapshot.username || "")}</small></article>
   `;
 }
 
@@ -2255,10 +2159,6 @@ function renderMetrics(snapshot) {
   giftCount.textContent = formatNumber(snapshot.giftCount);
   giftDiamonds.textContent = formatNumber(snapshot.giftDiamondTotal);
   elapsedTime.textContent = formatDuration(snapshot.elapsedSeconds);
-  currentViewers.textContent = snapshot.viewerStats?.current ? formatNumber(snapshot.viewerStats.current) : "-";
-  watchTime.textContent = snapshot.viewerStats?.estimatedWatchSeconds
-    ? formatDuration(Math.floor(snapshot.viewerStats.estimatedWatchSeconds))
-    : "-";
   if (visitorCount) visitorCount.textContent = formatNumber(snapshot.viewerStats?.knownJoins || 0);
 }
 
@@ -2302,27 +2202,6 @@ function commentVisitMeta(comment) {
   const previousAt = comment.previousVisitAt || comment.firstVisitAt;
   const previousLabel = previousAt ? `（${formatVisitDate(previousAt)}）` : "";
   return `<span class="comment-visit-meta">${formatNumber(count)}回目${previousLabel}</span>`;
-}
-
-function renderWatchers(users) {
-  renderRankList(watcherList, users, "ランキングで確認できた滞在時間はまだありません。", (user) => `合計 ${formatDuration(user.confirmedWatchSeconds)}`);
-}
-
-function renderSilentLongWatchers(users) {
-  if (!users.length) {
-    silentList.innerHTML = `<p class="empty">15分以上・コメントなしの対象者はいません。</p>`;
-    return;
-  }
-  silentList.innerHTML = users.map((user, index) => `
-    <div class="user-row silent-row ${silentLevelClass(user.watchSeconds)}">
-      <span class="rank">${index + 1}</span>
-      <span class="name">${renderDecoratedName(user)}</span>
-      <span class="silent-count">
-        <strong>${formatDuration(user.watchSeconds)}</strong>
-        <small>${user.presenceMode === "entry_estimate" ? "入室から推定" : "在室確認"}</small>
-      </span>
-    </div>
-  `).join("");
 }
 
 function renderUsers(users) {
@@ -2798,13 +2677,6 @@ function rangeLabel(range) {
     "30d": "過去30日",
     all: "全期間"
   }[range] || "現在の配信";
-}
-
-function silentLevelClass(seconds) {
-  if (seconds >= 60 * 60) return "silent-red";
-  if (seconds >= 30 * 60) return "silent-yellow";
-  if (seconds >= 15 * 60) return "silent-green";
-  return "";
 }
 
 function eventSourceBadge(item) {
