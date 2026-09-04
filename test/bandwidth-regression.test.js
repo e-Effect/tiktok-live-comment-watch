@@ -104,6 +104,13 @@ test("unreliable viewer-presence panels and counters are removed", () => {
   assert.doesNotMatch(serverSource, /scheduleRoomUserUpdate|updateCurrentViewerRank|estimatedWatchSeconds|confirmedWatchSeconds/);
 });
 
+test("unused discovery and gift ranking features are removed while gift history remains", () => {
+  assert.doesNotMatch(indexSource, /候補発掘|ギフト別ランキング|ギフトランキング/);
+  assert.match(indexSource, /data-panel="giftHistory"/);
+  assert.doesNotMatch(clientSource, /setupCandidateTools|refreshTargetGiftRanking|renderGifters|topGifters/);
+  assert.doesNotMatch(serverSource, /\/api\/candidates\/discover|action === "gift-ranking"|currentGiftRanking|currentTopGifts/);
+});
+
 test("large JSON and event streams enable gzip compression", () => {
   assert.match(serverSource, /gzipSync\(json/);
   assert.match(serverSource, /createGzip\(\{\s*flush:\s*zlibConstants\.Z_SYNC_FLUSH\s*\}\)/);

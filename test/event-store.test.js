@@ -71,36 +71,6 @@ test("identity-less unknown visits are ignored", async () => {
   assert.equal(calls, 0);
 });
 
-test("gift ranking converts database totals to numbers", async () => {
-  const store = new EventStore();
-  store.ready = true;
-  store.pool = {
-    async query(sql, values) {
-      assert.match(sql, /SUM\(item_count\)/);
-      assert.deepEqual(values, ["session-id", "5655"]);
-      return {
-        rows: [{
-          userId: "listener",
-          nickname: "Listener",
-          count: "12",
-          diamonds: "12",
-          lastGiftAt: new Date("2026-07-28T00:00:00Z")
-        }]
-      };
-    }
-  };
-
-  const rows = await store.giftRanking({
-    sessionId: "session-id",
-    giftId: "5655",
-    range: "session"
-  });
-
-  assert.equal(rows[0].count, 12);
-  assert.equal(rows[0].diamonds, 12);
-  assert.equal(typeof rows[0].lastGiftAt, "number");
-});
-
 test("today starts at midnight in Japan even when the server runs in UTC", () => {
   assert.equal(rangeStart("today", new Date("2026-08-11T00:30:00Z")).toISOString(), "2026-08-10T15:00:00.000Z");
   assert.equal(rangeStart("today", new Date("2026-08-10T14:00:00Z")).toISOString(), "2026-08-09T15:00:00.000Z");
