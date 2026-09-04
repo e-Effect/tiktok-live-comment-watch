@@ -26,7 +26,26 @@ test("realtime rendering prioritizes comments and gifts while batching noisy pre
   assert.match(clientSource, /const urgent = \["comment", "gift", "share"\]\.includes\(type\)/);
   assert.match(clientSource, /const delayMs = urgent \? 60 : 400/);
   assert.match(clientSource, /renderSelectedSession\(\{ dirtyTypes: pending\.types \}\)/);
+  assert.match(clientSource, /function scheduleRealtimeListRebuild\(sessionId\)/);
+  assert.match(clientSource, /Math\.max\(0, 1000 - \(Date\.now\(\) - lastRebuildAt\)\)/);
+  const realtimePayload = clientSource.match(/function applyRealtimePayload\(sessionId, type, payload\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(realtimePayload, /rebuildRealtimeLists\(/);
   assert.match(clientSource, /if \(clockRenderTick % 5 === 0\)/);
+});
+
+test("server limits super lurker checks to entry events and coalesces noisy presence", () => {
+  assert.match(serverSource, /const SUPER_LURKER_ALERT_TYPES = new Set\(\["join"\]\)/);
+  assert.match(serverSource, /this\.scheduleRoomUserUpdate\(data, now\)/);
+  assert.match(serverSource, /PRESENCE_BROADCAST_INTERVAL_MS/);
+  assert.match(serverSource, /this\.presenceBroadcastTimer = setTimeout\(\(\) => this\.flushPresenceBroadcast\(\), waitMs\)/);
+  assert.match(serverSource, /SECONDARY_SUMMARY_INTERVAL_MS/);
+});
+
+test("pipeline diagnostics retain bounded latency percentiles", () => {
+  assert.match(serverSource, /if \(samples\.length > 300\) samples\.splice/);
+  assert.match(serverSource, /pipelineLatencyByType: this\.pipelineLatencySnapshot\(\)/);
+  assert.match(serverSource, /p95: Math\.round\(values\[percentileIndex\]\)/);
+  assert.match(clientSource, /直近最大300件の95%値/);
 });
 
 test("event stream keepalives recover a silently stalled display without polling", () => {
@@ -47,7 +66,7 @@ test("busy comment streams throttle expensive secondary panels without delaying 
   assert.match(clientSource, /const lastHeavyRealtimeRenderAt = new Map\(\)/);
   assert.match(clientSource, /now - lastHeavyAt >= 1000/);
   assert.match(clientSource, /if \(dirty\("comment", "presence", "status"\)\) renderComments/);
-  assert.match(clientSource, /if \(heavyDue && dirty\("comment", "gift", "presence", "status"\)\)/);
+  assert.match(clientSource, /if \(heavyDue && dirty\("comment", "gift", "presence", "status", "lists"\)\)/);
 });
 
 test("the one-second clock updates live counters without rebuilding every panel", () => {
@@ -55,7 +74,9 @@ test("the one-second clock updates live counters without rebuilding every panel"
   assert.match(clock, /renderSelectedSessionClock\(\)/);
   assert.doesNotMatch(clock, /renderSelectedSession\(\)|renderSessionCards\(\)/);
   assert.match(clientSource, /function renderSelectedSessionClock\(\) \{[\s\S]*?renderMetrics\(snapshot\)[\s\S]*?renderWatchers\(/);
-  assert.match(clientSource, /function updateCachedWatchTimes\([\s\S]*?rebuildRealtimeWatchLists\(/);
+  const watchUpdate = clientSource.match(/function updateCachedWatchTimes\(session\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(watchUpdate, /rebuildRealtimeWatchLists\(/);
+  assert.match(clientSource, /if \(clockRenderTick % 5 === 0\) \{[\s\S]*?rebuildRealtimeWatchLists\(/);
 });
 
 test("large JSON and event streams enable gzip compression", () => {

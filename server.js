@@ -44,9 +44,11 @@ const DATABASE_RETRY_MS = Number(globalThis.process?.env?.DATABASE_RETRY_MS || 1
 const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_HEARTBEAT_STALE_MS || 150000);
 const COLLECTOR_RECEIVING_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_RECEIVING_STALE_MS || 15 * 60 * 1000);
 const COLLECTOR_NEW_LIVE_GAP_MS = Number(globalThis.process?.env?.COLLECTOR_NEW_LIVE_GAP_MS || 3 * 60 * 60 * 1000);
-const SUPER_LURKER_ALERT_TYPES = new Set(["join", "comment", "gift", "share", "like", "follow", "subscribe"]);
+const SUPER_LURKER_ALERT_TYPES = new Set(["join"]);
 const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert"]);
 const CRITICAL_PERSISTENCE_TYPES = new Set(["comment", "gift", "first_visit_claim_alert", "super_lurker_alert"]);
+const PRESENCE_BROADCAST_INTERVAL_MS = Number(globalThis.process?.env?.PRESENCE_BROADCAST_INTERVAL_MS || 750);
+const SECONDARY_SUMMARY_INTERVAL_MS = Number(globalThis.process?.env?.SECONDARY_SUMMARY_INTERVAL_MS || 1000);
 const REALTIME_INTEGRATION_TICKET_MS = Number(globalThis.process?.env?.REALTIME_INTEGRATION_TICKET_MS || 8 * 60 * 60 * 1000);
 const REALTIME_INTEGRATION_REPLAY_LIMIT = 1000;
 const realtimeIntegrationBus = new EventEmitter();
@@ -139,6 +141,14 @@ class LiveSession extends EventEmitter {
     };
     this.currentViewerIds = new Set();
     this.currentViewerRankUpdatedAt = null;
+    this.pendingRoomUserUpdate = null;
+    this.roomUserUpdateTimer = null;
+    this.lastRoomUserUpdateAt = 0;
+    this.pendingPresenceUsers = new Map();
+    this.pendingPresenceRemovedUserIds = new Set();
+    this.pendingPresenceReplaceRanking = false;
+    this.presenceBroadcastTimer = null;
+    this.lastPresenceBroadcastAt = 0;
     this.notice = "";
     this.errorCode = "";
     this.displayName = username;
@@ -184,6 +194,13 @@ class LiveSession extends EventEmitter {
     this.superLurkerPendingIds = new Set();
     this.superLurkerAlertedIds = new Set();
     this.superLurkerCheckedAt = new Map();
+    this.pipelineLatencySamplesByType = {};
+    this.secondarySummaryUpdatedAt = 0;
+    this.secondarySummaryCache = {
+      followedTodayCount: 0,
+      heartMeStats: summarizeHeartMe([]),
+      followStats: summarizeFollowStatus([])
+    };
   }
 
   async start() {
@@ -431,22 +448,11 @@ class LiveSession extends EventEmitter {
     connection.on(events.ROOM_USER || "roomUser", (data) => {
       const now = Date.now();
       const current = Number(data.viewerCount || data.userCount || 0);
-      let shouldBroadcast = false;
       if (current > 0) {
         this.viewerStats.current = current;
         this.viewerStats.peak = Math.max(this.viewerStats.peak, current);
-        shouldBroadcast = true;
       }
-      const rankedUpdate = this.updateCurrentViewerRank(data, now);
-      if (rankedUpdate !== null) {
-        shouldBroadcast = true;
-      }
-      if (shouldBroadcast) {
-        this.broadcastPresence(rankedUpdate?.users || [], {
-          replaceCurrentRanking: Boolean(rankedUpdate),
-          removedCurrentViewerIds: rankedUpdate?.removedUserIds || []
-        });
-      }
+      this.scheduleRoomUserUpdate(data, now);
     });
 
     connection.on(events.STREAM_END || "streamEnd", () => {
@@ -1065,16 +1071,35 @@ class LiveSession extends EventEmitter {
     const serverReceivedAt = pipelineTimestamp(event.serverReceivedAt);
     const persistenceStartedAt = pipelineTimestamp(event.persistenceStartedAt);
     const persistedAt = pipelineTimestamp(event.persistedAt) || Date.now();
-    this.ingestionStats.lastPipelineByType[type] = {
+    const sample = {
       collectorReceivedAt,
       collectorQueuedAt,
       serverReceivedAt,
       persistenceStartedAt,
       persistedAt,
       collectorToServerMs: collectorReceivedAt && serverReceivedAt ? Math.max(0, serverReceivedAt - collectorReceivedAt) : null,
+      collectorQueueMs: collectorReceivedAt && collectorQueuedAt ? Math.max(0, collectorQueuedAt - collectorReceivedAt) : null,
       persistenceQueueMs: serverReceivedAt && persistenceStartedAt ? Math.max(0, persistenceStartedAt - serverReceivedAt) : null,
-      persistenceWriteMs: persistenceStartedAt ? Math.max(0, persistedAt - persistenceStartedAt) : null
+      persistenceWriteMs: persistenceStartedAt ? Math.max(0, persistedAt - persistenceStartedAt) : null,
+      totalToPersistMs: collectorReceivedAt ? Math.max(0, persistedAt - collectorReceivedAt) : null
     };
+    this.ingestionStats.lastPipelineByType[type] = sample;
+    const samples = this.pipelineLatencySamplesByType[type] || [];
+    samples.push(sample);
+    if (samples.length > 300) samples.splice(0, samples.length - 300);
+    this.pipelineLatencySamplesByType[type] = samples;
+  }
+
+  pipelineLatencySnapshot() {
+    return Object.fromEntries(Object.entries(this.pipelineLatencySamplesByType).map(([type, samples]) => [
+      type,
+      {
+        collectorToServerMs: summarizeLatencyMetric(samples, "collectorToServerMs"),
+        persistenceQueueMs: summarizeLatencyMetric(samples, "persistenceQueueMs"),
+        persistenceWriteMs: summarizeLatencyMetric(samples, "persistenceWriteMs"),
+        totalToPersistMs: summarizeLatencyMetric(samples, "totalToPersistMs")
+      }
+    ]));
   }
 
   updateCollectorDiagnostics(raw) {
@@ -1121,6 +1146,7 @@ class LiveSession extends EventEmitter {
       storedByType: { ...this.ingestionStats.storedByType },
       queuedByType: { ...this.ingestionStats.queuedByType },
       lastPipelineByType: { ...this.ingestionStats.lastPipelineByType },
+      pipelineLatencyByType: this.pipelineLatencySnapshot(),
       pendingDatabaseEvents: this.pendingDatabaseEvents.length,
       criticalPersistenceQueued: this.persistenceQueues.critical.length,
       backgroundPersistenceQueued: this.persistenceQueues.background.length,
@@ -1240,11 +1266,45 @@ class LiveSession extends EventEmitter {
     return { count: this.currentViewerIds.size, users: [...changedUsers, ...removedUsers], removedUserIds };
   }
 
+  scheduleRoomUserUpdate(data, at = Date.now()) {
+    this.pendingRoomUserUpdate = { data, at };
+    if (this.roomUserUpdateTimer) return;
+    const waitMs = Math.max(0, PRESENCE_BROADCAST_INTERVAL_MS - (Date.now() - this.lastRoomUserUpdateAt));
+    this.roomUserUpdateTimer = setTimeout(() => {
+      this.roomUserUpdateTimer = null;
+      const pending = this.pendingRoomUserUpdate;
+      this.pendingRoomUserUpdate = null;
+      if (!pending || this.stoppedAt) return;
+      this.lastRoomUserUpdateAt = Date.now();
+      const rankedUpdate = this.updateCurrentViewerRank(pending.data, pending.at);
+      this.broadcastPresence(rankedUpdate?.users || [], {
+        replaceCurrentRanking: Boolean(rankedUpdate),
+        removedCurrentViewerIds: rankedUpdate?.removedUserIds || []
+      });
+    }, waitMs);
+    this.roomUserUpdateTimer.unref?.();
+  }
+
+  secondarySummary({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && now - this.secondarySummaryUpdatedAt < SECONDARY_SUMMARY_INTERVAL_MS) {
+      return this.secondarySummaryCache;
+    }
+    this.updateEstimatedWatch();
+    const users = [...this.userStats.values()];
+    this.secondarySummaryCache = {
+      followedTodayCount: users.filter((user) => user.followedToday).length,
+      heartMeStats: summarizeHeartMe(users),
+      followStats: summarizeFollowStatus(users)
+    };
+    this.secondarySummaryUpdatedAt = now;
+    return this.secondarySummaryCache;
+  }
+
   summary(message = "") {
     this.touch();
     if (message) this.notice = message;
-    this.updateEstimatedWatch();
-    const users = [...this.userStats.values()];
+    const secondary = this.secondarySummary();
     return {
       id: this.id,
       username: this.username,
@@ -1267,9 +1327,9 @@ class LiveSession extends EventEmitter {
       initialEventCount: this.initialCommentCount + this.initialGiftCount,
       giftDiamondTotal: this.giftDiamondTotal,
       shareCount: this.shareCount,
-      followedTodayCount: users.filter((user) => user.followedToday).length,
-      heartMeStats: summarizeHeartMe(users),
-      followStats: summarizeFollowStatus(users),
+      followedTodayCount: secondary.followedTodayCount,
+      heartMeStats: secondary.heartMeStats,
+      followStats: secondary.followStats,
       viewerStats: { ...this.viewerStats }
     };
   }
@@ -1292,7 +1352,7 @@ class LiveSession extends EventEmitter {
   snapshot(message = "") {
     this.touch();
     if (message) this.notice = message;
-    this.updateEstimatedWatch();
+    const secondary = this.secondarySummary({ force: true });
     const users = [...this.userStats.values()];
     const topUsers = [...users]
       .sort((a, b) => b.comments - a.comments || b.gifts - a.gifts || b.lastSeenAt - a.lastSeenAt)
@@ -1319,9 +1379,6 @@ class LiveSession extends EventEmitter {
       .sort((a, b) => b.firstJoinAt - a.firstJoinAt || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 200);
     const topGifts = this.currentTopGifts();
-    const followedTodayCount = users.filter((user) => user.followedToday).length;
-    const heartMeStats = summarizeHeartMe(users);
-    const followStats = summarizeFollowStatus(users);
 
     return {
       id: this.id,
@@ -1355,9 +1412,9 @@ class LiveSession extends EventEmitter {
       currentViewerRanking,
       visitors,
       topGifts,
-      followedTodayCount,
-      heartMeStats,
-      followStats,
+      followedTodayCount: secondary.followedTodayCount,
+      heartMeStats: secondary.heartMeStats,
+      followStats: secondary.followStats,
       viewerStats: this.viewerStats,
       ingestionDiagnostics: this.ingestionDiagnosticsSnapshot(),
       recordingEnabled: this.recordingEnabled,
@@ -1430,11 +1487,31 @@ class LiveSession extends EventEmitter {
   }
 
   broadcastPresence(users = [], options = {}) {
+    for (const user of users.filter(Boolean)) this.pendingPresenceUsers.set(user.userId, user);
+    for (const userId of options.removedCurrentViewerIds || []) this.pendingPresenceRemovedUserIds.add(userId);
+    this.pendingPresenceReplaceRanking ||= Boolean(options.replaceCurrentRanking);
+    if (this.presenceBroadcastTimer) return;
+    const waitMs = Math.max(0, PRESENCE_BROADCAST_INTERVAL_MS - (Date.now() - this.lastPresenceBroadcastAt));
+    this.presenceBroadcastTimer = setTimeout(() => this.flushPresenceBroadcast(), waitMs);
+    this.presenceBroadcastTimer.unref?.();
+  }
+
+  flushPresenceBroadcast() {
+    if (this.presenceBroadcastTimer) clearTimeout(this.presenceBroadcastTimer);
+    this.presenceBroadcastTimer = null;
+    if (this.stoppedAt) return;
+    const users = [...this.pendingPresenceUsers.values()];
+    const removedCurrentViewerIds = [...this.pendingPresenceRemovedUserIds];
+    const replaceCurrentRanking = this.pendingPresenceReplaceRanking;
+    this.pendingPresenceUsers.clear();
+    this.pendingPresenceRemovedUserIds.clear();
+    this.pendingPresenceReplaceRanking = false;
+    this.lastPresenceBroadcastAt = Date.now();
     this.broadcast("presence", {
       summary: this.summary(),
-      users: users.filter(Boolean).map((user) => this.realtimeUser(user)),
-      replaceCurrentRanking: Boolean(options.replaceCurrentRanking),
-      removedCurrentViewerIds: options.removedCurrentViewerIds || []
+      users: users.map((user) => this.realtimeUser(user)),
+      replaceCurrentRanking,
+      removedCurrentViewerIds
     });
   }
 
@@ -1461,6 +1538,10 @@ class LiveSession extends EventEmitter {
   stop(message = "停止しました。") {
     if (this.stoppedAt) return;
     this.stoppedAt = Date.now();
+    if (this.roomUserUpdateTimer) clearTimeout(this.roomUserUpdateTimer);
+    if (this.presenceBroadcastTimer) clearTimeout(this.presenceBroadcastTimer);
+    this.roomUserUpdateTimer = null;
+    this.presenceBroadcastTimer = null;
     this.status = this.status === "ended" ? "ended" : "stopped";
     if (this.connection?.disconnect) {
       Promise.resolve(this.connection.disconnect()).catch(() => {});
@@ -2012,6 +2093,23 @@ function pipelineTimestamp(value) {
   if (Number.isFinite(numeric) && numeric > 0) return numeric;
   const parsed = Date.parse(String(value || ""));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function summarizeLatencyMetric(samples = [], field = "") {
+  const values = samples
+    .map((sample) => Number(sample?.[field]))
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((left, right) => left - right);
+  if (!values.length) return { count: 0, latest: null, average: null, p95: null, max: null };
+  const latest = Number(samples.at(-1)?.[field]);
+  const percentileIndex = Math.min(values.length - 1, Math.ceil(values.length * 0.95) - 1);
+  return {
+    count: values.length,
+    latest: Number.isFinite(latest) ? Math.round(latest) : null,
+    average: Math.round(values.reduce((total, value) => total + value, 0) / values.length),
+    p95: Math.round(values[percentileIndex]),
+    max: Math.round(values.at(-1))
+  };
 }
 
 function pipelineTimestamps(data = {}) {

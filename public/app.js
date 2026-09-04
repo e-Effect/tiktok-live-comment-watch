@@ -169,6 +169,8 @@ let snapshotFetchTick = 0;
 let clockRenderTick = 0;
 const realtimeRenderState = new Map();
 const lastHeavyRealtimeRenderAt = new Map();
+const lastRealtimeListRebuildAt = new Map();
+const realtimeListRebuildTimers = new Map();
 let giftRankingRequest = 0;
 let giftRankingRefreshTimer = null;
 let visitorDemoActive = false;
@@ -589,6 +591,7 @@ function renderSelectedSessionClock() {
   renderConnectionDetails(snapshot);
   renderMetrics(snapshot);
   if (clockRenderTick % 5 === 0) {
+    rebuildRealtimeWatchLists(snapshot, selected.userCache || new Map());
     renderReport(snapshot);
     renderWatchers(snapshot.topWatchers || []);
     renderSilentLongWatchers(snapshot.silentLongWatchers || []);
@@ -604,6 +607,10 @@ function closeSession(sessionId, { forget } = { forget: false }) {
   if (pendingRender?.timer) clearTimeout(pendingRender.timer);
   realtimeRenderState.delete(sessionId);
   lastHeavyRealtimeRenderAt.delete(sessionId);
+  lastRealtimeListRebuildAt.delete(sessionId);
+  const listTimer = realtimeListRebuildTimers.get(sessionId);
+  if (listTimer) clearTimeout(listTimer);
+  realtimeListRebuildTimers.delete(sessionId);
   sessions.delete(sessionId);
 
   if (selectedSessionId === sessionId) {
@@ -1666,9 +1673,9 @@ function applyRealtimePayload(sessionId, type, payload) {
   }
   if (Array.isArray(payload?.topGifts)) next.topGifts = payload.topGifts;
 
-  rebuildRealtimeLists(next, cache);
   session.snapshot = next;
   scheduleRealtimeRender(sessionId, type);
+  scheduleRealtimeListRebuild(sessionId);
 }
 
 function scheduleRealtimeRender(sessionId, type = "status") {
@@ -1691,6 +1698,24 @@ function scheduleRealtimeRender(sessionId, type = "status") {
     }, delayMs);
   }
   realtimeRenderState.set(sessionId, current);
+}
+
+function scheduleRealtimeListRebuild(sessionId) {
+  if (realtimeListRebuildTimers.has(sessionId)) return;
+  const lastRebuildAt = Number(lastRealtimeListRebuildAt.get(sessionId) || Date.now());
+  const waitMs = Math.max(0, 1000 - (Date.now() - lastRebuildAt));
+  const timer = setTimeout(() => {
+    realtimeListRebuildTimers.delete(sessionId);
+    const session = sessions.get(sessionId);
+    if (!session?.snapshot) return;
+    rebuildRealtimeLists(session.snapshot, session.userCache || new Map());
+    lastRealtimeListRebuildAt.set(sessionId, Date.now());
+    renderSessionCards();
+    if (selectedSessionId === sessionId) {
+      renderSelectedSession({ dirtyTypes: new Set(["lists"]) });
+    }
+  }, waitMs);
+  realtimeListRebuildTimers.set(sessionId, timer);
 }
 
 function prependRealtimeEvent(items, event) {
@@ -1846,7 +1871,6 @@ function updateCachedWatchTimes(session) {
       confirmedWatchSeconds: clientConfirmedWatchSeconds(user, now)
     });
   }
-  rebuildRealtimeWatchLists(session.snapshot, session.userCache);
 }
 
 function clientConfirmedWatchSeconds(user, now = Date.now()) {
@@ -1871,6 +1895,7 @@ function renderSnapshot(snapshot, options = {}) {
   session.snapshot = snapshot;
   if (!options.preserveUserCache) seedSessionUserCache(session, snapshot);
   sessions.set(snapshot.id, session);
+  lastRealtimeListRebuildAt.set(snapshot.id, Date.now());
 
   if (!selectedSessionId) selectedSessionId = snapshot.id;
   if (snapshot.username && !snapshot.preview) {
@@ -1914,8 +1939,8 @@ function renderSelectedSession(options = {}) {
   }
   const now = Date.now();
   const lastHeavyAt = Number(lastHeavyRealtimeRenderAt.get(snapshot.id) || 0);
-  const heavyRequested = dirty("comment", "gift", "share", "presence", "status");
-  const heavyDue = fullRender || dirty("status") || (heavyRequested && now - lastHeavyAt >= 1000);
+  const heavyRequested = dirty("comment", "gift", "share", "presence", "status", "lists");
+  const heavyDue = fullRender || dirty("status", "lists") || (heavyRequested && now - lastHeavyAt >= 1000);
   if (heavyDue) lastHeavyRealtimeRenderAt.set(snapshot.id, now);
   const cooldown = readRateLimitCooldown();
   const message = snapshot.errorCode === "rate_limited" && cooldown.active
@@ -1927,7 +1952,7 @@ function renderSelectedSession(options = {}) {
   if (fullRender || dirty("comment", "gift", "share", "presence", "status")) renderMetrics(snapshot);
   if (heavyDue) renderReport(snapshot);
   if (dirty("comment", "presence", "status")) renderComments(snapshot.comments || []);
-  if (heavyDue && dirty("comment", "gift", "presence", "status")) {
+  if (heavyDue && dirty("comment", "gift", "presence", "status", "lists")) {
     renderWatchers(snapshot.topWatchers || []);
     renderSilentLongWatchers(snapshot.silentLongWatchers || []);
     renderUsers(snapshot.topUsers || []);
@@ -2110,6 +2135,16 @@ function renderIngestionDiagnostics(diagnostics) {
     .filter(([, count]) => Number(count) > 0)
     .sort((a, b) => Number(b[1]) - Number(a[1]))
     .slice(0, 8);
+  const latency = diagnostics.pipelineLatencyByType || {};
+  const latencyText = [
+    ["コメント", latency.comment],
+    ["ギフト", latency.gift]
+  ].map(([label, item]) => {
+    const delivery = Number(item?.collectorToServerMs?.count) > 0 ? Number(item.collectorToServerMs.p95) : NaN;
+    const persistence = Number(item?.persistenceQueueMs?.count) > 0 ? Number(item.persistenceQueueMs.p95) : NaN;
+    if (!Number.isFinite(delivery) && !Number.isFinite(persistence)) return "";
+    return `${label}：受信→Render ${formatLatency(delivery)}・保存待ち ${formatLatency(persistence)}`;
+  }).filter(Boolean).join(" / ");
   ingestionDiagnosticsBody.innerHTML = `
     <div class="ingestion-diagnostics-grid">
       <strong>種類</strong><strong>TikFinity</strong><strong>Render</strong><strong>帳簿</strong>
@@ -2121,8 +2156,14 @@ function renderIngestionDiagnostics(diagnostics) {
       `).join("")}
     </div>
     <p>保存待ち ${formatNumber(diagnostics.pendingDatabaseEvents || 0)}件・重複除外 ${formatNumber(diagnostics.duplicate || 0)}件</p>
+    ${latencyText ? `<p>直近最大300件の95%値　${escapeHtml(latencyText)}</p>` : ""}
     ${unknown.length ? `<p>未対応イベント: ${unknown.map(([name, count]) => `${escapeHtml(name)} ${formatNumber(count)}`).join("、")}</p>` : ""}
   `;
+}
+
+function formatLatency(value) {
+  if (!Number.isFinite(value)) return "-";
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}秒` : `${Math.round(value)}ms`;
 }
 
 async function refreshServerState() {
