@@ -87,6 +87,16 @@ test("inbox removal and idempotent listener totals use the same SQL transaction"
   assert.match(sql,/FROM inserted WHERE user_id <> ''/);
 });
 
+test("failed recovery remains visible in diagnostics", async () => {
+  const store=new EventStore();store.ready=true;
+  store.pool={query:async()=>({rows:[]})};
+  store.pendingInbox=async()=>[{session:{id:"s",username:"u",startedAt:1},event:{id:"a"}}];
+  store.recordEvent=async()=>{store.lastError="test write failure";return false;};
+  await store.recoverInbox();
+  assert.equal(store.status().inboxRecovery.lastError,"test write failure");
+  assert.equal(store.status().inboxRecovery.recovered,0);
+});
+
 test("unknown latency is excluded instead of counted as zero", () => {
   const start=source.indexOf("function summarizeLatencyMetric(");
   const end=source.indexOf("function pipelineTimestamps(",start);
