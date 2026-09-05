@@ -303,6 +303,7 @@ class LiveSession extends EventEmitter {
         id: data.msgId || randomUUID(),
         type: "join",
         ...person,
+        ...pipelineTimestamps(data),
         at,
         source: this.currentEventSource()
       });
@@ -317,6 +318,7 @@ class LiveSession extends EventEmitter {
         id: data.msgId || randomUUID(),
         type: "follow",
         ...person,
+        ...pipelineTimestamps(data),
         at,
         source: this.currentEventSource()
       });
@@ -337,6 +339,7 @@ class LiveSession extends EventEmitter {
           id: data.msgId || randomUUID(),
           type: "follow",
           ...person,
+          ...pipelineTimestamps(data),
           at,
           source: this.currentEventSource()
         });
@@ -360,6 +363,7 @@ class LiveSession extends EventEmitter {
         id: data.msgId || randomUUID(),
         type: "like",
         ...person,
+        ...pipelineTimestamps(data),
         likeCount: Number.isFinite(likeCount) ? Math.max(0, likeCount) : 0,
         totalLikes: Number.isFinite(totalLikes) ? Math.max(0, totalLikes) : 0,
         at,
@@ -862,11 +866,9 @@ class LiveSession extends EventEmitter {
     event.serverReceivedAt ||= Date.now();
     publishRealtimeIntegrationEvent(this, event);
     if (event?.type !== "super_lurker_alert") this.checkSuperLurker(event).catch(() => {});
-    if (!eventStore.status().ready) {
-      this.queueDatabaseEvent(event);
-    } else {
-      this.enqueuePersistence(event);
-    }
+    this.queueDatabaseEvent(event);
+    // Coalesce this HTTP batch into one durable append, without holding SSE.
+    queueMicrotask(() => this.flushPendingDatabaseEvents().catch(() => {}));
     liveCue.publish(event);
   }
 
@@ -880,9 +882,6 @@ class LiveSession extends EventEmitter {
 
   drainPersistenceQueue() {
     if (this.persistenceWorkerPromise) return this.persistenceWorkerPromise;
-    if (this.databaseFlushPromise) {
-      return this.databaseFlushPromise.finally(() => this.drainPersistenceQueue()).catch(() => {});
-    }
     const worker = (async () => {
       while (this.persistenceQueues.critical.length || this.persistenceQueues.background.length) {
         const event = this.persistenceQueues.critical.shift() || this.persistenceQueues.background.shift();
@@ -925,43 +924,32 @@ class LiveSession extends EventEmitter {
   }
 
   async awaitCollectorDurability() {
-    // Acknowledge the collector as soon as the database is available. Event
-    // persistence continues in the ordered background queue. Waiting for a
-    // A busy entry/like burst here previously blocked the collector's only HTTP request
-    // and made later live comments appear many seconds late.
-    this.flushPendingDatabaseEvents().catch(() => {});
-    return eventStore.status().ready;
+    if (!this.recordingEnabled) return true;
+    // Only acknowledge a COMMITTED inbox write, never just a healthy DB.
+    // Listener aggregation continues independently after this returns.
+    await this.flushPendingDatabaseEvents();
+    return eventStore.status().ready && this.pendingDatabaseEvents.length === 0;
   }
 
   queueDatabaseEvent(event) {
     const key = `${event?.type || ""}:${event?.id || ""}`;
     if (key !== ":" && this.pendingDatabaseEvents.some((item) => item.key === key)) return false;
     this.pendingDatabaseEvents.push({ key, event: { ...event } });
-    if (this.pendingDatabaseEvents.length > 10000) this.pendingDatabaseEvents.shift();
     this.noteIngestion("queued", event?.type);
     return true;
   }
 
   async flushPendingDatabaseEvents() {
     if (this.databaseFlushPromise) return this.databaseFlushPromise;
-    if (this.persistenceWorkerPromise) {
-      return this.persistenceWorkerPromise
-        .catch(() => {})
-        .then(() => this.flushPendingDatabaseEvents());
-    }
     this.databaseFlushPromise = (async () => {
       while (this.pendingDatabaseEvents.length && eventStore.status().ready) {
-        const criticalIndex = this.pendingDatabaseEvents.findIndex((item) => CRITICAL_PERSISTENCE_TYPES.has(item.event?.type));
-        const pendingIndex = criticalIndex >= 0 ? criticalIndex : 0;
-        const pending = this.pendingDatabaseEvents[pendingIndex];
-        pending.event.persistenceStartedAt = Date.now();
-        const stored = await eventStore.recordEvent(this, pending.event);
-        pending.event.persistedAt = Date.now();
-        if (!stored) break;
-        this.pendingDatabaseEvents.splice(pendingIndex, 1);
-        this.noteIngestion("stored", pending.event?.type);
-        this.notePipelineLatency(pending.event);
-        cacheListenerAvatar(pending.event.userId, pending.event.avatarUrl).catch(() => {});
+        const batch = this.pendingDatabaseEvents.slice(0, 250);
+        if (!await eventStore.stageEvents(this, batch.map(item => item.event))) break;
+        this.pendingDatabaseEvents.splice(0, batch.length);
+        for (const pending of batch) {
+          pending.event.durableAt = Date.now();
+          this.enqueuePersistence(pending.event);
+        }
       }
       return this.pendingDatabaseEvents.length === 0;
     })();
@@ -1011,6 +999,8 @@ class LiveSession extends EventEmitter {
       serverReceivedAt,
       persistenceStartedAt,
       persistedAt,
+      durableCommitMs: serverReceivedAt && pipelineTimestamp(event.durableAt)
+        ? Math.max(0, event.durableAt - serverReceivedAt) : null,
       collectorToServerMs: collectorReceivedAt && serverReceivedAt ? Math.max(0, serverReceivedAt - collectorReceivedAt) : null,
       collectorQueueMs: collectorReceivedAt && collectorQueuedAt ? Math.max(0, collectorQueuedAt - collectorReceivedAt) : null,
       persistenceQueueMs: serverReceivedAt && persistenceStartedAt ? Math.max(0, persistenceStartedAt - serverReceivedAt) : null,
@@ -1028,6 +1018,8 @@ class LiveSession extends EventEmitter {
     return Object.fromEntries(Object.entries(this.pipelineLatencySamplesByType).map(([type, samples]) => [
       type,
       {
+        sampleWindow: "latest-300-per-type",
+        durableCommitMs: summarizeLatencyMetric(samples, "durableCommitMs"),
         collectorToServerMs: summarizeLatencyMetric(samples, "collectorToServerMs"),
         persistenceQueueMs: summarizeLatencyMetric(samples, "persistenceQueueMs"),
         persistenceWriteMs: summarizeLatencyMetric(samples, "persistenceWriteMs"),
@@ -1806,11 +1798,13 @@ function pipelineTimestamp(value) {
 
 function summarizeLatencyMetric(samples = [], field = "") {
   const values = samples
+    .filter((sample) => sample?.[field] !== null && sample?.[field] !== undefined && sample?.[field] !== "")
     .map((sample) => Number(sample?.[field]))
     .filter((value) => Number.isFinite(value) && value >= 0)
     .sort((left, right) => left - right);
   if (!values.length) return { count: 0, latest: null, average: null, p95: null, max: null };
-  const latest = Number(samples.at(-1)?.[field]);
+  const rawLatest = samples.at(-1)?.[field];
+  const latest = rawLatest === null || rawLatest === undefined || rawLatest === "" ? NaN : Number(rawLatest);
   const percentileIndex = Math.min(values.length - 1, Math.ceil(values.length * 0.95) - 1);
   return {
     count: values.length,
@@ -2932,6 +2926,10 @@ async function maintainDatabaseConnection() {
       await session.retryPendingVisits();
       await session.flushPendingDatabaseEvents();
     }
+    await eventStore.recoverInbox([...sessions.values()]
+      .filter(session => session.pendingDatabaseEvents.length || session.persistenceWorkerPromise
+        || session.persistenceQueues.critical.length || session.persistenceQueues.background.length)
+      .map(session => session.id));
     return true;
   } finally {
     databaseRecoveryPending = false;

@@ -122,13 +122,14 @@ test("database outages reconnect and queue realtime events without full snapshot
   assert.match(serverSource, /eventStore\.ensureReady\(\)/);
   assert.match(serverSource, /queueDatabaseEvent\(event\)/);
   assert.match(serverSource, /flushPendingDatabaseEvents\(\)/);
-  assert.match(serverSource, /pendingDatabaseEvents\.length > 10000/);
+  assert.doesNotMatch(serverSource, /pendingDatabaseEvents\.length > 10000\) this\.pendingDatabaseEvents\.shift/);
   assert.match(serverSource, /const durable = incoming\.length === 0 \|\| await session\.awaitCollectorDurability\(\)/);
   assert.match(serverSource, /async awaitCollectorDurability\(\)[\s\S]*?flushPendingDatabaseEvents\(\)/);
   const durability = serverSource.match(/async awaitCollectorDurability\(\) \{[\s\S]*?\n\s*\}/)?.[0] || "";
   assert.doesNotMatch(durability, /retryPendingVisits/);
   assert.doesNotMatch(durability, /await Promise\.allSettled/);
-  assert.match(durability, /return eventStore\.status\(\)\.ready/);
+  assert.match(durability, /await this\.flushPendingDatabaseEvents\(\)/);
+  assert.match(durability, /eventStore\.status\(\)\.ready && this\.pendingDatabaseEvents\.length === 0/);
   assert.match(serverSource, /this\.persistenceQueues = \{ critical: \[\], background: \[\] \}/);
   assert.match(serverSource, /CRITICAL_PERSISTENCE_TYPES\.has\(event\?\.type\)/);
   assert.match(serverSource, /this\.persistenceQueues\.critical\.shift\(\) \|\| this\.persistenceQueues\.background\.shift\(\)/);
