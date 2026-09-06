@@ -2,6 +2,37 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventStore, rangeStart } from "../lib/event-store.js";
 
+test("visit judgments continue while enrichment is slow and enrichment stays serial", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let releaseFirst;
+  let enrichmentStarts = 0;
+  const delivered = [];
+  store.pool = { async query(sql) {
+    if (sql.includes("COUNT(DISTINCT")) return {rows:[{visitCount:3}]};
+    if (sql.includes("WITH upsert_listener AS")) {
+      enrichmentStarts += 1;
+      if (enrichmentStarts === 1) await new Promise(resolve => { releaseFirst = resolve; });
+    }
+    return {rows:[]};
+  }};
+  store.heartMeHistory = async () => ({known:true,pastCount:2,lastAt:123});
+  const session = {id:"session",username:"streamer"};
+  const options = {deferEnrichment:true,onEnriched:summary=>delivered.push(summary)};
+  const first = await store.recordVisit(session,{userId:"a"},options);
+  const second = await store.recordVisit(session,{userId:"b"},options);
+  assert.equal(first.visitHistoryKnown,true);
+  assert.equal(second.visitCount,3);
+  assert.equal(delivered.length,0);
+  assert.equal(enrichmentStarts,1);
+  assert.equal(store.visitEnrichmentPending,2);
+  releaseFirst();
+  await store.visitEnrichmentTail;
+  assert.equal(delivered.length,2);
+  assert.equal(delivered[0].pastHeartMeGiftCount,2);
+  assert.equal(store.visitEnrichmentPending,0);
+});
+
 test("live event persistence retries a transient PostgreSQL deadlock", async () => {
   const store = new EventStore();
   store.ready = true;

@@ -508,8 +508,13 @@ class LiveSession extends EventEmitter {
 
   recordVisit(user, at, source) {
     if (!this.recordingEnabled) return;
+    if (this.pendingVisitChecks.has(user.userId)) {
+      this.enqueueVisitCheck(user.userId, ["comment", "gift"].includes(source));
+      return;
+    }
     this.pendingVisitChecks.set(user.userId, {
       running: false,
+      queuedAt: Date.now(),
       visit: {
         userId: user.userId,
         uniqueId: user.uniqueId || "",
@@ -524,6 +529,7 @@ class LiveSession extends EventEmitter {
 
   enqueueVisitCheck(userId, critical = false) {
     if (!userId || !this.pendingVisitChecks.has(userId)) return;
+    if (this.pendingVisitChecks.get(userId).running) return;
     if (critical) {
       const backgroundIndex = this.visitCheckQueues.background.indexOf(userId);
       if (backgroundIndex >= 0) this.visitCheckQueues.background.splice(backgroundIndex, 1);
@@ -560,14 +566,18 @@ class LiveSession extends EventEmitter {
     try {
       let judgmentApplied = false;
       const summary = await eventStore.recordVisit(this, pending.visit, {
+        deferEnrichment: true,
+        onEnriched: (enriched) => {
+          this.applyVisitSummary(userId, pending.visit, enriched, { includeHeartMe: true });
+        },
         onJudgment: (judgment) => {
+          this.lastVisitJudgmentWaitMs = Date.now() - pending.queuedAt;
+          this.maxVisitJudgmentWaitMs = Math.max(this.maxVisitJudgmentWaitMs || 0, this.lastVisitJudgmentWaitMs);
           judgmentApplied = this.applyVisitSummary(userId, pending.visit, judgment, { includeHeartMe: false });
         },
       });
       if (!judgmentApplied) {
-        if (!this.applyVisitSummary(userId, pending.visit, summary, { includeHeartMe: true })) return false;
-      } else {
-        this.applyVisitSummary(userId, pending.visit, summary, { includeHeartMe: true });
+        if (!this.applyVisitSummary(userId, pending.visit, summary, { includeHeartMe: false })) return false;
       }
       const known = Boolean(summary?.visitHistoryKnown);
       if (known) this.pendingVisitChecks.delete(userId);
@@ -1078,6 +1088,9 @@ class LiveSession extends EventEmitter {
       backgroundPersistenceQueued: this.persistenceQueues.background.length,
       criticalVisitChecksQueued: this.visitCheckQueues.critical.length,
       backgroundVisitChecksQueued: this.visitCheckQueues.background.length,
+      lastVisitJudgmentWaitMs: this.lastVisitJudgmentWaitMs || 0,
+      maxVisitJudgmentWaitMs: this.maxVisitJudgmentWaitMs || 0,
+      oldestVisitCheckWaitMs: Math.max(0, ...[...this.pendingVisitChecks.values()].map((pending) => Date.now() - (pending.queuedAt || Date.now()))),
       collector: this.collectorDiagnostics ? {
         ...this.collectorDiagnostics,
         receivedByType: { ...this.collectorDiagnostics.receivedByType },
@@ -2403,7 +2416,8 @@ const server = createServer(async (request, response) => {
       },
       database: {
         ...eventStore.status(),
-        visitJudgmentMode: "early-result-v2",
+        visitJudgmentMode: "detached-enrichment-v3",
+        visitEnrichmentPending: eventStore.visitEnrichmentPending,
         queuedEvents: [...sessions.values()].reduce((total, session) => total
           + session.pendingDatabaseEvents.length
           + session.persistenceQueues.critical.length
