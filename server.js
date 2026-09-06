@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
+import { parseBirthdayComment, validBirthday, birthdayLabel } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
 import {
@@ -43,7 +44,7 @@ const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_H
 const COLLECTOR_RECEIVING_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_RECEIVING_STALE_MS || 15 * 60 * 1000);
 const COLLECTOR_NEW_LIVE_GAP_MS = Number(globalThis.process?.env?.COLLECTOR_NEW_LIVE_GAP_MS || 3 * 60 * 60 * 1000);
 const SUPER_LURKER_ALERT_TYPES = new Set(["join"]);
-const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert"]);
+const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert", "birthday_alert"]);
 const CRITICAL_PERSISTENCE_TYPES = new Set(["comment", "gift", "first_visit_claim_alert", "super_lurker_alert"]);
 const PRESENCE_BROADCAST_INTERVAL_MS = Number(globalThis.process?.env?.PRESENCE_BROADCAST_INTERVAL_MS || 750);
 const SECONDARY_SUMMARY_INTERVAL_MS = Number(globalThis.process?.env?.SECONDARY_SUMMARY_INTERVAL_MS || 1000);
@@ -684,6 +685,7 @@ class LiveSession extends EventEmitter {
     this.userStats.set(current.userId, current);
     this.emitNormalized({ ...comment, type: "comment" });
     this.checkFirstVisitClaim(comment).catch(() => {});
+    this.checkBirthday(comment).catch(() => {});
     this.broadcast("comment", {
       comment: this.decorateUserEvent(comment),
       summary: this.summary(),
@@ -763,6 +765,25 @@ class LiveSession extends EventEmitter {
       users: [this.realtimeUser(user)]
     });
     return true;
+  }
+
+  async checkBirthday(comment) {
+    if (!this.recordingEnabled || comment.source === "initial") return;
+    const birthday = parseBirthdayComment(comment.text);
+    if (!birthday || isAnonymousListenerIdentity(comment)) return;
+    this.birthdaySeen ||= new Set();
+    const key = `${comment.userId}:${birthday}`;
+    if (this.birthdaySeen.has(key)) return;
+    this.birthdaySeen.add(key);
+    try {
+      const result = await eventStore.registerBirthday(String(comment.userId),birthday);
+      const text = result.birthday === birthday
+        ? `誕生日を${birthdayLabel(birthday)}で登録しました！`
+        : `登録済みは${birthdayLabel(result.birthday)}です。${birthdayLabel(birthday)}への変更は台帳で確認してください。`;
+      this.emitNormalized({id:randomUUID(),type:"birthday_alert",userId:comment.userId,
+        uniqueId:comment.uniqueId||"",nickname:comment.nickname||"TikTokユーザー",avatarUrl:comment.avatarUrl||"",
+        text,at:Date.now(),source:comment.source||"live"});
+    } catch (error) { this.birthdaySeen.delete(key); throw error; }
   }
 
   async checkFirstVisitClaim(comment) {
@@ -2696,6 +2717,21 @@ const server = createServer(async (request, response) => {
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
+    return;
+  }
+
+  const birthdayMatch = url.pathname.match(/^\/api\/listeners\/([^/]+)\/birthday$/);
+  if (birthdayMatch) {
+    if (!requireListenerAdmin(request,response)) return;
+    try {
+      const userId=decodeURIComponent(birthdayMatch[1]);
+      if (request.method === "GET") sendJson(response,200,await eventStore.listenerBirthday(userId));
+      else if (request.method === "PUT") {
+        const {birthday}=await readBody(request);
+        if (!validBirthday(birthday)) { sendJson(response,400,{error:"正しい月日を入力してください"}); return; }
+        sendJson(response,200,await eventStore.registerBirthday(userId,birthday,true));
+      } else sendJson(response,405,{error:"Method not allowed"});
+    } catch (error) { sendJson(response,500,{error:shortError(error)}); }
     return;
   }
 

@@ -491,8 +491,40 @@ function renderDetail(data) {
     ${historySection("comments",data.commentHistory)}
     <section class="detail-section"><h3>過去に確認した名前</h3><div>${(data.aliases||[]).map(a=>`<div class="history-item"><strong>${escapeHtml(a.nickname||"")}</strong> <small>${a.uniqueId?`@${escapeHtml(a.uniqueId)}`:""}</small><p>${formatDate(a.firstSeenAt)} ～ ${formatDate(a.lastSeenAt)}</p></div>`).join("")||'<p class="empty">別名履歴なし</p>'}</div></section>`;
   hydrateAvatars(el.detailContent);
+  const birthdaySection = document.createElement("section");
+  birthdaySection.className="detail-section";
+  birthdaySection.innerHTML='<h3>誕生日（月日）</h3><p data-birthday-status>読み込み中…</p><label>月 <input data-birthday-month type="number" min="1" max="12" style="width:5em"></label> <label>日 <input data-birthday-day type="number" min="1" max="31" style="width:5em"></label> <button type="button" data-birthday-save>誕生日を保存・変更確認</button>';
+  el.detailContent.querySelector('.detail-hero').after(birthdaySection);
+  loadBirthdaySection(birthdaySection,item.userId);
   document.getElementById("detailForm")?.addEventListener("submit", saveDetail);
   el.detailContent.querySelectorAll("[data-load-history]").forEach((button)=>button.addEventListener("click",()=>loadMoreHistory(button.dataset.loadHistory)));
+}
+
+async function loadBirthdaySection(section,userId) {
+  const status=section.querySelector('[data-birthday-status]');
+  const month=section.querySelector('[data-birthday-month]');
+  const day=section.querySelector('[data-birthday-day]');
+  const button=section.querySelector('[data-birthday-save]');
+  const url=`/api/listeners/${encodeURIComponent(userId)}/birthday`;
+  button.disabled=true;
+  try {
+    const response=await api(url); if(!response.ok) throw new Error('誕生日を取得できませんでした');
+    const data=await response.json();
+    status.textContent=data.birthday?`登録済み：${data.birthday.replace('-', '月')}日`:'未登録';
+    if(data.pendingBirthday) status.textContent+=` ／変更希望：${data.pendingBirthday.replace('-', '月')}日（下の保存ボタンで承認）`;
+    const value=data.pendingBirthday||data.birthday;
+    if(value) [month.value,day.value]=value.split('-').map(Number);
+    button.disabled=false;
+  } catch(error) {status.textContent=error.message;}
+  button.addEventListener('click',async()=>{
+    button.disabled=true;
+    try {
+      const birthday=`${String(Number(month.value)).padStart(2,'0')}-${String(Number(day.value)).padStart(2,'0')}`;
+      const response=await api(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({birthday})});
+      const data=await response.json();if(!response.ok)throw new Error(data.error||'保存できませんでした');
+      status.textContent=`保存しました：${Number(month.value)}月${Number(day.value)}日`;
+    }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
+  });
 }
 
 function historySection(kind, history = {}) {
