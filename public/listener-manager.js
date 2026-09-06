@@ -200,6 +200,9 @@ async function refreshListeners(options = {}) {
       ? `${number.format(Math.max(0, end))}人以上（${number.format(start)}～${number.format(Math.max(start, end))}人を表示）`
       : `${number.format(state.listenerTotal)}人中 ${number.format(start)}～${number.format(Math.max(start, end))}人`;
     el.listenerPage.textContent = `${number.format(state.listenerPage + 1)}ページ目`;
+    el.resultCount.textContent += data.rankingGeneratedAt
+      ? ` ・ランク集計：${formatDate(data.rankingGeneratedAt)}`
+      : " ・ランク未計算（ランク順を選ぶと計算）";
     el.listenerPrev.disabled = state.listenerPage <= 0;
     el.listenerNext.disabled = (state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal;
     el.emptyState.hidden = state.items.length > 0;
@@ -297,7 +300,7 @@ function contributionCell(item) {
 }
 
 function contributionLine(label, rank, score, position) {
-  const normalized = String(rank || "集計不足");
+  const normalized = String(rank || "未計算");
   const tierClass = /^[SABCD]$/.test(normalized) ? `tier-${normalized.toLowerCase()}` : "tier-none";
   const details = Number(position) > 0 ? `${number.format(score||0)}点・${number.format(position)}位` : Number(score) < 0 ? `${number.format(score)}点` : normalized;
   return `<span class="contribution-line"><small>${label}</small><b class="rank-badge ${tierClass}">${escapeHtml(normalized)}</b><em>${escapeHtml(details)}</em></span>`;
@@ -546,7 +549,7 @@ async function saveDetail(event) {
 function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId="";state.detailData=null}
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
 function textMetric(label,value){return `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`}
-function contributionDetail(item,range){const recent=range==="recent";const rank=recent?item.recentContributionRank:item.contributionRank;const score=recent?item.recentContributionScore:item.contributionScore;const position=recent?item.recentContributionPosition:item.contributionPosition;const total=recent?item.recentContributionTotal:item.contributionTotal;return Number(position)>0?`${rank}・${number.format(score||0)}点・${number.format(position)}/${number.format(total)}位`:Number(score)<0?`${rank}・${number.format(score)}点`:String(rank||"集計不足")}
+function contributionDetail(item,range){const recent=range==="recent";const rank=recent?item.recentContributionRank:item.contributionRank;const score=recent?item.recentContributionScore:item.contributionScore;const position=recent?item.recentContributionPosition:item.contributionPosition;const total=recent?item.recentContributionTotal:item.contributionTotal;return Number(position)>0?`${rank}・${number.format(score||0)}点・${number.format(position)}/${number.format(total)}位`:Number(score)<0?`${rank}・${number.format(score)}点`:String(rank||"未計算")}
 function classifyLurkingTotals(totals){const visits=Math.max(0,Number(totals.visits||0));const comments=Math.max(0,Number(totals.comments||0));const coins=Math.max(0,Number(totals.coins||0));const rawCommentsPerVisit=visits?comments/visits:0;const rawCoinsPerVisit=visits?coins/visits:0;return{isLurker:visits>=5&&rawCommentsPerVisit<.5&&rawCoinsPerVisit<10,commentsPerVisit:Math.round(rawCommentsPerVisit*100)/100,allCoinsPerVisit:Math.round(rawCoinsPerVisit*100)/100}}
 function followBadge(status){const normalized=status==="following"?"following":status==="not_following"?"not-following":"unknown";const label=normalized==="following"?"フォロー中":normalized==="not-following"?"未フォロー":"未確認";return `<span class="follow-badge ${normalized}">${label}</span>`}
 function profileCount(value){return value===null||value===undefined?'<span class="profile-missing">未取得</span>':number.format(value)}

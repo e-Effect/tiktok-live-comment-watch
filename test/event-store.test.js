@@ -241,6 +241,7 @@ test("listener contribution rankings combine lifetime and recent activity and re
   let calls = 0;
   store.pool = {
     async query(sql, values) {
+      if (sql.includes("shared_app_states")) return {rows:[]};
       calls += 1;
       assert.match(sql, /INTERVAL '30 days'/);
       assert.match(sql, /recent_visits/);
@@ -275,7 +276,24 @@ test("normal listener pages do not launch a cold contribution-rank refresh", asy
 
   const result = await store.listenerContributionRankings({ waitForRefresh:false });
   assert.equal(result.generatedAt, 0);
-  assert.equal(calls, 0);
+  assert.equal(calls, 1); // One indexed snapshot lookup, not an aggregation.
+});
+
+test("contribution snapshots survive a new store and restore without aggregation", async () => {
+  let saved=null, aggregates=0, restores=0;
+  const pool={async query(sql,args){
+    if(sql.includes('SELECT state FROM shared_app_states')){restores++;return {rows:saved?[{state:saved}]:[]};}
+    if(sql.includes('INSERT INTO shared_app_states')){saved=JSON.parse(args[1]);return {rows:[]};}
+    aggregates++;return {rows:[{user_id:'known',comments:20,coins:100,visits:3}]};
+  }};
+  const first=new EventStore();first.ready=true;first.pool=pool;
+  const ranked=await first.listenerContributionRankings();
+  assert.ok(saved.generatedAt>0);assert.equal(aggregates,1);
+  const second=new EventStore();second.ready=true;second.pool=pool;
+  const restored=await second.listenerContributionRankings({waitForRefresh:false});
+  assert.deepEqual(restored.byUserId.get('known'),JSON.parse(JSON.stringify(ranked.byUserId.get('known'))));
+  await second.listenerContributionRankings({waitForRefresh:false});
+  assert.equal(aggregates,1);assert.equal(restores,2);
 });
 
 test("listener totals are counted in the background and then reused", async () => {
