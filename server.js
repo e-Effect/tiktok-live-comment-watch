@@ -547,9 +547,27 @@ class LiveSession extends EventEmitter {
     if (this.visitCheckWorkerPromise) return this.visitCheckWorkerPromise;
     const worker = (async () => {
       while (this.visitCheckQueues.critical.length || this.visitCheckQueues.background.length) {
-        const userId = this.visitCheckQueues.critical.shift() || this.visitCheckQueues.background.shift();
-        this.visitCheckQueuedIds.delete(userId);
-        await this.runVisitCheck(userId).catch(() => false);
+        const batch = [];
+        while (batch.length < 25 && (this.visitCheckQueues.critical.length || this.visitCheckQueues.background.length)) {
+          // Alternate so a continuous comment stream cannot starve entry-only listeners.
+          const queues = batch.length % 2 ? [this.visitCheckQueues.background,this.visitCheckQueues.critical] : [this.visitCheckQueues.critical,this.visitCheckQueues.background];
+          const userId = queues[0].shift() || queues[1].shift();
+          this.visitCheckQueuedIds.delete(userId);
+          const pending = this.pendingVisitChecks.get(userId);
+          if (!pending || pending.running) continue;
+          pending.running = true;
+          batch.push({userId,pending});
+        }
+        if (!batch.length) continue;
+        try {
+          const summaries = await eventStore.recordVisitBatch(this,batch.map(item=>item.pending.visit));
+          for (const {userId,pending} of batch) {
+            pending.running = false;
+            if (summaries.has(userId)) await this.runVisitCheck(userId,summaries.get(userId)).catch(()=>false);
+          }
+        } finally {
+          for (const {pending} of batch) pending.running = false;
+        }
       }
     })();
     this.visitCheckWorkerPromise = worker;
@@ -560,13 +578,14 @@ class LiveSession extends EventEmitter {
     return worker;
   }
 
-  async runVisitCheck(userId) {
+  async runVisitCheck(userId, precomputed) {
     const pending = this.pendingVisitChecks.get(userId);
     if (!pending || pending.running || !this.recordingEnabled) return false;
     pending.running = true;
     try {
       let judgmentApplied = false;
       const summary = await eventStore.recordVisit(this, pending.visit, {
+        precomputed,
         deferEnrichment: true,
         onEnriched: (enriched) => {
           this.applyVisitSummary(userId, pending.visit, enriched, { includeHeartMe: true });
@@ -622,7 +641,8 @@ class LiveSession extends EventEmitter {
     // queries at once. Sequential retries are background work and do not
     // compete with new LIVE comments and gifts.
     for (const userId of [...this.pendingVisitChecks.keys()]) this.enqueueVisitCheck(userId, false);
-    await this.visitCheckWorkerPromise?.catch(() => {});
+    // Maintenance must not wait for the entire live arrival queue before inbox recovery.
+    this.visitCheckWorkerPromise?.catch(() => {});
   }
 
   async heartMeHistoryFor(userId) {
@@ -2432,7 +2452,8 @@ const server = createServer(async (request, response) => {
       },
       database: {
         ...eventStore.status(),
-        visitJudgmentMode: "detached-enrichment-v3",
+        visitJudgmentMode: "isolated-batch-v4",
+        visitBatchStats: eventStore.visitBatchStats,
         firstVisitClaimPolicy: "prior-action-or-three-prior-lives-v2",
         visitEnrichmentPending: eventStore.visitEnrichmentPending,
         queuedEvents: [...sessions.values()].reduce((total, session) => total
