@@ -526,6 +526,9 @@ test("prior listener history excludes the current live and matches stable IDs pl
   store.pool = {
     async query(sql, values) {
       assert.match(sql, /WITH identity_ids AS/);
+      assert.match(sql, /e.event_type IN \('like', 'comment', 'gift'\)/);
+      assert.match(sql, /COUNT\(\*\) FILTER \(WHERE is_visit\)/);
+      assert.match(sql, /GROUP BY live_key/);
       assert.match(sql, /viewer_visits/);
       assert.match(sql, /live_events/);
       assert.match(sql, /<> \$4/);
@@ -550,6 +553,7 @@ test("prior listener history excludes the current live and matches stable IDs pl
   assert.deepEqual(history, {
     known: true,
     priorVisitCount: 4,
+    hasPriorInteraction: false,
     lastPriorVisitAt: Date.parse("2026-08-10T12:00:00Z"),
   });
 });

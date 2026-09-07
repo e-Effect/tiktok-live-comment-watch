@@ -802,21 +802,16 @@ class LiveSession extends EventEmitter {
 
     this.firstVisitClaimPendingIds.add(identityKey);
     try {
-      const current = this.userStats.get(comment.userId);
-      const history = current?.visitHistoryKnown
-        ? {
-          known: true,
-          priorVisitCount: Math.max(0, Number(current.visitCount || 0) - 1),
-          lastPriorVisitAt: current.previousVisitAt || null,
-        }
-        : await eventStore.priorListenerHistory({
+      // Entry-count caches alone cannot distinguish prior actions from entry-only visits.
+      // Look up history only for a matching first-visit claim, excluding this LIVE.
+      const history = await eventStore.priorListenerHistory({
           sessionId: this.id,
           roomId: this.roomId,
           username: this.username,
           userId: comment.userId,
           uniqueId: comment.uniqueId,
         });
-      if (!history.known || history.priorVisitCount < 1) return false;
+      if (!history.known || (!history.hasPriorInteraction && history.priorVisitCount < 3)) return false;
 
       this.firstVisitClaimAlertedIds.add(identityKey);
       const alert = {
