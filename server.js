@@ -2433,6 +2433,7 @@ const server = createServer(async (request, response) => {
       database: {
         ...eventStore.status(),
         visitJudgmentMode: "detached-enrichment-v3",
+        firstVisitClaimPolicy: "prior-action-or-three-prior-lives-v2",
         visitEnrichmentPending: eventStore.visitEnrichmentPending,
         queuedEvents: [...sessions.values()].reduce((total, session) => total
           + session.pendingDatabaseEvents.length
