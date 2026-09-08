@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
-import { parseBirthdayComment, validBirthday, birthdayLabel } from "./lib/birthday.js";
+import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
 import {
@@ -44,7 +44,7 @@ const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_H
 const COLLECTOR_RECEIVING_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_RECEIVING_STALE_MS || 15 * 60 * 1000);
 const COLLECTOR_NEW_LIVE_GAP_MS = Number(globalThis.process?.env?.COLLECTOR_NEW_LIVE_GAP_MS || 3 * 60 * 60 * 1000);
 const SUPER_LURKER_ALERT_TYPES = new Set(["join"]);
-const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert", "birthday_alert"]);
+const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert", "birthday_alert", "birthday_celebration"]);
 const CRITICAL_PERSISTENCE_TYPES = new Set(["comment", "gift", "first_visit_claim_alert", "super_lurker_alert"]);
 const PRESENCE_BROADCAST_INTERVAL_MS = Number(globalThis.process?.env?.PRESENCE_BROADCAST_INTERVAL_MS || 750);
 const SECONDARY_SUMMARY_INTERVAL_MS = Number(globalThis.process?.env?.SECONDARY_SUMMARY_INTERVAL_MS || 1000);
@@ -738,6 +738,7 @@ class LiveSession extends EventEmitter {
     user.diamonds += totalDiamonds;
     user.lastSeenAt = gift.at;
     if (normalizedGift.isHeartMe) {
+      this.checkBirthdayCelebration(normalizedGift).catch(() => {});
       user.heartMeGiftCount = Number(user.heartMeGiftCount || 0) + repeatCount;
       user.heartMeToday = true;
       user.lastHeartMeAt = gift.at;
@@ -784,6 +785,17 @@ class LiveSession extends EventEmitter {
       summary: this.summary(),
       users: [this.realtimeUser(user)]
     });
+    return true;
+  }
+
+  async checkBirthdayCelebration(gift) {
+    if (!this.recordingEnabled || !gift.isHeartMe || gift.source === "initial" || isAnonymousListenerIdentity(gift)) return false;
+    const day=japanCalendarDay(gift.at || Date.now());
+    if (day !== japanCalendarDay()) return false; // Do not celebrate a replay from yesterday.
+    if (!await eventStore.claimBirthdayCelebration(this.username,String(gift.userId),day)) return false;
+    this.emitNormalized({id:`birthday-celebration:${gift.userId}:${day}`,type:"birthday_celebration",
+      userId:gift.userId,uniqueId:gift.uniqueId||"",nickname:gift.nickname||"TikTokユーザー",avatarUrl:gift.avatarUrl||"",
+      text:"今日はあなたの誕生日！\nお誕生日おめでとう！🎉",at:Date.now(),source:gift.source||"live"});
     return true;
   }
 
@@ -2455,6 +2467,7 @@ const server = createServer(async (request, response) => {
         visitJudgmentMode: "isolated-batch-v4",
         visitBatchStats: eventStore.visitBatchStats,
         firstVisitClaimPolicy: "prior-action-or-three-prior-lives-v2",
+        birthdayCelebrationPolicy: "jst-heart-me-once-daily-v1",
         visitEnrichmentPending: eventStore.visitEnrichmentPending,
         queuedEvents: [...sessions.values()].reduce((total, session) => total
           + session.pendingDatabaseEvents.length
