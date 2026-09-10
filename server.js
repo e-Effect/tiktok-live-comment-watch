@@ -20,6 +20,7 @@ import { liveProviderInfo, loadLiveProvider } from "./lib/live-provider.js";
 import { normalizeCollectorEvent } from "./lib/external-collector.js";
 import { isFirstVisitClaim } from "./lib/first-visit-claim.js";
 import { shouldRotateCollectorSession } from "./lib/external-collector.js";
+import { createAvatarWorkCache } from "./lib/avatar-work-cache.js";
 import { optimizeAvatarImage } from "./lib/avatar-image.js";
 import { tiktokProfileFromUser } from "./lib/tiktok-profile.js";
 
@@ -67,7 +68,7 @@ const eventStore = new EventStore({
   connectionString: globalThis.process?.env?.DATABASE_URL || "",
   ssl: String(globalThis.process?.env?.DATABASE_SSL || "").toLowerCase() === "false" ? false : undefined
 });
-const avatarCachePending = new Set();
+const runAvatarCacheWork = createAvatarWorkCache();
 const liveCue = new LiveCueForwarder({
   endpoint: globalThis.process?.env?.LIVECUE_ENDPOINT || "",
   channelId: globalThis.process?.env?.LIVECUE_CHANNEL_ID || "",
@@ -2471,6 +2472,7 @@ const server = createServer(async (request, response) => {
         visitJudgmentMode: "isolated-batch-v4",
         visitBatchStats: eventStore.visitBatchStats,
         firstVisitClaimPolicy: "prior-action-or-three-prior-lives-v2",
+        avatarWorkPolicy: "bounded-2-ttl-v1",
         birthdayCelebrationPolicy: "jst-heart-me-once-daily-v1",
         visitEnrichmentPending: eventStore.visitEnrichmentPending,
         queuedEvents: [...sessions.values()].reduce((total, session) => total
@@ -3091,9 +3093,8 @@ async function importResolvedListenerAvatars(rawItems) {
 async function cacheListenerAvatar(userId, avatarUrl) {
   const id = String(userId || "").trim();
   const url = String(avatarUrl || "").trim();
-  if (!id || !/^https:\/\//i.test(url) || avatarCachePending.has(id)) return false;
-  avatarCachePending.add(id);
-  try {
+  if (!id || !/^https:\/\//i.test(url)) return false;
+  return runAvatarCacheWork(id, async () => {
     if (await eventStore.listenerHasCachedAvatar(id)) return true;
     const response = await fetch(url, {
       headers: { "user-agent": "Mozilla/5.0", accept: "image/avif,image/webp,image/*,*/*;q=0.8" },
@@ -3105,11 +3106,7 @@ async function cacheListenerAvatar(userId, avatarUrl) {
     const data = Buffer.from(await response.arrayBuffer());
     if (!data.length || data.length > 1024 * 1024) return false;
     return await eventStore.storeListenerAvatarData(id, await optimizeAvatarImage(data));
-  } catch {
-    return false;
-  } finally {
-    avatarCachePending.delete(id);
-  }
+  });
 }
 
 async function compactListenerAvatars({ limit = 25, after = "" } = {}) {

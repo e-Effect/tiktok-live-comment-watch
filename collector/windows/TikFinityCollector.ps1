@@ -20,6 +20,11 @@ $http.Timeout = [TimeSpan]::FromSeconds(15)
 $receiptHttp = New-Object System.Net.Http.HttpClient
 $receiptHttp.Timeout = [TimeSpan]::FromMilliseconds(750)
 $lastReceiptAttemptAt = [DateTime]::MinValue
+$receiptDeliveryTask = $null
+$receiptDeliveryRequest = $null
+$receiptDeliveryCount = 0
+$receiptStatusTask = $null
+$receiptStatusRequest = $null
 $pending = New-Object 'System.Collections.Generic.Queue[string]'
 $receiptPending = New-Object 'System.Collections.Generic.Queue[string]'
 $receiptPendingKeys = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -250,7 +255,7 @@ function Send-LocalReceiptPayload {
         if ($eventType -ieq 'gift') {
             $rawGift = $event | ConvertTo-Json -Depth 100 -Compress
             if ($script:receiptPendingKeys.Add($rawGift)) {
-                if ($script:receiptPending.Count -ge 500) {
+                if ($script:receiptPending.Count -ge 500 -and $null -eq $script:receiptDeliveryTask) {
                     $removed = $script:receiptPending.Dequeue()
                     [void]$script:receiptPendingKeys.Remove($removed)
                 }
@@ -260,6 +265,10 @@ function Send-LocalReceiptPayload {
         }
     }
     if ($newGiftCount -gt 0) { Save-ReceiptPending }
+
+    Complete-ReceiptDelivery
+    Update-ReceiptDiagnostics -ReceiptEndpoint $receiptEndpoint -Start $Heartbeat
+    if ($null -ne $script:receiptDeliveryTask) { return }
 
     $now = [DateTime]::UtcNow
     if (-not $Heartbeat -and $newGiftCount -eq 0 -and ($now - $script:lastReceiptAttemptAt).TotalSeconds -lt 30) {
@@ -280,32 +289,53 @@ function Send-LocalReceiptPayload {
     $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $receiptEndpoint)
     $request.Content = [System.Net.Http.StringContent]::new($localPayload, [Text.Encoding]::UTF8, 'application/json')
     try {
-        $response = $receiptHttp.SendAsync($request).GetAwaiter().GetResult()
-        [void]$response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-        $success = $response.IsSuccessStatusCode
-        $response.Dispose()
-        if (-not $success) { return }
-        for ($index = 0; $index -lt $take; $index++) {
-            $removed = $script:receiptPending.Dequeue()
-            [void]$script:receiptPendingKeys.Remove($removed)
-        }
-        if ($take -gt 0) { Save-ReceiptPending }
-        if ($Heartbeat) { Update-ReceiptDiagnostics -ReceiptEndpoint $receiptEndpoint }
+        $script:receiptDeliveryRequest = $request
+        $script:receiptDeliveryCount = $take
+        $script:receiptDeliveryTask = $receiptHttp.SendAsync($request)
     }
     catch {
-        # Receipt printing is local and optional; Render delivery must continue even while it is closed.
-    }
-    finally {
         $request.Dispose()
+        $script:receiptDeliveryRequest = $null
+        $script:receiptDeliveryTask = $null
+    }
+}
+
+function Complete-ReceiptDelivery {
+    if ($null -eq $script:receiptDeliveryTask -or -not $script:receiptDeliveryTask.IsCompleted) { return }
+    $response = $null
+    try {
+        $response = $script:receiptDeliveryTask.GetAwaiter().GetResult()
+        if ($response.IsSuccessStatusCode) {
+            for ($index = 0; $index -lt $script:receiptDeliveryCount; $index++) {
+                $removed = $script:receiptPending.Dequeue()
+                [void]$script:receiptPendingKeys.Remove($removed)
+            }
+            if ($script:receiptDeliveryCount -gt 0) { Save-ReceiptPending }
+        }
+    } catch {
+        # Keep the durable pending batch for retry. Never wait in the receive loop.
+    } finally {
+        if ($null -ne $response) { $response.Dispose() }
+        if ($null -ne $script:receiptDeliveryRequest) { $script:receiptDeliveryRequest.Dispose() }
+        $script:receiptDeliveryTask = $null
+        $script:receiptDeliveryRequest = $null
+        $script:receiptDeliveryCount = 0
     }
 }
 
 function Update-ReceiptDiagnostics {
-    param([string]$ReceiptEndpoint)
+    param([string]$ReceiptEndpoint, [bool]$Start = $true)
+    if ($null -eq $script:receiptStatusTask) {
+        if (-not $Start) { return }
     $statusEndpoint = $ReceiptEndpoint -replace '/api/collector/events$', '/api/status'
     $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $statusEndpoint)
+        $script:receiptStatusRequest = $request
+        $script:receiptStatusTask = $receiptHttp.SendAsync($request)
+    }
+    if (-not $script:receiptStatusTask.IsCompleted) { return }
+    $response = $null
     try {
-        $response = $receiptHttp.SendAsync($request).GetAwaiter().GetResult()
+        $response = $script:receiptStatusTask.GetAwaiter().GetResult()
         $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode) { throw "Receipt status $([int]$response.StatusCode)" }
         $status = $text | ConvertFrom-Json
@@ -337,7 +367,10 @@ function Update-ReceiptDiagnostics {
         }
     }
     finally {
-        $request.Dispose()
+        if ($null -ne $response) { $response.Dispose() }
+        $script:receiptStatusRequest.Dispose()
+        $script:receiptStatusRequest = $null
+        $script:receiptStatusTask = $null
     }
 }
 
@@ -444,6 +477,7 @@ while ($true) {
                 while (-not $receiveTask.Wait(50)) {
                     $now = [DateTime]::UtcNow
                     Invoke-CollectorDeliveryPump -Config $config
+                    Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $false
                     if (-not [string]::IsNullOrWhiteSpace($script:lastReceivedEventType) -and ($now - $script:lastStatusWriteAt.ToUniversalTime()).TotalMilliseconds -ge 1000) {
                         Write-CollectorStatus -State 'receiving' -Message "Received: $($script:lastReceivedEventType)" -PendingCount $pending.Count
                         $script:lastReceivedEventType = ''
@@ -488,6 +522,7 @@ while ($true) {
                     try { Send-LocalReceiptPayload -Config $config -Events @(($queuedRaw | ConvertFrom-Json)) -Heartbeat $false } catch {}
                 }
                 Invoke-CollectorDeliveryPump -Config $config
+                Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $false
                 Write-CollectorStatus -State 'receiving' -Message "Received: $eventType" -PendingCount $pending.Count
             }
             else {
