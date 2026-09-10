@@ -445,6 +445,7 @@ class LiveSession extends EventEmitter {
     if (isAnonymousListenerIdentity(person)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
+    const newlySeen = !user.hasJoined;
     if (person.uniqueId) user.uniqueId = person.uniqueId;
     if (person.avatarUrl) user.avatarUrl = person.avatarUrl;
     if (!user.hasJoined) {
@@ -459,7 +460,7 @@ class LiveSession extends EventEmitter {
       this.viewerStats.knownJoins += 1;
       this.recordVisit(user, at, presenceSource);
     } else if (entryEvent) {
-      user.lastJoinAt = at;
+      user.lastJoinAt = Math.max(Number(user.lastJoinAt || 0), at);
       user.entryEventCount = Number(user.entryEventCount || 0) + 1;
     }
     if (["comment", "gift"].includes(presenceSource) && this.pendingVisitChecks.has(user.userId)) {
@@ -467,6 +468,9 @@ class LiveSession extends EventEmitter {
     }
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
+    // Show arrivals before the database judgment completes. Coalesce updates
+    // using the existing presence timer, not one network request per arrival.
+    if (newlySeen || entryEvent) this.broadcastPresence([user]);
     return true;
   }
 
@@ -1265,7 +1269,7 @@ class LiveSession extends EventEmitter {
       .slice(0, 30);
     const visitors = [...users]
       .filter((user) => user.hasJoined)
-      .sort((a, b) => b.firstJoinAt - a.firstJoinAt || b.lastSeenAt - a.lastSeenAt)
+      .sort((a, b) => Number(b.lastJoinAt || b.firstJoinAt || 0) - Number(a.lastJoinAt || a.firstJoinAt || 0) || b.lastSeenAt - a.lastSeenAt)
       .slice(0, 200);
     return {
       id: this.id,

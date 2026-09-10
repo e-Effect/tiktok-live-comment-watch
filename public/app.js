@@ -1272,7 +1272,7 @@ function rebuildRealtimeLists(snapshot, cache) {
     .slice(0, 30);
   snapshot.visitors = [...users]
     .filter((user) => user.hasJoined)
-    .sort((a, b) => Number(b.firstJoinAt || 0) - Number(a.firstJoinAt || 0)
+    .sort((a, b) => Number(b.lastJoinAt || b.firstJoinAt || 0) - Number(a.lastJoinAt || a.firstJoinAt || 0)
       || Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
     .slice(0, 200);
   snapshot.comments = refreshEventDisplayState(snapshot.comments, cache);
@@ -2029,7 +2029,7 @@ function renderVisitorHistory(visitors) {
         <span class="name">${renderDecoratedName(user)}</span>
         <span class="visit-meta">
           <strong>${visitLabel}</strong>
-          <small>${formatClock(user.firstJoinAt || user.firstSeenAt)}${reentryLabel}</small>
+          <small>${formatClock(user.lastJoinAt || user.firstJoinAt || user.firstSeenAt)}${reentryLabel}</small>
         </span>
       </div>
     `;
