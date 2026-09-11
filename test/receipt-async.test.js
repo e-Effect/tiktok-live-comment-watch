@@ -35,6 +35,25 @@ test('receipt pump never awaits pending HTTP and only dequeues acknowledged batc
   Complete-ReceiptDelivery
   if($script:receiptPending.Count -ne 1){throw 'Failed batch lost'}
   Write-Output 'PASS'
+  $fn=$ast.Find({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Complete-CollectorDelivery'},$true)
+  Invoke-Expression $fn.Extent.Text
+  function Save-DeliveryHistory { $script:savedHistory=ConvertTo-Json -InputObject @($script:deliveryHistory) -Depth 5 }
+  function Write-CollectorStatus {}
+  $script:deliveryHistory=@();$script:pending=New-Object 'System.Collections.Generic.Queue[string]'
+  $script:pending.Enqueue('event');$script:deliveryBatchCount=1;$script:deliveryFailureCount=0
+  $completion=New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]'
+  $response=New-Object System.Net.Http.HttpResponseMessage([System.Net.HttpStatusCode]::ServiceUnavailable)
+  $response.Content=New-Object System.Net.Http.StringContent('private response not to retain')
+  $completion.SetResult($response);$script:deliveryTask=$completion.Task
+  [void](Complete-CollectorDelivery)
+  if($script:deliveryHistory[-1].kind -ne 'http' -or $script:deliveryHistory[-1].httpStatus -ne 503){throw 'Missing HTTP classification'}
+  if($script:pending.Count -ne 1 -or $script:savedHistory -match 'private response'){throw 'Unsafe failure handling'}
+  $completion=New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]'
+  $response=New-Object System.Net.Http.HttpResponseMessage([System.Net.HttpStatusCode]::OK)
+  $response.Content=New-Object System.Net.Http.StringContent('{"durable":true,"accepted":1,"dropped":0}')
+  $completion.SetResult($response);$script:deliveryTask=$completion.Task;$script:deliveryBatchCount=1
+  [void](Complete-CollectorDelivery)
+  if(-not $script:deliveryHistory[-1].recoveredAt -or $script:pending.Count -ne 0){throw 'Recovery history lost'}
   `;
   const r=spawnSync('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',timeout:10000});
   assert.equal(r.status,0,r.stdout+r.stderr);assert.match(r.stdout,/PASS/);

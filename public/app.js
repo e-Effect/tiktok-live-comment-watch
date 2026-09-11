@@ -1575,6 +1575,11 @@ function renderIngestionDiagnostics(diagnostics) {
     .sort((a, b) => Number(b[1]) - Number(a[1]))
     .slice(0, 8);
   const latency = diagnostics.pipelineLatencyByType || {};
+  const pending = Number(collector.pendingEvents || 0);
+  const oldestSeconds = pending && Number(collector.oldestQueuedAt) > 0
+    ? Math.max(0, Math.floor((Date.now() - Number(collector.oldestQueuedAt)) / 1000)) : null;
+  const failure = collector.lastDeliveryFailure;
+  const failureLabels = { transport: '通信接続・タイムアウト', http: 'サーバーHTTP応答', response: '応答形式', storage: 'DB保存確認' };
   const latencyText = [
     ["コメント", latency.comment],
     ["ギフト", latency.gift]
@@ -1595,6 +1600,8 @@ function renderIngestionDiagnostics(diagnostics) {
       `).join("")}
     </div>
     <p>保存待ち ${formatNumber(diagnostics.pendingDatabaseEvents || 0)}件・重複除外 ${formatNumber(diagnostics.duplicate || 0)}件</p>
+    <p>PCから送信待ち ${formatNumber(pending)}件・最古の待ち ${pending ? oldestSeconds === null ? '不明' : `${formatNumber(oldestSeconds)}秒` : '0秒'}（最終受信情報に基づく）</p>
+    ${failure ? `<p>直近の送信失敗：${escapeHtml(failure.at ? new Date(failure.at).toLocaleString('ja-JP') : '日時不明')}／${escapeHtml(failureLabels[failure.kind] || '未分類')}${failure.httpStatus ? ` HTTP ${escapeHtml(String(failure.httpStatus))}` : ''}／${escapeHtml(failure.errorType || '')}／${failure.recoveredAt ? '復旧済み' : '復旧未確認'}</p>` : ''}
     ${latencyText ? `<p>直近最大300件の95%値　${escapeHtml(latencyText)}</p>` : ""}
     ${unknown.length ? `<p>未対応イベント: ${unknown.map(([name, count]) => `${escapeHtml(name)} ${formatNumber(count)}`).join("、")}</p>` : ""}
   `;

@@ -1111,6 +1111,15 @@ class LiveSession extends EventEmitter {
       serverAccepted: Math.max(0, Number(raw.serverAccepted) || 0),
       serverDropped: Math.max(0, Number(raw.serverDropped) || 0),
       pendingEvents: Math.max(0, Number(raw.pendingEvents) || 0),
+      oldestQueuedAt: pipelineTimestamp(raw.oldestQueuedAt),
+      lastDeliveryFailure: raw.lastDeliveryFailure && typeof raw.lastDeliveryFailure === 'object' ? {
+        at: pipelineTimestamp(raw.lastDeliveryFailure.at),
+        kind: cleanText(raw.lastDeliveryFailure.kind, 30),
+        httpStatus: Number(raw.lastDeliveryFailure.httpStatus) || null,
+        errorType: cleanText(raw.lastDeliveryFailure.errorType, 80),
+        pending: Math.max(0, Number(raw.lastDeliveryFailure.pending) || 0),
+        recoveredAt: pipelineTimestamp(raw.lastDeliveryFailure.recoveredAt)
+      } : null,
       pendingReceiptEvents: Math.max(0, Number(raw.pendingReceiptEvents) || 0),
       receipt: {
         reachable: receipt.reachable === true,

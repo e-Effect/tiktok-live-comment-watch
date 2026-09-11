@@ -42,6 +42,13 @@ $deliveryFailureCount = 0
 $lastDeliveryAttemptAt = [DateTime]::MinValue
 $lastRenderSuccessAt = $null
 $lastRenderError = ''
+$deliveryHistoryPath = Join-Path $PSScriptRoot 'delivery-failures.json'
+$deliveryHistory = @()
+try {
+    if (Test-Path -LiteralPath $deliveryHistoryPath) {
+        $deliveryHistory = @(Get-Content -LiteralPath $deliveryHistoryPath -Raw | ConvertFrom-Json | Select-Object -Last 20)
+    }
+} catch { $deliveryHistory = @() }
 $lastStatusWriteAt = [DateTime]::MinValue
 $lastStatusLogAt = [DateTime]::MinValue
 $lastPendingSaveAt = [DateTime]::UtcNow
@@ -68,6 +75,10 @@ function Add-DiagnosticCount {
 }
 
 function Get-CollectorDiagnostics {
+    $oldestQueuedAt = $null
+    if ($script:pending.Count -gt 0) {
+        try { $oldestQueuedAt = [double](($script:pending.Peek() | ConvertFrom-Json).collectorQueuedAt) } catch {}
+    }
     return [ordered]@{
         startedAt = $script:collectorStartedAt
         updatedAt = [DateTime]::UtcNow.ToString('o')
@@ -77,6 +88,8 @@ function Get-CollectorDiagnostics {
         serverAccepted = $script:deliveryAccepted
         serverDropped = $script:deliveryDropped
         pendingEvents = $script:pending.Count
+        oldestQueuedAt = $oldestQueuedAt
+        lastDeliveryFailure = if ($script:deliveryHistory.Count) { $script:deliveryHistory[-1] } else { $null }
         pendingReceiptEvents = $script:receiptPending.Count
         deliveryInFlight = $null -ne $script:deliveryTask
         renderState = if ($null -ne $script:deliveryTask) { 'sending' } elseif ($script:pending.Count -gt 0) { 'buffering' } else { 'connected' }
@@ -85,6 +98,13 @@ function Get-CollectorDiagnostics {
         renderRetryAt = if ($script:deliveryRetryAt -gt [DateTime]::UtcNow) { $script:deliveryRetryAt.ToString('o') } else { $null }
         receipt = $script:receiptDiagnostics
     }
+}
+
+function Save-DeliveryHistory {
+    try {
+        ConvertTo-Json -InputObject @($script:deliveryHistory) -Depth 5 -Compress | Set-Content -LiteralPath "$script:deliveryHistoryPath.tmp" -Encoding UTF8
+        Move-Item -LiteralPath "$script:deliveryHistoryPath.tmp" -Destination $script:deliveryHistoryPath -Force
+    } catch { }
 }
 
 function Write-CollectorStatus {
@@ -173,13 +193,19 @@ function Complete-CollectorDelivery {
     $response = $null
     $completedBatchCount = $script:deliveryBatchCount
     $deliverySucceeded = $false
+    $failureKind = 'transport'
+    $httpStatus = $null
     try {
         $response = $script:deliveryTask.GetAwaiter().GetResult()
+        $httpStatus = [int]$response.StatusCode
         $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode) {
+            $failureKind = 'http'
             throw "Render response $([int]$response.StatusCode): $text"
         }
+        $failureKind = 'response'
         $delivery = $text | ConvertFrom-Json
+        $failureKind = 'storage'
         if ($delivery.durable -ne $true) { throw 'Render did not confirm durable storage.' }
         $script:deliveryAccepted += [int64]([Math]::Max(0, [int]$delivery.accepted))
         $script:deliveryDropped += [int64]([Math]::Max(0, [int]$delivery.dropped))
@@ -191,6 +217,10 @@ function Complete-CollectorDelivery {
         $script:deliveryRetryAt = [DateTime]::MinValue
         $script:lastRenderSuccessAt = [DateTime]::UtcNow.ToString('o')
         $script:lastRenderError = ''
+        if ($script:deliveryHistory.Count -and -not $script:deliveryHistory[-1].recoveredAt) {
+            $script:deliveryHistory[-1].recoveredAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            Save-DeliveryHistory
+        }
         $deliverySucceeded = $true
     }
     catch {
@@ -198,6 +228,17 @@ function Complete-CollectorDelivery {
         $delaySeconds = [Math]::Min(60, [Math]::Max(3, [Math]::Pow(2, [Math]::Min(5, $script:deliveryFailureCount - 1)) * 3))
         $script:deliveryRetryAt = [DateTime]::UtcNow.AddSeconds($delaySeconds)
         $script:lastRenderError = $_.Exception.Message
+        $baseError = $_.Exception.GetBaseException()
+        $script:deliveryHistory = @($script:deliveryHistory | Select-Object -Last 19) + @([pscustomobject]@{
+            at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            kind = $failureKind
+            httpStatus = $httpStatus
+            errorType = $baseError.GetType().Name
+            pending = $script:pending.Count
+            retrySeconds = $delaySeconds
+            recoveredAt = $null
+        })
+        Save-DeliveryHistory
         Write-CollectorStatus -State 'receiving' -Message "Render is unavailable; buffering $($script:pending.Count) events locally." -PendingCount $script:pending.Count -Force
     }
     finally {
