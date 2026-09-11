@@ -419,6 +419,29 @@ function activateSession(sessionId, username, options = {}) {
   updateSelectedControls();
 }
 
+const attentionBySession = new Map();
+let attentionTimer;
+function renderAttentionAlerts() {
+  clearTimeout(attentionTimer);
+  const panel = document.getElementById("attentionAlerts");
+  if (!panel) return;
+  const now = Date.now();
+  for (const [id, items] of attentionBySession) {
+    const current = items.filter(item => item.expiresAt > now);
+    current.length ? attentionBySession.set(id, current) : attentionBySession.delete(id);
+  }
+  const items = attentionBySession.get(selectedSessionId) || [];
+  panel.hidden = !items.length;
+  panel.replaceChildren();
+  for (const item of [...items].sort((a,b) => b.expiresAt-a.expiresAt)) {
+    const row = document.createElement("div");
+    row.style.cssText = "background:#b91c35;color:white;border:3px solid #ff7b8b;border-radius:12px;padding:14px 18px;margin:8px 0;font-size:clamp(20px,2.5vw,34px);font-weight:800;overflow-wrap:anywhere";
+    row.textContent = `要確認：${item.nickname}${item.uniqueId ? `（@${item.uniqueId}）` : ""} — 反応がありました`;
+    panel.append(row);
+  }
+  if (items.length) attentionTimer = setTimeout(renderAttentionAlerts, Math.max(50, Math.min(...items.map(item => item.expiresAt))-now+20));
+}
+
 function openEventStream(sessionId) {
   if (!sessionId || eventSources.has(sessionId)) return;
 
@@ -427,6 +450,14 @@ function openEventStream(sessionId) {
   markEventStreamActivity(sessionId);
   source.onopen = () => markEventStreamActivity(sessionId);
   source.addEventListener("heartbeat", () => markEventStreamActivity(sessionId));
+  source.addEventListener("attention_alert", (event) => {
+    markEventStreamActivity(sessionId);
+    const { alert } = JSON.parse(event.data);
+    if (!alert?.userId || !(alert.expiresAt > Date.now())) return;
+    const items = attentionBySession.get(sessionId) || [];
+    attentionBySession.set(sessionId, [...items.filter(item => item.userId !== alert.userId), alert]);
+    renderAttentionAlerts();
+  });
   source.addEventListener("snapshot", (event) => {
     markEventStreamActivity(sessionId);
     renderSnapshot(JSON.parse(event.data));
@@ -1331,6 +1362,7 @@ function refreshVisibleCommentRows(comments, changedUserIds) {
 
 function renderSnapshot(snapshot, options = {}) {
   if (!snapshot?.id) return;
+  attentionBySession.set(snapshot.id, snapshot.attentionAlerts || []);
   if (snapshot.errorCode === "rate_limited" || isRateLimitMessage(snapshot.message)) {
     setRateLimitCooldown(snapshot.message);
   }
@@ -1363,6 +1395,7 @@ function renderSnapshot(snapshot, options = {}) {
 }
 
 function renderSelectedSession(options = {}) {
+  renderAttentionAlerts();
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   const snapshot = selected?.snapshot;
   const dirtyTypes = options.dirtyTypes instanceof Set ? options.dirtyTypes : null;

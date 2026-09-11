@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
+import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
@@ -69,6 +70,20 @@ const eventStore = new EventStore({
   ssl: String(globalThis.process?.env?.DATABASE_SSL || "").toLowerCase() === "false" ? false : undefined
 });
 const runAvatarCacheWork = createAvatarWorkCache();
+const attentionAlerts = new AttentionAlerts();
+let attentionRefreshAt = 0;
+let attentionRevision = 0;
+async function refreshAttentionIds() {
+  if (!eventStore.ready || Date.now() - attentionRefreshAt < 60000) return;
+  attentionRefreshAt = Date.now();
+  const revision = attentionRevision;
+  try {
+    const ids = await eventStore.attentionListenerIds();
+    if (revision === attentionRevision) attentionAlerts.replace(ids);
+    else attentionRefreshAt = 0;
+  }
+  catch { attentionRefreshAt = 0; }
+}
 const liveCue = new LiveCueForwarder({
   endpoint: globalThis.process?.env?.LIVECUE_ENDPOINT || "",
   channelId: globalThis.process?.env?.LIVECUE_CHANNEL_ID || "",
@@ -472,6 +487,10 @@ class LiveSession extends EventEmitter {
     // Show arrivals before the database judgment completes. Coalesce updates
     // using the existing presence timer, not one network request per arrival.
     if (newlySeen || entryEvent) this.broadcastPresence([user]);
+    if (this.recordingEnabled) {
+      const alert = attentionAlerts.accept(this.id, person, at);
+      if (alert) this.broadcast("attention_alert", { alert });
+    }
     return true;
   }
 
@@ -1304,6 +1323,7 @@ class LiveSession extends EventEmitter {
       giftDiamondTotal: this.giftDiamondTotal,
       shareCount: this.shareCount,
       comments: this.comments.map((comment) => this.decorateUserEvent(comment)),
+      attentionAlerts: attentionAlerts.active(this.id),
       gifts: this.gifts.map((gift) => this.decorateUserEvent(gift)),
       shares: this.shares.map((share) => this.decorateUserEvent(share)),
       topUsers,
@@ -2819,6 +2839,10 @@ const server = createServer(async (request, response) => {
       if (request.method === "PATCH") {
         const updated = await eventStore.updateListener(userId, await readBody(request));
         if (updated) clearListenerCaches();
+        if (updated) {
+          attentionRevision += 1;
+          attentionAlerts.update(updated.userId, updated.needsAttention);
+        }
         sendJson(response, updated ? 200 : 404, updated || { error: "リスナーが見つかりません" });
         return;
       }
@@ -3010,6 +3034,7 @@ async function maintainDatabaseConnection() {
   try {
     const ready = await eventStore.ensureReady();
     if (!ready) return false;
+    await refreshAttentionIds();
     if (!wasReady && (EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady)) {
       await restorePersistentSessions();
     }

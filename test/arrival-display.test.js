@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { AttentionAlerts } from '../lib/attention-alerts.js';
 
 const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -14,7 +15,7 @@ test('arrivals publish before history resolves; reentries publish without anothe
     getUserStat(id,name,at){return this.userStats.get(id)||{userId:id,nickname:name,lastSeenAt:at}},
     recordVisit(user){checks.push(user.userId)},enqueueVisitCheck(){},
     broadcastPresence(users){notices.push({...users[0]})},${method}
-  })`, { notices, checks, isAnonymousListenerIdentity: p => !p.userId });
+  })`, { notices, checks, attentionAlerts: new AttentionAlerts(), isAnonymousListenerIdentity: p => !p.userId });
   const person = {userId:'one',nickname:'One'};
   session.markSeen(person,1000,'member',{entryEvent:true});
   assert.equal(notices.length,1);
