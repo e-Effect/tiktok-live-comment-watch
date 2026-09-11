@@ -535,7 +535,7 @@ function historySection(kind, history = {}) {
     ? items.map((visit)=>`<div class="history-item visit-day"><strong>${escapeHtml(formatVisitDay(visit.day))}</strong><p>初回検知 ${escapeHtml(formatTime(visit.firstSeenAt))}・最終検知 ${escapeHtml(formatTime(visit.lastSeenAt))}・配信 ${number.format(visit.liveCount||1)}回</p>${visit.streamUsernames?.length>1?`<small>${visit.streamUsernames.map((name)=>`@${escapeHtml(name)}`).join(" / ")}</small>`:""}</div>`).join("")
     : items.map((comment)=>`<div class="history-item"><time>${formatHistoryDate(comment.at)}${comment.streamUsername?`・@${escapeHtml(comment.streamUsername)}`:""}</time><p>${escapeHtml(comment.text||"")}</p></div>`).join("");
   const remaining = Math.max(0,total-items.length);
-  return `<section class="detail-section history-section"><h3>${isVisits?"入室した全ての日":"これまでの全コメント"} <span>${number.format(total)}件</span></h3><div>${rows||`<p class="empty">${isVisits?"来訪日":"コメント"}履歴なし</p>`}</div>${remaining?`<button class="history-more" type="button" data-load-history="${kind}">続きを表示（残り${number.format(remaining)}件）</button>`:""}</section>`;
+  return `<section class="detail-section history-section"><h3>${isVisits?"入室した全ての日":"保存コメント（1人あたり最新1,500件・期限なし）"} <span>${number.format(total)}件</span></h3>${isVisits?"":"<p>累計コメント数は、本文削除後もそのまま残ります。</p>"}<div>${rows||`<p class="empty">${isVisits?"来訪日":"コメント"}履歴なし</p>`}</div>${remaining?`<button class="history-more" type="button" data-load-history="${kind}">続きを表示（残り${number.format(remaining)}件）</button>`:""}</section>`;
 }
 
 function listenerHistoryUrl(userId, kind, offset) {

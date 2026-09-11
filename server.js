@@ -3050,6 +3050,9 @@ async function maintainDatabaseConnection() {
       .filter(session => session.pendingDatabaseEvents.length || session.persistenceWorkerPromise
         || session.persistenceQueues.critical.length || session.persistenceQueues.background.length)
       .map(session => session.id));
+    if (![...sessions.values()].some(session => session.pendingDatabaseEvents.length
+      || session.persistenceWorkerPromise || session.persistenceQueues.critical.length
+      || session.persistenceQueues.background.length)) await eventStore.maintainCommentRetention();
     return true;
   } finally {
     databaseRecoveryPending = false;
