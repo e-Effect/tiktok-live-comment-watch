@@ -10,7 +10,7 @@ test('comment retention seeds existing heavy users and prunes only bodies in bou
     return {rows:[{user_id:'a'},{user_id:'b'},{user_id:'c'}]};
   }};
   store.writePool = {query:async(sql,args)=> { calls.push({sql,args}); return {rowCount:args[0]==='a'?250:1}; }};
-  await store.maintainCommentRetention();
+  await store.maintainCommentRetention({now:()=>Date.parse('2026-09-12T03:00:00Z')});
   assert.equal(calls.length,2);
   assert.deepEqual(calls[0].args,['a',1500,250]);
   assert.match(calls[0].sql,/event_type = 'comment' AND NOT comment_body_pruned/);
@@ -25,7 +25,7 @@ test('failed pruning leaves user queued and does not mark database unavailable',
   const store=new EventStore();store.ready=true;store.commentRetentionSeedAt=Date.now();
   store.commentRetentionQueue.add('a');
   store.pool={query:async()=>{throw new Error('timeout')}};
-  await store.maintainCommentRetention();
+  await store.maintainCommentRetention({now:()=>Date.parse('2026-09-12T03:00:00Z')});
   assert.equal(store.ready,true);assert.ok(store.commentRetentionQueue.has('a'));
   assert.equal(store.commentRetention.prunedBodies,0);
   assert.match(store.commentRetention.lastError,/timeout/);
