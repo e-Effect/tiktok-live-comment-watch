@@ -2987,6 +2987,19 @@ setInterval(() => {
   maintainDatabaseConnection().catch(() => {});
 }, DATABASE_RETRY_MS).unref?.();
 
+// Independent of recovery: a stuck DB query must not stop diagnostic sampling.
+setInterval(() => {
+  const status = eventStore.status();
+  const current = [...sessions.values()];
+  eventStore.runtimeDiagnostics.sample({
+    ready: status.ready, pools: status.pools,
+    pending: current.reduce((n,s) => n + s.pendingDatabaseEvents.length + s.persistenceQueues.critical.length + s.persistenceQueues.background.length,0),
+    visitPending: eventStore.visitEnrichmentPending,
+    activeStream: current.some(s => s.recordingEnabled && Date.now() - Number(s.lastEventAt || 0) < 900000),
+    memory: process.memoryUsage()
+  });
+}, 15000).unref?.();
+
 setInterval(() => {
   const now = Date.now();
   for (const [id, session] of sessions) {
