@@ -2,6 +2,45 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventStore, rangeStart } from "../lib/event-store.js";
 
+test("event writes enforce listener then alias then stats dependencies", async () => {
+  const store = new EventStore();
+  store.ready = true;
+  let captured;
+  store.pool = { async query(sql) { captured = sql; return {rows:[]}; } };
+  assert.equal(await store.recordEvent({id:"session",username:"host"},
+    {id:"event",type:"comment",userId:"listener",at:Date.now()}),true);
+  const alias = captured.slice(captured.indexOf("upsert_alias AS"), captured.indexOf("INSERT INTO listener_stream_stats"));
+  const stats = captured.slice(captured.indexOf("INSERT INTO listener_stream_stats"));
+  assert.match(alias,/EXISTS \(SELECT 1 FROM upsert_listener\)/);
+  assert.match(stats,/EXISTS \(SELECT 1 FROM upsert_alias\)/);
+});
+
+test("recovery probes inbox without awaiting enrichment or running schema SQL", async () => {
+  const store = new EventStore({connectionString:"test"});
+  store.schemaReady = true;
+  store.pool = {query(){throw new Error("must not run general SQL");}};
+  store.visitEnrichmentTail = new Promise(()=>{});
+  store.close = async () => {throw new Error("must not drain pools");};
+  const queries=[];
+  store.inboxPool={async query(sql){queries.push(sql);return {rows:[]};}};
+  assert.equal(await store.ensureReady(),true);
+  assert.deepEqual(queries,["SELECT 1"]);
+  assert.equal(store.ready,true);
+});
+
+test("failed recovery preserves pools and can recover on next probe", async () => {
+  const store = new EventStore({connectionString:"test"});
+  store.schemaReady = true;
+  const general = store.pool = {};
+  let attempts=0;
+  store.inboxPool={async query(){if(++attempts===1) throw new Error("ECONNREFUSED");return {rows:[]};}};
+  assert.equal(await store.ensureReady(),false);
+  assert.equal(store.pool,general);
+  assert.equal(store.ready,false);
+  assert.equal(await store.ensureReady(),true);
+  assert.equal(store.lastError,"");
+});
+
 test("visit judgments continue while enrichment is slow and enrichment stays serial", async () => {
   const store = new EventStore();
   store.ready = true;

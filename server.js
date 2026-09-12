@@ -73,8 +73,10 @@ const runAvatarCacheWork = createAvatarWorkCache();
 const attentionAlerts = new AttentionAlerts();
 let attentionRefreshAt = 0;
 let attentionRevision = 0;
+let attentionRefreshPending = false;
 async function refreshAttentionIds() {
-  if (!eventStore.ready || Date.now() - attentionRefreshAt < 60000) return;
+  if (attentionRefreshPending || !eventStore.ready || Date.now() - attentionRefreshAt < 60000) return;
+  attentionRefreshPending = true;
   attentionRefreshAt = Date.now();
   const revision = attentionRevision;
   try {
@@ -83,6 +85,7 @@ async function refreshAttentionIds() {
     else attentionRefreshAt = 0;
   }
   catch { attentionRefreshAt = 0; }
+  finally { attentionRefreshPending = false; }
 }
 const liveCue = new LiveCueForwarder({
   endpoint: globalThis.process?.env?.LIVECUE_ENDPOINT || "",
@@ -3034,7 +3037,8 @@ async function maintainDatabaseConnection() {
   try {
     const ready = await eventStore.ensureReady();
     if (!ready) return false;
-    await refreshAttentionIds();
+    // Auxiliary flags must not hold up durable inbox recovery.
+    void refreshAttentionIds().catch(() => {});
     if (!wasReady && (EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady)) {
       await restorePersistentSessions();
     }
