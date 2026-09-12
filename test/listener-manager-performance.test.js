@@ -55,10 +55,9 @@ test("listener summary uses a short cache with an explicit fresh option", () => 
   assert.match(clientSource, /refreshSummary\(\{fresh:true\}\)/);
 });
 
-test("realtime ledger polling requests deltas and pauses in hidden tabs", () => {
-  assert.match(clientSource, /if \(document\.hidden \|\| state\.realtimeInFlight\) return/);
-  assert.match(clientSource, /extra\.since = String/);
-  assert.match(clientSource, /state\.realtimeCursor/);
+test("ledger has no realtime event polling and keeps manual list refresh", () => {
+  assert.doesNotMatch(clientSource, /refreshRealtime|\/api\/listeners\/events|setInterval\(/);
+  assert.match(clientSource, /refreshSummary\(options\), refreshListeners\(options\)/);
   assert.match(clientSource, /visibilitychange/);
 });
 

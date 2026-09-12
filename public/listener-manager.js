@@ -1,9 +1,9 @@
 const storageKey = "tiktok-listener-admin-key";
 const state = {
-  key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {}, timer: null,
-  selectedUserId: "", avatarObjectUrls: new Map(), attentionExpires: new Map(),
-  seenEventIds: new Set(), realtimeLoaded: false, attentionExpiryTimer: null, detailData: null,
-  searchController: null, realtimeItems: [], realtimeCursor: 0, realtimeInFlight: false,
+  key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {},
+  selectedUserId: "", avatarObjectUrls: new Map(),
+  detailData: null,
+  searchController: null,
   listenerPage: 0, listenerPageSize: 100, listenerTotal: 0,
   lastListenerSearch: null, pendingListenerSearch: null, rankingRetryTimer: null
 };
@@ -27,7 +27,6 @@ el.exportCsv.addEventListener("click", exportCsv);
 el.search.addEventListener("input", debounce(() => { state.listenerPage = 0; refreshListeners(); }, 300));
 el.streamUsername.addEventListener("change", () => {
   state.listenerPage = 0;
-  resetRealtimeFeed();
   refreshAll();
 });
 el.sort.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
@@ -48,7 +47,6 @@ el.detailBackdrop.addEventListener("click", closeDetail);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetail(); });
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.key) {
-    refreshRealtime();
     refreshRestoredSearch();
   }
 });
@@ -68,8 +66,6 @@ async function authenticate() {
     el.connectionStatus.classList.remove("error");
     await refreshAll();
     scheduleRestoredSearchChecks();
-    clearInterval(state.timer);
-    state.timer = setInterval(refreshRealtime, 10000);
   } catch (error) {
     localStorage.removeItem(storageKey);
     state.key = "";
@@ -86,8 +82,6 @@ function normalizeAdminKey(value) {
 }
 
 function logout() {
-  clearInterval(state.timer);
-  clearTimeout(state.attentionExpiryTimer);
   clearTimeout(state.rankingRetryTimer);
   localStorage.removeItem(storageKey);
   state.key = "";
@@ -97,7 +91,7 @@ function logout() {
 }
 
 async function refreshAll(options = {}) {
-  await Promise.all([refreshSummary(options), refreshListeners(options), refreshRealtime()]);
+  await Promise.all([refreshSummary(options), refreshListeners(options)]);
 }
 
 async function backfillAvatars() {
@@ -247,44 +241,8 @@ function scheduleRestoredSearchChecks() {
   [50, 250, 750, 1500, 3000].forEach((delay) => setTimeout(refreshRestoredSearch, delay));
 }
 
-async function refreshRealtime() {
-  if (document.hidden || state.realtimeInFlight) return;
-  state.realtimeInFlight = true;
-  try {
-    const extra = {limit:"80"};
-    if (state.realtimeCursor > 0) extra.since = String(Math.max(0, state.realtimeCursor - 1));
-    const response = await api(`/api/listeners/events${params(extra)}`);
-    if (!response.ok) throw new Error("受信履歴を取得できません");
-    const data = await response.json();
-    const incoming = Array.isArray(data.items) ? data.items : [];
-    trackAttentionEvents(incoming);
-    const merged = new Map(state.realtimeItems.map((item) => [String(item.id || `${item.userId}:${item.type}:${item.at}`), item]));
-    for (const item of incoming) merged.set(String(item.id || `${item.userId}:${item.type}:${item.at}`), item);
-    state.realtimeItems = [...merged.values()]
-      .sort((a, b) => eventTimestamp(b.at) - eventTimestamp(a.at))
-      .slice(0, 80);
-    state.realtimeCursor = Math.max(state.realtimeCursor, ...incoming.map((item) => eventTimestamp(item.at)), 0);
-    el.liveEvents.innerHTML = state.realtimeItems.map(eventHtml).join("") || `<p class="empty">まだ受信データがありません。</p>`;
-    renderListenerTable();
-    el.connectionStatus.textContent = "リアルタイム更新中"; el.connectionStatus.classList.remove("error");
-  } catch (error) { showConnectionError(error); }
-  finally { state.realtimeInFlight = false; }
-}
 
-function resetRealtimeFeed() {
-  state.realtimeItems = [];
-  state.realtimeCursor = 0;
-  state.realtimeLoaded = false;
-  state.realtimeInFlight = false;
-  state.seenEventIds.clear();
-}
 
-function eventTimestamp(value) {
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && numeric > 0) return numeric;
-  const parsed = Date.parse(value || "");
-  return Number.isFinite(parsed) ? parsed : 0;
-}
 
 function rowHtml(item, attentionActive = false) {
   const rawName = item.nickname || item.uniqueId || item.userId;
@@ -307,11 +265,7 @@ function contributionLine(label, rank, score, position) {
 }
 
 function renderListenerTable() {
-  const now = Date.now();
-  for (const [userId, expiresAt] of state.attentionExpires) if (expiresAt <= now) state.attentionExpires.delete(userId);
-  const rows = state.items.map((item, index) => ({ item, index, active:item.needsAttention && (state.attentionExpires.get(item.userId) || 0) > now }));
-  rows.sort((a,b) => Number(b.active)-Number(a.active) || (b.active ? (state.attentionExpires.get(b.item.userId)||0)-(state.attentionExpires.get(a.item.userId)||0) : a.index-b.index));
-  el.listenerRows.innerHTML = rows.map(({item,active}) => rowHtml(item,active)).join("");
+  el.listenerRows.innerHTML = state.items.map(item => rowHtml(item)).join("");
   hydrateAvatars(el.listenerRows);
   el.listenerRows.querySelectorAll("tr[data-user-id]").forEach((row) => row.addEventListener("click", () => openDetail(row.dataset.userId)));
   el.listenerRows.querySelectorAll(".fan-cell,.attention-cell,.super-lurker-cell,.blocked-cell").forEach((cell) => cell.addEventListener("click", (event) => event.stopPropagation()));
@@ -319,28 +273,8 @@ function renderListenerTable() {
   el.listenerRows.querySelectorAll(".attention-toggle").forEach((input) => input.addEventListener("change", () => setInlineAttention(input)));
   el.listenerRows.querySelectorAll(".super-lurker-toggle").forEach((input) => input.addEventListener("change", () => setInlineSuperLurker(input)));
   el.listenerRows.querySelectorAll(".blocked-toggle").forEach((input) => input.addEventListener("change", () => setInlineBlocked(input)));
-  clearTimeout(state.attentionExpiryTimer);
-  const nextExpiry = Math.min(...[...state.attentionExpires.values()].filter((value) => value > now));
-  if (Number.isFinite(nextExpiry)) state.attentionExpiryTimer = setTimeout(renderListenerTable, Math.max(50, nextExpiry-now+50));
 }
 
-function trackAttentionEvents(items) {
-  const now = Date.now();
-  for (const item of items) {
-    if (!item.userId) continue;
-    const eventId = String(item.id || `${item.userId}:${item.type}:${item.at}`);
-    if (state.seenEventIds.has(eventId)) continue;
-    state.seenEventIds.add(eventId);
-    const at = eventTimestamp(item.at);
-    if (!state.realtimeLoaded) {
-      if (at > now-30000) state.attentionExpires.set(item.userId, Math.max(state.attentionExpires.get(item.userId)||0, at+30000));
-    } else {
-      state.attentionExpires.set(item.userId, now+30000);
-    }
-  }
-  state.realtimeLoaded = true;
-  if (state.seenEventIds.size > 2000) state.seenEventIds = new Set([...state.seenEventIds].slice(-1000));
-}
 
 async function setInlineSuperFan(input) {
   const row = input.closest("tr[data-user-id]");
@@ -446,11 +380,6 @@ async function setInlineBlocked(input) {
   }
 }
 
-function eventHtml(item) {
-  const label = ({comment:"コメント",gift:"ギフト",share:"シェア",follow:"フォロー",join:"入室",like:"いいね",subscribe:"サブスク"})[item.type] || item.type;
-  const text = item.type === "comment" ? item.text : item.type === "gift" ? `${item.giftName || "ギフト"} × ${number.format(item.count||1)}（${number.format(item.coins||0)}コイン）` : label;
-  return `<div class="event ${escapeAttr(item.type)}"><span class="event-type">${escapeHtml(label)}</span><div><strong>${escapeHtml(item.nickname||item.uniqueId||item.userId)}</strong><p>${escapeHtml(text||"")}</p></div><time>${formatDate(item.at)}</time></div>`;
-}
 
 async function openDetail(userId) {
   state.selectedUserId = userId;
@@ -483,7 +412,7 @@ function renderDetail(data) {
     <div class="detail-metrics">${textMetric("分類",lurking.isLurker?"潜り人":"通常")}${metric("コメント／来訪",lurking.commentsPerVisit)}${metric("全コイン／来訪",lurking.allCoinsPerVisit)}${textMetric("総合ランク",contributionDetail(item,"lifetime"))}${textMetric("直近30日",contributionDetail(item,"recent"))}${metric("ランキング対象コイン",item.contributionCoins)}${metric("1来訪あたり対象コイン",item.contributionCoinsPerVisit)}${metric("30日対象コイン",item.recentContributionCoins)}${metric("30日・1来訪あたり",item.recentContributionCoinsPerVisit)}${metric("来訪",totals.visits)}${metric("コメント",totals.comments)}${metric("ギフト個数",totals.gifts)}${metric("全ギフトコイン",totals.coins)}${metric("スタンプ",stampTotal)}${metric("印刷",receiptTotal)}</div>
     <p class="lurker-rule ${lurking.isLurker?"matched":""}">${lurking.isLurker?"潜り人に自動分類されています。":"潜り人の条件には該当していません。"} 判定基準：来訪5回以上・1来訪あたりコメント0.5件未満・1来訪あたり全ギフトコイン10未満。</p>
     <section class="detail-section"><h3>TikTokプロフィール</h3><div class="profile-facts"><div class="profile-fact"><span>あなたをフォロー</span><strong>${followBadge(item.hostFollowStatus)}</strong><small>${item.hostFollowStatusUpdatedAt?`最終確認 ${escapeHtml(formatHistoryDate(item.hostFollowStatusUpdatedAt))}`:"まだ確認できていません"}</small></div><div class="profile-fact"><span>本人のフォロー数</span><strong>${profileCount(item.followingCount)}</strong></div><div class="profile-fact"><span>本人のフォロワー数</span><strong>${profileCount(item.followerCount)}</strong></div><div class="profile-fact"><span>人数の更新</span><strong class="profile-updated">${item.profileCountsUpdatedAt?escapeHtml(formatHistoryDate(item.profileCountsUpdatedAt)):"未取得"}</strong></div></div><p class="profile-note">TikTokから最後に受信できたプロフィール情報です。未確認は未フォローという意味ではありません。</p></section>
-    <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check blocked-check"><input id="detailBlocked" type="checkbox" ${item.isBlocked?"checked":""}> ブロック済みとして管理</label><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label class="check attention-check"><input id="detailNeedsAttention" type="checkbox" ${item.needsAttention?"checked":""}> 要確認（配信中に反応したら30秒間、赤く上部表示）</label><label class="check super-lurker-check"><input id="detailSuperLurker" type="checkbox" ${item.isSuperLurker?"checked":""}> スーパー潜り人（配信中に来たらスマホへ大きく表示）</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
+    <section class="detail-section"><h3>管理情報</h3><form id="detailForm" class="detail-form"><label class="check blocked-check"><input id="detailBlocked" type="checkbox" ${item.isBlocked?"checked":""}> ブロック済みとして管理</label><label class="check"><input id="detailSuperFan" type="checkbox" ${item.isSuperFan?"checked":""}> スーパーファンとして管理</label><label class="check attention-check"><input id="detailNeedsAttention" type="checkbox" ${item.needsAttention?"checked":""}> 要確認（反応時にコメントビュアーで30秒間、赤く上部表示）</label><label class="check super-lurker-check"><input id="detailSuperLurker" type="checkbox" ${item.isSuperLurker?"checked":""}> スーパー潜り人（配信中に来たらスマホへ大きく表示）</label><label>タグ（カンマ区切り）<input id="detailTags" value="${escapeAttr((item.tags||[]).join(", "))}"></label><label>メモ<textarea id="detailNotes">${escapeHtml(item.notes||"")}</textarea></label><button class="detail-save" type="submit">管理情報を保存</button><p id="detailSaveStatus"></p></form></section>
     ${historySection("visits",data.visitHistory)}
     <section class="detail-section"><h3>スタンプカード履歴</h3><div>${(data.stamps||[]).map(s=>`<div class="history-item"><time>${formatDate(s.stampedAt)}</time><strong>${escapeHtml(stampLabel(s.stampType))} × ${number.format(s.quantity||1)}</strong>${s.note?`<p>${escapeHtml(s.note)}</p>`:""}</div>`).join("")||'<p class="empty">スタンプ履歴なし</p>'}</div></section>
     <section class="detail-section"><h3>レシート印刷履歴</h3><div>${(data.receiptPrints||[]).map(p=>`<div class="history-item"><time>${formatDate(p.printedAt)}</time><strong>${escapeHtml(p.giftName||"ギフト")} × ${number.format(p.count||1)}</strong><p>${number.format(p.coins||0)}コイン${p.templateId?`・テンプレート ${escapeHtml(p.templateId)}`:""}</p></div>`).join("")||'<p class="empty">レシート印刷履歴なし</p>'}</div></section>

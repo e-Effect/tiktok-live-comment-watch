@@ -74,7 +74,7 @@
 
         <section id="summary" class="summary-grid" aria-label="全体集計"></section>
 
-        <section class="content-grid">
+        <section class="content-grid" style="grid-template-columns:minmax(0,1fr)">
           <article class="card listener-card">
             <div class="section-head">
               <div><h2>リスナー一覧</h2><p id="resultCount">0人</p></div>
@@ -94,10 +94,6 @@
             <p id="emptyState" class="empty" hidden>条件に一致するリスナーはいません。</p>
           </article>
 
-          <article class="card live-card">
-            <div class="section-head"><div><h2>リアルタイム受信</h2><p>新しく増えた分だけ10秒ごとに更新</p></div><span class="live-dot">LIVE</span></div>
-            <div id="liveEvents" class="event-list"></div>
-          </article>
         </section>
       </main>
     </div>
