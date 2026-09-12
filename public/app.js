@@ -1,3 +1,5 @@
+const attentionBySession = new Map();
+let attentionTimer;
 const form = document.querySelector("#connectForm");
 const usernameInput = document.querySelector("#username");
 const primarySessionBtn = document.querySelector("#primarySessionBtn");
@@ -419,8 +421,6 @@ function activateSession(sessionId, username, options = {}) {
   updateSelectedControls();
 }
 
-const attentionBySession = new Map();
-let attentionTimer;
 function renderAttentionAlerts() {
   clearTimeout(attentionTimer);
   const panel = document.getElementById("attentionAlerts");
