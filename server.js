@@ -2719,6 +2719,8 @@ const server = createServer(async (request, response) => {
         direction: url.searchParams.get("direction") || "desc",
         classification: url.searchParams.get("classification") || "all",
         blocked: url.searchParams.get("blocked") || "all",
+        giftExperience: url.searchParams.get("giftExperience") || "all",
+        commentExperience: url.searchParams.get("commentExperience") || "all",
         limit: Number(url.searchParams.get("limit") || 100),
         offset: Number(url.searchParams.get("offset") || 0),
         fresh: url.searchParams.get("fresh") === "1"
@@ -2730,6 +2732,8 @@ const server = createServer(async (request, response) => {
         direction: options.direction,
         classification: options.classification,
         blocked: options.blocked,
+        giftExperience: options.giftExperience,
+        commentExperience: options.commentExperience,
         limit: options.limit,
         offset: options.offset
       });

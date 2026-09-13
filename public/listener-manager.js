@@ -34,6 +34,8 @@ el.streamUsername.addEventListener("input", markSearchPending);
 el.sort.addEventListener("change", markSearchPending);
 el.classificationFilter.addEventListener("change", markSearchPending);
 el.blockFilter.addEventListener("change", markSearchPending);
+el.giftExperience.addEventListener("change", markSearchPending);
+el.commentExperience.addEventListener("change", markSearchPending);
 
 function markSearchPending() {
   state.searchController?.abort();
@@ -200,6 +202,7 @@ async function refreshListeners(options = {}) {
     el.resultCount.textContent = search ? `「${search}」を検索中…` : "一覧を読み込み中…";
     const query = new URLSearchParams({
       search, sort:el.sort.value, classification:el.classificationFilter.value, blocked:el.blockFilter.value,
+      giftExperience:el.giftExperience.value, commentExperience:el.commentExperience.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
       limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
     });

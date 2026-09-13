@@ -2,6 +2,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventStore, rangeStart } from "../lib/event-store.js";
 
+test("gift and comment experience combine before pagination", async () => {
+  for (const gift of ['all','yes','no']) for (const comment of ['all','yes','no']) {
+    const store=new EventStore();store.ready=true;let sql;
+    store.pool={async query(q){sql=q;return {rows:[]};}};
+    await store.listeners({username:'host',giftExperience:gift,commentExperience:comment});
+    if(gift!=='all')assert.ok(sql.includes(`COALESCE(c.gifts, 0) ${gift==='yes'?'>':'='} 0`));
+    if(comment!=='all')assert.ok(sql.includes(`COALESCE(c.comments, 0) ${comment==='yes'?'>':'='} 0`));
+  }
+});
+
+test("ranking experience filters include cheap gifts and apply before paging", async () => {
+  const store=new EventStore();store.ready=true;
+  store.listenerContributionRankings=async()=>({lifetimeOrder:['cheap','silent','talk'],recentOrder:['cheap','silent','talk'],byUserId:new Map(),generatedAt:1});
+  store.pool={async query(){return {rows:[{user_id:'cheap',gifts:1,comments:0},{user_id:'silent',gifts:0,comments:0},{user_id:'talk',gifts:0,comments:5}]};}};
+  store.listenerRowsByIds=async ids=>ids.map(userId=>({userId}));
+  const gifts=await store.listenerContributionPage({giftExperience:'yes',commentExperience:'no'});
+  assert.deepEqual(gifts.items.map(x=>x.userId),['cheap']);
+  const comments=await store.listenerContributionPage({giftExperience:'no',commentExperience:'yes'});
+  assert.deepEqual(comments.items.map(x=>x.userId),['talk']);
+});
+
 test("combined lurker and unblocked visit sort pages before loading profiles", async () => {
   const store=new EventStore();store.ready=true;
   let sql;
