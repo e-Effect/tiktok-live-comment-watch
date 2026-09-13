@@ -57,11 +57,11 @@ test("listener summary uses a short cache with an explicit fresh option", () => 
 
 test("ledger has no realtime event polling and keeps manual list refresh", () => {
   assert.doesNotMatch(clientSource, /refreshRealtime|\/api\/listeners\/events|setInterval\(/);
-  assert.match(clientSource, /refreshSummary\(options\), refreshListeners\(options\)/);
+  assert.match(clientSource, /await refreshListeners\(options\);\s+await refreshSummary\(options\);/);
   assert.match(clientSource, /visibilitychange/);
 });
 
-test("restored listener searches rerun and normalize full-width IDs", () => {
+test("listener searches use explicit submit and normalize full-width IDs", () => {
   const match = clientSource.match(/function normalizeListenerSearch\(value\) \{([\s\S]*?)\n\}/);
   assert.ok(match, "search normalizer should exist");
   const normalizeSearch = new Function("value", match[1]);
@@ -73,7 +73,10 @@ test("restored listener searches rerun and normalize full-width IDs", () => {
   assert.match(clientSource, /search === state\.pendingListenerSearch/);
   assert.match(clientSource, /を検索中…/);
   assert.match(serverSource, /normalizeListenerSearch\(url\.searchParams\.get\("search"\)/);
-  assert.match(htmlSource, />全データを再読み込み</);
+  assert.match(htmlSource, /id="refresh" type="submit">検索</);
+  assert.match(htmlSource, /id="refreshSummary" type="button">集計を更新</);
+  assert.match(clientSource, /el\.listenerSearchForm\.addEventListener\("submit"/);
+  assert.match(clientSource, /el\.classificationFilter\.addEventListener\("change", markSearchPending\)/);
 });
 
 test("listener rows show a clear follow state while profile totals stay in details", () => {

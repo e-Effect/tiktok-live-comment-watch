@@ -22,16 +22,26 @@ el.loginForm.addEventListener("submit", async (event) => {
 el.logout.addEventListener("click", logout);
 el.backfillAvatars.addEventListener("click", backfillAvatars);
 el.compactAvatars.addEventListener("click", compactAvatars);
-el.refresh.addEventListener("click", () => refreshAll({fresh:true}));
-el.exportCsv.addEventListener("click", exportCsv);
-el.search.addEventListener("input", debounce(() => { state.listenerPage = 0; refreshListeners(); }, 300));
-el.streamUsername.addEventListener("change", () => {
+el.listenerSearchForm.addEventListener("submit", event => {
+  event.preventDefault();
   state.listenerPage = 0;
-  refreshAll();
+  refreshListeners();
 });
-el.sort.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
-el.classificationFilter.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
-el.blockFilter.addEventListener("change", () => { state.listenerPage = 0; refreshListeners(); });
+el.refreshSummary.addEventListener("click", () => refreshSummary({fresh:true}));
+el.exportCsv.addEventListener("click", exportCsv);
+el.search.addEventListener("input", markSearchPending);
+el.streamUsername.addEventListener("input", markSearchPending);
+el.sort.addEventListener("change", markSearchPending);
+el.classificationFilter.addEventListener("change", markSearchPending);
+el.blockFilter.addEventListener("change", markSearchPending);
+
+function markSearchPending() {
+  state.searchController?.abort();
+  clearTimeout(state.rankingRetryTimer);
+  state.listenerPage = 0;
+  el.listenerPrev.disabled = el.listenerNext.disabled = true;
+  el.searchHelp.textContent = "条件を変更しました。「検索」を押すと一覧に反映されます。";
+}
 el.listenerPrev.addEventListener("click", () => {
   if (state.listenerPage <= 0) return;
   state.listenerPage -= 1;
@@ -91,7 +101,8 @@ function logout() {
 }
 
 async function refreshAll(options = {}) {
-  await Promise.all([refreshSummary(options), refreshListeners(options)]);
+  await refreshListeners(options);
+  await refreshSummary(options);
 }
 
 async function backfillAvatars() {
@@ -150,6 +161,8 @@ async function compactAvatars() {
 }
 
 async function refreshSummary(options = {}) {
+  el.refreshSummary.disabled = true;
+  el.refreshSummary.textContent = "集計中…";
   try {
     const response = await api(`/api/listeners/summary${params(options.fresh ? {fresh:"1"} : {})}`);
     if (!response.ok) throw new Error("集計を取得できません");
@@ -169,6 +182,7 @@ async function refreshSummary(options = {}) {
       el.connectionStatus.classList.remove("error");
     }
   } catch (error) { showConnectionError(error); }
+  finally { el.refreshSummary.disabled = false; el.refreshSummary.textContent = "集計を更新"; }
 }
 
 async function refreshListeners(options = {}) {
@@ -179,6 +193,10 @@ async function refreshListeners(options = {}) {
     const search = currentListenerSearch();
     state.pendingListenerSearch = search;
     el.listenerRows.setAttribute("aria-busy", "true");
+    el.refresh.disabled = true;
+    el.refresh.textContent = "検索中…";
+    el.emptyState.hidden = true;
+    el.searchHelp.textContent = "検索中です。条件によっては20〜30秒ほどかかります。";
     el.resultCount.textContent = search ? `「${search}」を検索中…` : "一覧を読み込み中…";
     const query = new URLSearchParams({
       search, sort:el.sort.value, classification:el.classificationFilter.value, blocked:el.blockFilter.value,
@@ -190,6 +208,7 @@ async function refreshListeners(options = {}) {
     const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
     const data = await response.json(); state.items = data.items || [];
+    el.searchHelp.textContent = state.items.length ? "検索結果を表示しています。行を選ぶと詳細が開きます。" : "検索が完了しました。条件に一致するリスナーはいません。";
     if (el.connectionStatus.textContent === "一覧を取得できません") {
       el.connectionStatus.textContent = "データベース接続済み";
       el.connectionStatus.classList.remove("error");
@@ -216,10 +235,13 @@ async function refreshListeners(options = {}) {
   } catch (error) {
     if (error?.name !== "AbortError") {
       el.resultCount.textContent = "検索を完了できませんでした";
+      el.searchHelp.textContent = "検索に失敗しました。「該当者なし」ではありません。もう一度「検索」を押してください。";
       showConnectionError(error);
     }
   } finally {
     if (state.searchController === controller) {
+      el.refresh.disabled = false;
+      el.refresh.textContent = "検索";
       state.searchController = null;
       state.pendingListenerSearch = null;
       el.listenerRows.removeAttribute("aria-busy");
@@ -241,8 +263,7 @@ function refreshRestoredSearch() {
   if (!state.key || el.app.hidden) return;
   const search = currentListenerSearch();
   if (!search || search === state.pendingListenerSearch || search === state.lastListenerSearch && state.items.length) return;
-  state.listenerPage = 0;
-  refreshListeners();
+  markSearchPending();
 }
 
 function scheduleRestoredSearchChecks() {
