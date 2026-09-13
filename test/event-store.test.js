@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventStore, rangeStart } from "../lib/event-store.js";
 
+test("summary materializes only small profile fields before aggregate join", async () => {
+  const store = new EventStore();store.ready=true;
+  let sql,values;
+  store.pool={async query(q,v){sql=q;values=v;return {rows:[{listeners:'12',comments:'50',avatars:'9'}]};}};
+  const result=await store.listenerSummary({username:'test-host'});
+  assert.match(sql,/profiles AS MATERIALIZED/);
+  assert.match(sql,/totals AS MATERIALIZED/);
+  assert.match(sql,/\(avatar_data IS NOT NULL\) AS has_avatar/);
+  assert.match(sql,/JOIN profiles l/);
+  assert.equal(values[0],'test-host');
+  assert.equal(result.comments,50);
+  assert.equal(result.avatars,9);
+});
+
 test("event writes enforce listener then alias then stats dependencies", async () => {
   const store = new EventStore();
   store.ready = true;

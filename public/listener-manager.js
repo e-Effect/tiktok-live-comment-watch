@@ -164,6 +164,10 @@ async function refreshSummary(options = {}) {
       ["ギフト個数", state.summary.gifts], ["ギフトコイン", state.summary.coins, true], ["シェア", state.summary.shares]
     ];
     el.summary.innerHTML = cards.map(([label,value,highlight]) => `<article class="card summary-card ${highlight?"highlight":""}"><span>${label}</span><strong>${number.format(value||0)}</strong></article>`).join("");
+    if (el.connectionStatus.textContent === "集計を取得できません") {
+      el.connectionStatus.textContent = "データベース接続済み";
+      el.connectionStatus.classList.remove("error");
+    }
   } catch (error) { showConnectionError(error); }
 }
 

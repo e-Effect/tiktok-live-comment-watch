@@ -34,6 +34,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
 const sessions = new Map();
 const listenerSummaryCache = new Map();
+const listenerSummaryInFlight = new Map();
 const LISTENER_SUMMARY_CACHE_MS = 30000;
 const listenerPageCache = new Map();
 const listenerPagePromises = new Map();
@@ -2585,8 +2586,15 @@ const server = createServer(async (request, response) => {
         sendJson(response, 200, cached.value);
         return;
       }
-      const summary = await eventStore.listenerSummary({ username });
-      listenerSummaryCache.set(cacheKey, { at: Date.now(), value: summary });
+      let pending = listenerSummaryInFlight.get(cacheKey);
+      if (!pending) {
+        pending = eventStore.listenerSummary({ username }).then(summary => {
+          listenerSummaryCache.set(cacheKey, { at: Date.now(), value: summary });
+          return summary;
+        }).finally(() => { listenerSummaryInFlight.delete(cacheKey); });
+        listenerSummaryInFlight.set(cacheKey, pending);
+      }
+      const summary = await pending;
       sendJson(response, 200, summary);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
