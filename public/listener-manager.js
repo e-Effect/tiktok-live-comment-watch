@@ -190,6 +190,10 @@ async function refreshListeners(options = {}) {
     const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
     const data = await response.json(); state.items = data.items || [];
+    if (el.connectionStatus.textContent === "一覧を取得できません") {
+      el.connectionStatus.textContent = "データベース接続済み";
+      el.connectionStatus.classList.remove("error");
+    }
     state.lastListenerSearch = search;
     state.listenerTotal = Number(data.total || 0);
     const start = state.listenerTotal ? state.listenerPage * state.listenerPageSize + 1 : 0;

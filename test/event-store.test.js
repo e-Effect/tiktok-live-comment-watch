@@ -2,6 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventStore, rangeStart } from "../lib/event-store.js";
 
+test("combined lurker and unblocked visit sort pages before loading profiles", async () => {
+  const store=new EventStore();store.ready=true;
+  let sql;
+  store.pool={async query(q){sql=q;return {rows:[]};}};
+  await store.listeners({username:'host',classification:'lurker',blocked:'unblocked',sort:'visits'});
+  const matched=sql.slice(sql.indexOf('WITH matched_listeners'),sql.indexOf('), totals AS'));
+  assert.doesNotMatch(matched,/avatar_url|avatar_data|l\.tags/);
+  assert.match(sql,/page AS MATERIALIZED/);
+  assert.match(sql,/FROM page p JOIN listeners l/);
+  assert.match(sql,/ORDER BY p\.visits DESC/);
+});
+
 test("summary materializes only small profile fields before aggregate join", async () => {
   const store = new EventStore();store.ready=true;
   let sql,values;
