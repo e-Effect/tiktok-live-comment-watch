@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
+import { trialOptions } from "./lib/trial-metrics.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -2812,6 +2813,19 @@ const server = createServer(async (request, response) => {
         sendJson(response,200,await eventStore.registerBirthday(userId,birthday,true));
       } else sendJson(response,405,{error:"Method not allowed"});
     } catch (error) { sendJson(response,500,{error:shortError(error)}); }
+    return;
+  }
+
+  if (url.pathname === '/api/listeners/trial-metrics' && request.method === 'GET') {
+    if (!requireListenerAdmin(request, response)) return;
+    let options;
+    try {
+      options = trialOptions({ids:url.searchParams.get('ids'),username:url.searchParams.get('username'),at:url.searchParams.get('at')});
+    } catch (error) {
+      sendJson(response,400,{error:shortError(error)}); return;
+    }
+    try { sendJson(response,200,await eventStore.listenerTrialMetrics(options)); }
+    catch (error) { sendJson(response,503,{error:shortError(error)}); }
     return;
   }
 
