@@ -8,6 +8,7 @@ import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
 import { trialOptions } from "./lib/trial-metrics.js";
 import { noContributionRank } from "./lib/contribution-rank-v2.js";
+import { ViewerRanks } from "./lib/viewer-ranks.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -186,6 +187,10 @@ class LiveSession extends EventEmitter {
       heartMeStats: summarizeHeartMe([]),
       followStats: summarizeFollowStatus([])
     };
+    this.viewerRanks = new ViewerRanks(eventStore, this.username, () => {
+      if (!this.stoppedAt) this.broadcastPresence([...this.userStats.values()].filter(user => this.viewerRanks.rank(user.userId)));
+    });
+    this.viewerRanks.rank('');
   }
 
   async start() {
@@ -1291,7 +1296,7 @@ class LiveSession extends EventEmitter {
   }
 
   realtimeUser(user) {
-    return { ...user };
+    return { ...user, contributionRank: this.viewerRanks.rank(user.userId) };
   }
 
   snapshot(message = "") {
@@ -1332,8 +1337,8 @@ class LiveSession extends EventEmitter {
       attentionAlerts: attentionAlerts.active(this.id),
       gifts: this.gifts.map((gift) => this.decorateUserEvent(gift)),
       shares: this.shares.map((share) => this.decorateUserEvent(share)),
-      topUsers,
-      visitors,
+      topUsers: topUsers.map(user => this.realtimeUser(user)),
+      visitors: visitors.map(user => this.realtimeUser(user)),
       followedTodayCount: secondary.followedTodayCount,
       heartMeStats: secondary.heartMeStats,
       followStats: secondary.followStats,
@@ -1346,7 +1351,7 @@ class LiveSession extends EventEmitter {
 
   decorateUserEvent(event) {
     const user = this.userStats.get(event.userId);
-    return user ? { ...event, ...userDisplayState(user) } : event;
+    return { ...event, ...(user ? userDisplayState(user) : {}), contributionRank: this.viewerRanks.rank(event.userId) };
   }
 
   broadcast(type, payload) {

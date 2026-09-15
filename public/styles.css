@@ -597,3 +597,23 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
   .grid > section.panel-height-long .list { height: 600px; }
   .grid > section.panel-height-max .list { height: 820px; }
 }
+.viewer-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  margin-left: .4em;
+  min-width: 1.35em;
+  padding: .05em .3em;
+  border: 1px solid currentColor;
+  border-radius: .3em;
+  font-size: .8em;
+  font-weight: 900;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.viewer-rank-s { color: #604000; background: #ffe38a; }
+.viewer-rank-a { color: #81314a; background: #ffe0eb; }
+.viewer-rank-b { color: #3e317d; background: #ece5ff; }
+.viewer-rank-c { color: #164a70; background: #dcefff; }
+.viewer-rank-d { color: #404954; background: #edf0f4; }

@@ -1321,6 +1321,7 @@ function refreshEventDisplayState(events, cache) {
     if (!user) return event;
     return {
       ...event,
+      contributionRank: user.contributionRank || "",
       avatarUrl: event.avatarUrl || user.avatarUrl || "",
       followedToday: Boolean(user.followedToday),
       isFollowingHost: user.isFollowingHost,
@@ -2141,7 +2142,9 @@ function setStatus(status, message, mode) {
 
 function renderDecoratedName(user) {
   const name = escapeHtml(user.nickname || user.userId);
-  return `${heartMeMark(user)}${todayFollowMark(user)}${name}`;
+  const rank = /^[SABCD]$/.test(user.contributionRank || "") ? user.contributionRank : "";
+  const badge = rank ? `<span class="viewer-rank viewer-rank-${rank.toLowerCase()}" title="直近90日のリスナーランク：${rank}" aria-label="ランク${rank}">${rank}</span>` : "";
+  return `${heartMeMark(user)}${todayFollowMark(user)}${name}${badge}`;
 }
 
 function renderEventAvatar(user) {
