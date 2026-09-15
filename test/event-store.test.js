@@ -360,13 +360,15 @@ test("listener contribution rankings use 90 days and eligibility thresholds and 
     async query(sql, values) {
       if (sql.includes("shared_app_states")) return {rows:[]};
       calls += 1;
-      assert.match(sql, /INTERVAL '90 days'/);
-      assert.match(sql, /recent_visits/);
-      assert.match(sql, /diamonds::numeric \/ NULLIF\(item_count, 0\) > 10/);
-      assert.match(sql, /HAVING SUM\(diamonds\) >= 100/);
-      assert.match(sql, /HAVING COUNT\(\*\) FILTER \(WHERE event_type='comment'\) >= 10/);
-      assert.match(sql, /rankable_gifts/);
-      assert.deepEqual(values, ["streamer"]);
+      if(sql.includes('listener_stream_stats')) {
+        assert.deepEqual(values, ["streamer"]);
+        assert.match(sql, /SUM\(gift_coins\) >= 100 AND SUM\(comment_count\) >= 10/);
+      }
+      if(sql.includes('FROM live_events')) {
+        assert.match(sql, /NULLIF\(item_count,0\)>10/);
+        assert.equal(values[3]-values[2], 90*86400000);
+        assert.ok(values[0].length<=10);
+      }
       return { rows: [
         { user_id:"top", search_text:"top listener", visits:"8", comments:"30", coins:"500", stats_last_seen_at:new Date("2026-08-25T10:00:00Z"), recent_visits:"3", recent_comments:"10", recent_coins:"100", recent_last_seen_at:new Date("2026-08-25T10:00:00Z") },
         { user_id:"other", search_text:"other listener", visits:"2", comments:"1", coins:"0", stats_last_seen_at:new Date("2026-08-20T10:00:00Z"), recent_visits:"1", recent_comments:"1", recent_coins:"0", recent_last_seen_at:new Date("2026-08-20T10:00:00Z") }
@@ -376,10 +378,10 @@ test("listener contribution rankings use 90 days and eligibility thresholds and 
 
   const first = await store.listenerContributionRankings({ username:"streamer" });
   const second = await store.listenerContributionRankings({ username:"streamer" });
-  assert.equal(calls, 1);
+  assert.equal(calls, 4);
   assert.equal(first.byUserId.get("top").contributionPosition, 1);
   assert.equal(first.byUserId.get("top").recentContributionPosition, 1);
-  assert.equal(first.byUserId.get("other").contributionRank, "ランクなし");
+  assert.equal(first.byUserId.has("other"), false);
   assert.deepEqual(first.lifetimeOrder, ["top"]);
   assert.equal(second.generatedAt, first.generatedAt);
 });
@@ -405,16 +407,16 @@ test("contribution snapshots survive a new store and restore without aggregation
   const pool={async query(sql,args){
     if(sql.includes('SELECT state FROM shared_app_states')){restores++;return {rows:saved?[{state:saved}]:[]};}
     if(sql.includes('INSERT INTO shared_app_states')){saved=JSON.parse(args[1]);return {rows:[]};}
-    aggregates++;return {rows:[{user_id:'known',comments:20,coins:100,visits:3}]};
+    aggregates++;return {rows:[{user_id:'known',recent_comments:20,recent_coins:100,recent_visits:3}]};
   }};
   const first=new EventStore();first.ready=true;first.pool=pool;
   const ranked=await first.listenerContributionRankings();
-  assert.ok(saved.generatedAt>0);assert.equal(aggregates,1);
+  assert.ok(saved.generatedAt>0);assert.equal(aggregates,4);
   const second=new EventStore();second.ready=true;second.pool=pool;
   const restored=await second.listenerContributionRankings({waitForRefresh:false});
   assert.deepEqual(restored.byUserId.get('known'),JSON.parse(JSON.stringify(ranked.byUserId.get('known'))));
   await second.listenerContributionRankings({waitForRefresh:false});
-  assert.equal(aggregates,1);assert.equal(restores,2);
+  assert.equal(aggregates,4);assert.equal(restores,2);
 });
 
 test("listener totals are counted in the background and then reused", async () => {

@@ -230,6 +230,11 @@ async function refreshListeners(options = {}) {
     el.listenerPrev.disabled = state.listenerPage <= 0;
     el.listenerNext.disabled = (state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal;
     el.emptyState.hidden = state.items.length > 0;
+    if (data.rankingPending) {
+      el.searchHelp.textContent = "90日ランクを計算中です。少人数ずつ処理しています。完了すると表示されます。";
+      el.resultCount.textContent = "ランク計算中";
+      el.emptyState.hidden = true;
+    }
     renderListenerTable();
     clearTimeout(state.rankingRetryTimer);
     state.rankingRetryTimer = data.rankingPending || data.totalPending ? setTimeout(() => {

@@ -2740,7 +2740,7 @@ const server = createServer(async (request, response) => {
         offset: options.offset
       });
       const cached = listenerPageCache.get(cacheKey);
-      const cacheMs = cached?.value?.totalPending
+      const cacheMs = cached?.value?.totalPending || cached?.value?.rankingPending
         ? LISTENER_TOTAL_PENDING_CACHE_MS
         : LISTENER_PAGE_CACHE_MS;
       if (!options.fresh && cached && cached.at >= Date.now() - cacheMs) {
