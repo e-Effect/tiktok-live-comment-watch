@@ -352,7 +352,7 @@ test("listener profile fields are returned without turning missing counts into z
   assert.equal(typeof result.items[0].hostFollowStatusUpdatedAt, "number");
 });
 
-test("listener contribution rankings combine lifetime and recent activity and reuse the cache", async () => {
+test("listener contribution rankings use 90 days and eligibility thresholds and reuse the cache", async () => {
   const store = new EventStore();
   store.ready = true;
   let calls = 0;
@@ -360,9 +360,11 @@ test("listener contribution rankings combine lifetime and recent activity and re
     async query(sql, values) {
       if (sql.includes("shared_app_states")) return {rows:[]};
       calls += 1;
-      assert.match(sql, /INTERVAL '30 days'/);
+      assert.match(sql, /INTERVAL '90 days'/);
       assert.match(sql, /recent_visits/);
-      assert.match(sql, /diamonds::numeric \/ item_count > 10/);
+      assert.match(sql, /diamonds::numeric \/ NULLIF\(item_count, 0\) > 10/);
+      assert.match(sql, /HAVING SUM\(diamonds\) >= 100/);
+      assert.match(sql, /HAVING COUNT\(\*\) FILTER \(WHERE event_type='comment'\) >= 10/);
       assert.match(sql, /rankable_gifts/);
       assert.deepEqual(values, ["streamer"]);
       return { rows: [
@@ -377,6 +379,8 @@ test("listener contribution rankings combine lifetime and recent activity and re
   assert.equal(calls, 1);
   assert.equal(first.byUserId.get("top").contributionPosition, 1);
   assert.equal(first.byUserId.get("top").recentContributionPosition, 1);
+  assert.equal(first.byUserId.get("other").contributionRank, "ランクなし");
+  assert.deepEqual(first.lifetimeOrder, ["top"]);
   assert.equal(second.generatedAt, first.generatedAt);
 });
 

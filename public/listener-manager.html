@@ -43,8 +43,7 @@
           <label>並び順
             <select id="sort">
               <option value="last_seen">最終来訪が新しい順</option>
-              <option value="contribution">総合ランク順</option>
-              <option value="recent_contribution">直近30日ランク順</option>
+              <option value="contribution">90日ランク順（対象者のみ）</option>
               <option value="visits">来訪回数が多い順</option>
               <option value="comments">コメント数が多い順</option>
               <option value="coins">ギフトコインが多い順</option>
@@ -75,6 +74,7 @@
         </form>
         <p id="searchHelp" role="status">条件を選んで「検索」を押してください。名前は空欄でも検索できます。</p>
         <p>送信経験は記録済みの全期間が対象です。ギフトは少額も含みます。配信者IDを指定した場合は、その配信者への記録で判定します。</p>
+        <p>ランクは直近90日：コメント10件以上、かつ対象ギフト100コイン以上。1個10コイン以下のギフトは除外します。条件未達は「ランクなし」。S〜Dの割合は対象者のみで計算します。更新するには「90日ランク順」で検索してください。問題コメントの自動減点は未導入です。</p>
 
         <div class="section-head"><span>全体集計（検索条件の絞り込みとは別）</span><button id="refreshSummary" type="button">集計を更新</button></div>
         <section id="summary" class="summary-grid" aria-label="全体集計"></section>

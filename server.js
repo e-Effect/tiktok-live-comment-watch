@@ -7,6 +7,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { constants as zlibConstants, createGzip, gzipSync } from "node:zlib";
 import { EventStore } from "./lib/event-store.js";
 import { trialOptions } from "./lib/trial-metrics.js";
+import { noContributionRank } from "./lib/contribution-rank-v2.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -2760,7 +2761,7 @@ const server = createServer(async (request, response) => {
           });
           return {
             ...result,
-            items: result.items.map((item) => ({ ...item, ...publicContributionRank(ranks.byUserId.get(item.userId)) })),
+            items: result.items.map((item) => ({ ...item, ...publicContributionRank(ranks.byUserId.get(item.userId) || noContributionRank(Boolean(ranks.generatedAt))) })),
             rankingGeneratedAt: ranks.generatedAt,
             rankingPending: Boolean(ranks.pending)
           };
