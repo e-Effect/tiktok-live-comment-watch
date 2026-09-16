@@ -9,6 +9,7 @@ import { EventStore } from "./lib/event-store.js";
 import { trialOptions } from "./lib/trial-metrics.js";
 import { noContributionRank } from "./lib/contribution-rank-v2.js";
 import { ViewerRanks } from "./lib/viewer-ranks.js";
+import { entryDetection, earlyEntryComment } from "./lib/early-entry-comment.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -326,7 +327,7 @@ class LiveSession extends EventEmitter {
     connection.on(events.MEMBER || "member", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
-      this.markSeen(person, at, "member", { entryEvent: true });
+      this.markSeen(person, at, "member", { entryEvent: true, detection: entryDetection(data) });
       this.emitNormalized({
         id: data.msgId || randomUUID(),
         type: "join",
@@ -431,7 +432,7 @@ class LiveSession extends EventEmitter {
     connection.on(events.SUPER_FAN_JOIN || "superFanJoin", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
-      this.markSeen(person, at, "super_fan_join", { entryEvent: true });
+      this.markSeen(person, at, "super_fan_join", { entryEvent: true, detection: entryDetection(data) });
       this.markHeartMe(person, at, {
         status: "active",
         level: heartMeLevelFromEvent(data),
@@ -468,11 +469,14 @@ class LiveSession extends EventEmitter {
     });
   }
 
-  markSeen(person, at, presenceSource = "event", { entryEvent = false } = {}) {
+  markSeen(person, at, presenceSource = "event", { entryEvent = false, detection = entryDetection() } = {}) {
     if (isAnonymousListenerIdentity(person)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
     const newlySeen = !user.hasJoined;
+    if (entryEvent && (!user.explicitEntryDetection || at > user.explicitEntryDetection.eventAt)) {
+      user.explicitEntryDetection = {...detection, eventAt:at, initial:this.currentEventSource() === "initial"};
+    }
     if (person.uniqueId) user.uniqueId = person.uniqueId;
     if (person.avatarUrl) user.avatarUrl = person.avatarUrl;
     if (!user.hasJoined) {
@@ -735,6 +739,7 @@ class LiveSession extends EventEmitter {
     this.comments = this.comments.slice(0, 200);
 
     const current = this.getUserStat(comment.userId, comment.nickname, comment.at, comment.signals);
+    comment.earlyEntryHighlight = earlyEntryComment(current.explicitEntryDetection, comment);
     current.comments += 1;
     current.lastSeenAt = comment.at;
     this.userStats.set(current.userId, current);

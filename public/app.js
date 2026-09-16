@@ -1728,6 +1728,7 @@ function commentArticleHtml(comment) {
 }
 
 function commentVisitClass(comment) {
+  if (comment.earlyEntryHighlight === true) return "early-entry-comment";
   return comment.visitHistoryKnown && Number(comment.visitCount || 0) === 1 ? "first-visit-comment" : "";
 }
 
