@@ -284,7 +284,7 @@ test("listener attention flag is saved independently from super fan", async () =
   store.pool = {
     async query(sql, values) {
       assert.match(sql, /needs_attention = COALESCE/);
-      assert.deepEqual(values, ["listener-1", null, true, null, null, null, null]);
+      assert.deepEqual(values, ["listener-1", null, true, null, null, null, null, null]);
       return { rows: [{ user_id:"listener-1", needs_attention:true }] };
     }
   };
@@ -302,7 +302,7 @@ test("super lurker flag is saved independently and returned by identity", async 
       call += 1;
       if (call === 1) {
         assert.match(sql, /is_super_lurker = COALESCE/);
-        assert.deepEqual(values, ["listener-1", null, null, true, null, null, null]);
+        assert.deepEqual(values, ["listener-1", null, null, true, null, null, null, null]);
         return { rows: [{ user_id:"listener-1", is_super_lurker:true }] };
       }
       assert.match(sql, /listener_aliases/);
@@ -322,7 +322,7 @@ test("blocked flag is saved independently and normalized for the ledger", async 
   store.pool = {
     async query(sql, values) {
       assert.match(sql, /is_blocked = COALESCE/);
-      assert.deepEqual(values, ["listener-1", null, null, null, true, null, null]);
+      assert.deepEqual(values, ["listener-1", null, null, null, true, null, null, null]);
       return { rows: [{ user_id:"listener-1", is_blocked:true }] };
     }
   };
