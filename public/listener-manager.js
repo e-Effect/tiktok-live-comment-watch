@@ -34,6 +34,7 @@ el.streamUsername.addEventListener("input", markSearchPending);
 el.sort.addEventListener("change", markSearchPending);
 el.classificationFilter.addEventListener("change", markSearchPending);
 el.blockFilter.addEventListener("change", markSearchPending);
+el.attentionFilter.addEventListener("change", markSearchPending);
 el.giftExperience.addEventListener("change", markSearchPending);
 el.commentExperience.addEventListener("change", markSearchPending);
 
@@ -202,6 +203,7 @@ async function refreshListeners(options = {}) {
     el.resultCount.textContent = search ? `「${search}」を検索中…` : "一覧を読み込み中…";
     const query = new URLSearchParams({
       search, sort:el.sort.value, classification:el.classificationFilter.value, blocked:el.blockFilter.value,
+      attention:el.attentionFilter.value,
       giftExperience:el.giftExperience.value, commentExperience:el.commentExperience.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
       limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
@@ -379,7 +381,8 @@ async function setInlineAttention(input) {
     if (!response.ok) throw new Error("要確認設定を保存できませんでした");
     const updated = await response.json();
     item.needsAttention = Boolean(updated.needsAttention);
-    renderListenerTable();
+    if (el.attentionFilter.value === "all") renderListenerTable();
+    else await refreshListeners({fresh:true});
   } catch (error) {
     input.checked = previous;
     showConnectionError(error);
