@@ -9,7 +9,7 @@ import { EventStore } from "./lib/event-store.js";
 import { trialOptions } from "./lib/trial-metrics.js";
 import { noContributionRank } from "./lib/contribution-rank-v2.js";
 import { ViewerRanks } from "./lib/viewer-ranks.js";
-import { entryDetection, earlyEntryComment } from "./lib/early-entry-comment.js";
+import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -774,6 +774,8 @@ class LiveSession extends EventEmitter {
     this.gifts = this.gifts.slice(0, 200);
 
     const user = this.getUserStat(gift.userId, gift.nickname, gift.at, gift.signals);
+    // Freeze timing at receipt; first-visit judgment may arrive later.
+    normalizedGift.earlyEntryGiftCandidate = withinEntryWindow(user.explicitEntryDetection, gift);
     user.gifts += repeatCount;
     user.diamonds += totalDiamonds;
     user.lastSeenAt = gift.at;

@@ -1243,6 +1243,10 @@ function scheduleRealtimeListRebuild(sessionId) {
     if (!session?.snapshot) return;
     rebuildRealtimeLists(session.snapshot, session.userCache || new Map());
     refreshVisibleCommentRows(session.snapshot.comments || [], session.pendingDisplayUserIds || new Set());
+    if (selectedSessionId === sessionId && (session.snapshot.gifts || []).some(gift =>
+      gift.earlyEntryGiftCandidate === true && session.pendingDisplayUserIds?.has(String(gift.userId || "")))) {
+      renderGiftHistory(session.snapshot.gifts || []);
+    }
     session.pendingDisplayUserIds?.clear();
     lastRealtimeListRebuildAt.set(sessionId, Date.now());
     if (selectedSessionId === sessionId) {
@@ -1729,6 +1733,7 @@ function commentArticleHtml(comment) {
 
 function commentVisitClass(comment) {
   if (comment.earlyEntryHighlight === true) return "early-entry-comment";
+  if (comment.earlyEntryGiftCandidate === true && comment.visitHistoryKnown === true && Number(comment.visitCount) === 1) return "early-entry-comment";
   return comment.visitHistoryKnown && Number(comment.visitCount || 0) === 1 ? "first-visit-comment" : "";
 }
 
