@@ -10,6 +10,7 @@ import { trialOptions } from "./lib/trial-metrics.js";
 import { noContributionRank } from "./lib/contribution-rank-v2.js";
 import { ViewerRanks } from "./lib/viewer-ranks.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
+import { searchComments } from "./lib/comment-search.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -2841,6 +2842,17 @@ const server = createServer(async (request, response) => {
     }
     try { sendJson(response,200,await eventStore.listenerTrialMetrics(options)); }
     catch (error) { sendJson(response,503,{error:shortError(error)}); }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/comment-search" && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    if (!eventStore.ready) { sendJson(response,503,{error:"データベースの準備中です"}); return; }
+    try {
+      sendJson(response,200,await searchComments(eventStore.pool,{
+        search:url.searchParams.get("search")||"", username:normalizeTikTokUsername(url.searchParams.get("username")||""), cursor:url.searchParams.get("cursor")||""
+      }));
+    } catch(error) { sendJson(response,503,{error:shortError(error)}); }
     return;
   }
 

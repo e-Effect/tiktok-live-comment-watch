@@ -37,6 +37,31 @@ el.blockFilter.addEventListener("change", markSearchPending);
 el.attentionFilter.addEventListener("change", markSearchPending);
 el.giftExperience.addEventListener("change", markSearchPending);
 el.commentExperience.addEventListener("change", markSearchPending);
+const commentTextState = {cursor:null,search:"",username:"",scanned:0,found:0,busy:false};
+el.commentTextForm.addEventListener("submit",event=>{event.preventDefault();runCommentTextSearch(false);});
+el.commentTextMore.addEventListener("click",()=>runCommentTextSearch(true));
+async function runCommentTextSearch(more) {
+  if(commentTextState.busy)return;
+  if(more && (el.commentTextQuery.value.trim()!==commentTextState.search || el.streamUsername.value.trim().replace(/^@/,"")!==commentTextState.username)) {
+    el.commentTextStatus.textContent="条件が変わっています。「コメントを検索」を押し直してください。";return;
+  }
+  if(!more){Object.assign(commentTextState,{cursor:null,search:el.commentTextQuery.value.trim(),username:el.streamUsername.value.trim().replace(/^@/,""),scanned:0,found:0});el.commentTextResults.replaceChildren();}
+  commentTextState.busy=true;el.commentTextSubmit.disabled=true;el.commentTextMore.disabled=true;
+  el.commentTextStatus.textContent="保存済みコメントを検索中です…";
+  try {
+    const params=new URLSearchParams({search:commentTextState.search,username:commentTextState.username});
+    if(commentTextState.cursor)params.set("cursor",commentTextState.cursor);
+    const response=await api(`/api/listeners/comment-search?${params}`);
+    const data=await response.json();if(!response.ok)throw new Error(data.error||"検索に失敗しました");
+    commentTextState.scanned+=data.scanned;commentTextState.found+=data.items.length;commentTextState.cursor=data.nextCursor;
+    // Replace each result page to keep long searches from growing the DOM indefinitely.
+    el.commentTextResults.innerHTML=data.items.map(item=>`<article class="card"><button type="button" data-comment-user="${escapeAttr(item.userId)}">${escapeHtml(item.nickname||item.userId)} の詳細</button><small> ${escapeHtml(formatHistoryDate(item.at))}</small><p style="white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(item.text)}</p></article>`).join("");
+    el.commentTextResults.querySelectorAll("[data-comment-user]").forEach(button=>button.addEventListener("click",()=>openDetail(button.dataset.commentUser)));
+    el.commentTextStatus.textContent=`${number.format(commentTextState.scanned)}件を確認／一致は累計${number.format(commentTextState.found)}件（今回${data.items.length}件を表示）。`+(data.complete?"保存中の対象コメントを最後まで検索しました。":"未検索の履歴があります。「続きから検索」で進めます。");
+    el.commentTextMore.hidden=!data.nextCursor;
+  } catch(error) {el.commentTextStatus.textContent=`検索を完了できませんでした：${error.message}。「該当なし」ではありません。`;}
+  finally {commentTextState.busy=false;el.commentTextSubmit.disabled=false;el.commentTextMore.disabled=false;}
+}
 
 function markSearchPending() {
   state.searchController?.abort();
