@@ -618,3 +618,4 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .viewer-rank-b { color: #3e317d; background: #ece5ff; }
 .viewer-rank-c { color: #164a70; background: #dcefff; }
 .viewer-rank-d { color: #404954; background: #edf0f4; }
+.viewer-coins { display:inline-block; margin-left:.55em; padding:.1em .35em; border-radius:.3em; color:#59420c; background:#fff2c9; font-size:.8em; font-weight:700; white-space:nowrap; vertical-align:middle; }

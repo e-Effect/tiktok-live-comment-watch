@@ -9,6 +9,7 @@ import { EventStore } from "./lib/event-store.js";
 import { trialOptions } from "./lib/trial-metrics.js";
 import { noContributionRank } from "./lib/contribution-rank-v2.js";
 import { ViewerRanks } from "./lib/viewer-ranks.js";
+import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
@@ -193,6 +194,9 @@ class LiveSession extends EventEmitter {
       if (!this.stoppedAt) this.broadcastPresence([...this.userStats.values()].filter(user => this.viewerRanks.rank(user.userId)));
     });
     this.viewerRanks.rank('');
+    this.viewerCoins = new ViewerCoins(eventStore,this.username,ids=>{
+      if (!this.stoppedAt) this.broadcastPresence(ids.map(id=>this.userStats.get(id)).filter(Boolean));
+    });
   }
 
   async start() {
@@ -1304,7 +1308,7 @@ class LiveSession extends EventEmitter {
   }
 
   realtimeUser(user) {
-    return { ...user, contributionRank: this.viewerRanks.rank(user.userId) };
+    return { ...user, contributionRank: this.viewerRanks.rank(user.userId), coins30d:this.viewerCoins.get(user.userId) };
   }
 
   snapshot(message = "") {
@@ -1359,7 +1363,7 @@ class LiveSession extends EventEmitter {
 
   decorateUserEvent(event) {
     const user = this.userStats.get(event.userId);
-    return { ...event, ...(user ? userDisplayState(user) : {}), contributionRank: this.viewerRanks.rank(event.userId) };
+    return { ...event, ...(user ? userDisplayState(user) : {}), contributionRank: this.viewerRanks.rank(event.userId), coins30d:this.viewerCoins.get(event.userId) };
   }
 
   broadcast(type, payload) {
@@ -1412,6 +1416,7 @@ class LiveSession extends EventEmitter {
   }
 
   stop(message = "停止しました。") {
+    this.viewerCoins.close();
     if (this.stoppedAt) return;
     this.stoppedAt = Date.now();
     if (this.presenceBroadcastTimer) clearTimeout(this.presenceBroadcastTimer);

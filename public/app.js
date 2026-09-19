@@ -1191,6 +1191,8 @@ function applyRealtimePayload(sessionId, type, payload) {
 
   if (!session.pendingDisplayUserIds) session.pendingDisplayUserIds = new Set();
   for (const user of payload?.users || []) {
+    if (user.coins30d !== cache.get(String(user.userId || ""))?.coins30d &&
+      (next.gifts || []).some(gift => gift.userId === user.userId)) session.giftCoinsChanged = true;
     upsertRealtimeUser(cache, user);
     const userId = String(user?.userId || "");
     if (userId) session.pendingDisplayUserIds.add(userId);
@@ -1243,10 +1245,11 @@ function scheduleRealtimeListRebuild(sessionId) {
     if (!session?.snapshot) return;
     rebuildRealtimeLists(session.snapshot, session.userCache || new Map());
     refreshVisibleCommentRows(session.snapshot.comments || [], session.pendingDisplayUserIds || new Set());
-    if (selectedSessionId === sessionId && (session.snapshot.gifts || []).some(gift =>
-      gift.earlyEntryGiftCandidate === true && session.pendingDisplayUserIds?.has(String(gift.userId || "")))) {
+    if (selectedSessionId === sessionId && (session.giftCoinsChanged || (session.snapshot.gifts || []).some(gift =>
+      gift.earlyEntryGiftCandidate === true && session.pendingDisplayUserIds?.has(String(gift.userId || ""))))) {
       renderGiftHistory(session.snapshot.gifts || []);
     }
+    session.giftCoinsChanged = false;
     session.pendingDisplayUserIds?.clear();
     lastRealtimeListRebuildAt.set(sessionId, Date.now());
     if (selectedSessionId === sessionId) {
@@ -1326,6 +1329,7 @@ function refreshEventDisplayState(events, cache) {
     return {
       ...event,
       contributionRank: user.contributionRank || "",
+      coins30d: user.coins30d ?? null,
       avatarUrl: event.avatarUrl || user.avatarUrl || "",
       followedToday: Boolean(user.followedToday),
       isFollowingHost: user.isFollowingHost,
@@ -2150,7 +2154,9 @@ function renderDecoratedName(user) {
   const name = escapeHtml(user.nickname || user.userId);
   const rank = /^[SABCD]$/.test(user.contributionRank || "") ? user.contributionRank : "";
   const badge = rank ? `<span class="viewer-rank viewer-rank-${rank.toLowerCase()}" title="直近90日のリスナーランク：${rank}" aria-label="ランク${rank}">${rank}</span>` : "";
-  return `${heartMeMark(user)}${todayFollowMark(user)}${name}${badge}`;
+  const coins = typeof user.coins30d === "number" && Number.isFinite(user.coins30d)
+    ? `<span class="viewer-coins" title="直近30日間にこの配信者へ送った合計コイン（少額ギフト含む・保存済み記録）">30日：${formatNumber(user.coins30d)}コイン</span>` : "";
+  return `${heartMeMark(user)}${todayFollowMark(user)}${name}${badge}${coins}`;
 }
 
 function renderEventAvatar(user) {
