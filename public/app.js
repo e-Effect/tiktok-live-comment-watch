@@ -1,3 +1,4 @@
+import { setupCommentHistory } from './viewer-comment-history.js?v=20260921';
 const attentionBySession = new Map();
 let attentionTimer;
 const form = document.querySelector("#connectForm");
@@ -1710,6 +1711,8 @@ function renderMetrics(snapshot) {
   if (visitorCount) visitorCount.textContent = formatNumber(snapshot.viewerStats?.knownJoins || 0);
 }
 
+setupCommentHistory(commentList,()=>({username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
+
 function renderComments(comments) {
   if (visitorDemoActive) comments = visitorDemoComments();
   if (!comments.length) {
@@ -1721,7 +1724,7 @@ function renderComments(comments) {
 
 function commentArticleHtml(comment) {
   return `
-    <article class="comment ${commentVisitClass(comment)}" data-user-id="${escapeHtml(String(comment?.userId || ""))}">
+    <article class="comment ${commentVisitClass(comment)}" data-user-id="${escapeHtml(String(comment?.userId || ""))}" data-user-name="${escapeHtml(String(comment.nickname || comment.userId || ""))}" role="button" tabindex="0" title="押すとこの人の最新10件のコメント履歴を表示">
       <header>
         ${renderEventAvatar(comment)}
         <span class="name">${renderDecoratedName(comment)}</span>

@@ -619,3 +619,13 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .viewer-rank-c { color: #164a70; background: #dcefff; }
 .viewer-rank-d { color: #404954; background: #edf0f4; }
 .viewer-coins { display:inline-block; margin-left:.55em; padding:.1em .35em; border-radius:.3em; color:#59420c; background:#fff2c9; font-size:.8em; font-weight:700; white-space:nowrap; vertical-align:middle; }
+.viewer-history-dialog { width:min(620px,calc(100vw - 32px)); max-height:80vh; overflow:auto; padding:20px; border:1px solid #cbd5df; border-radius:12px; background:#fff; color:#17212b; }
+.viewer-history-dialog::backdrop { background:rgba(0,0,0,.4); }
+.viewer-history-dialog header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.viewer-history-dialog h2 { font-size:1.15rem; overflow-wrap:anywhere; }
+.viewer-history-dialog ol { padding-left:1.5em; }
+.viewer-history-dialog li { padding:12px 6px; border-bottom:1px solid #dce3e6; }
+.viewer-history-dialog time { color:#526172; font-size:.85rem; }
+.viewer-history-dialog li p { margin:5px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+#commentList article[role="button"] { cursor:pointer; }
+#commentList article[role="button"]:focus-visible { outline:3px solid #008f82; outline-offset:-3px; }
