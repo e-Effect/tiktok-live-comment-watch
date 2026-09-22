@@ -2595,6 +2595,32 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  // Explicit administrator audit only; never polled by live clients.
+  if (url.pathname === "/api/integrations/stamp-audit" && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    const from = Number(url.searchParams.get("from"));
+    const to = Number(url.searchParams.get("to"));
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= from || to - from > 14 * 86400000 || to > Date.now() + 60000) {
+      sendJson(response, 400, {error:"Specify a past range of at most 14 days"});
+      return;
+    }
+    try {
+      const result = await eventStore.pool.query(`
+        SELECT event_key AS "eventKey", user_id AS "userId", unique_id AS "uniqueId",
+          nickname, gift_id AS "giftId", gift_name AS "giftName", item_count AS count,
+          event_at AS "eventAt"
+        FROM live_events WHERE stream_username = $1 AND event_type = 'gift'
+          AND gift_id IN ('7934','14007','14753','12290')
+          AND event_at >= $2 AND event_at < $3
+        ORDER BY event_at, event_key LIMIT 5001
+      `, [normalizeTikTokUsername(url.searchParams.get("username") || ""), new Date(from), new Date(to)]);
+      sendJson(response, 200, {items:result.rows.slice(0,5000),truncated:result.rows.length > 5000});
+    } catch (error) {
+      sendJson(response, 500, {error:shortError(error)});
+    }
+    return;
+  }
+
   if (url.pathname === "/api/listeners/summary") {
     if (!requireListenerAdmin(request, response)) return;
     try {
