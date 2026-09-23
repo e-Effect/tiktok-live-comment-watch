@@ -402,8 +402,9 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .panel-size-large .list { height: 500px; }
 .panel-size-wide .list { height: 410px; }
 .comment, .user-row { padding: 11px 12px; border-bottom: 1px solid var(--line); }
+.comment { padding-top: 7px; padding-bottom: 7px; }
 .comment header, .user-row { display: flex; align-items: center; gap: 8px; }
-.comment p { margin: 7px 0 0; line-height: 1.5; word-break: break-word; }
+.comment p { margin: 3px 0 0; line-height: 1.5; word-break: break-word; }
 .comment.first-visit-comment { background: #fff8d7; box-shadow: inset 4px 0 0 #e2b600; }
 .comment.early-entry-comment { background: #ffe5ef; box-shadow: inset 4px 0 0 #d85b8b; color: #242432; }
 .visitor-row.first-visit-row { background: #fff8d7; box-shadow: inset 4px 0 0 #e2b600; }
@@ -421,14 +422,14 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .empty.compact { padding: 9px 0; }
 .gift-card span { color: var(--muted); }
 .gift-card strong { margin: 0 6px; }
-.gift-event-body { display: flex; align-items: center; gap: 12px; margin-top: 9px; }
+.gift-event-body { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
 .gift-artwork {
   position: relative;
   display: grid;
   place-items: center;
-  width: 68px;
-  height: 68px;
-  flex: 0 0 68px;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
   overflow: hidden;
   border: 1px solid #f0dfe3;
   border-radius: 13px;
@@ -437,7 +438,7 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 }
 .gift-artwork > span { color: initial; }
 .gift-artwork img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; }
-.gift-event-info { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; }
+.gift-event-info { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 5px; }
 .gift-event-info > strong { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 1.06rem; }
 .gift-event-info > span { color: var(--ink); font-weight: 900; }
 .gift-event-info > small { flex-basis: 100%; color: var(--muted); font-weight: 800; }
