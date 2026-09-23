@@ -14,7 +14,7 @@ import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/earl
 import { searchComments } from "./lib/comment-search.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
-import { createGiftExclusionAlert } from "./lib/gift-exclusion.js";
+import { createGiftExclusionAlert, isExcludedPerformanceGift } from "./lib/gift-exclusion.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
 import {
@@ -838,12 +838,22 @@ class LiveSession extends EventEmitter {
 
   async checkGiftExclusion(gift) {
     if (!this.recordingEnabled || isAnonymousListenerIdentity(gift)) return;
-    const alert = await createGiftExclusionAlert(gift, async (userId) => {
-      if (!eventStore.ready) return false;
-      const result = await eventStore.pool.query('SELECT gift_excluded FROM listeners WHERE user_id = $1', [userId]);
-      return result.rows[0]?.gift_excluded === true;
-    });
+    let alert = null;
+    let slotExcluded = true; // Never start a draw when the eligibility check failed.
+    try {
+      alert = await createGiftExclusionAlert(gift, async (userId) => {
+        if (!eventStore.ready) throw new Error("Database not ready");
+        const result = await eventStore.pool.query('SELECT gift_excluded FROM listeners WHERE user_id = $1', [userId]);
+        return result.rows[0]?.gift_excluded === true;
+      });
+      slotExcluded = Boolean(alert);
+    } catch (error) {
+      console.warn("Gift exclusion check failed:", error.message);
+    }
+    // Decide before publishing the gift so the phone cannot start a slot first.
     if (alert) this.emitNormalized(alert);
+    this.emitNormalized({ ...gift, _giftExclusionChecked: true,
+      payload: { ...gift.payload, slotExcluded } });
   }
 
   async checkBirthdayCelebration(gift) {
@@ -980,8 +990,11 @@ class LiveSession extends EventEmitter {
     // listener, visit, rank, or alert under the shared placeholder "unknown".
     if (isAnonymousListenerIdentity(event)) return;
     event.serverReceivedAt ||= Date.now();
+    if (event.type === "gift" && !event._giftExclusionChecked && isExcludedPerformanceGift(event)) {
+      this.checkGiftExclusion(event).catch((error) => console.warn("Gift exclusion delivery failed:", error.message));
+      return;
+    }
     publishRealtimeIntegrationEvent(this, event);
-    if (event?.type === "gift") this.checkGiftExclusion(event).catch((error) => console.warn("Gift exclusion check failed:", error.message));
     if (event?.type !== "super_lurker_alert") this.checkSuperLurker(event).catch(() => {});
     this.queueDatabaseEvent(event);
     // Coalesce this HTTP batch into one durable append, without holding SSE.
@@ -1964,6 +1977,7 @@ function realtimeIntegrationPayload(session, event) {
   return {
     id: `${session.id}:${event.id}`.slice(0, 300),
     type: event.type,
+    slotExcluded: payload.slotExcluded === true,
     at,
     userId: String(event.userId || "").slice(0, 120),
     uniqueId: String(event.uniqueId || "").slice(0, 120),

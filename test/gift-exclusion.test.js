@@ -2,6 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGiftExclusionAlert } from '../lib/gift-exclusion.js';
 import { EventStore } from '../lib/event-store.js';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+
+test('eligibility is determined before publishing gift and alert; failures suppress draw', async()=>{
+  const source=readFileSync(new URL('../server.js',import.meta.url),'utf8');
+  const method=source.slice(source.indexOf('  async checkGiftExclusion('),source.indexOf('  async checkBirthdayCelebration('));
+  for(const mode of ['excluded','normal','failure']) {
+    const events=[];
+    const session=vm.runInNewContext(`({recordingEnabled:true,emitNormalized:e=>events.push(e),${method}})`,{
+      events,createGiftExclusionAlert,isAnonymousListenerIdentity:()=>false,console:{warn:()=>{}},
+      eventStore:{ready:true,pool:{query:async()=>{if(mode==='failure')throw Error('unavailable');return {rows:[{gift_excluded:mode==='excluded'}]};}}}
+    });
+    await session.checkGiftExclusion({id:'gift-1',type:'gift',giftId:14007,userId:'123',source:'live'});
+    const gift=events.at(-1);
+    assert.equal(gift.type,'gift');
+    assert.equal(gift._giftExclusionChecked,true);
+    assert.equal(gift.payload.slotExcluded,mode!=='normal');
+    assert.equal(events.length,mode==='excluded'?2:1);
+  }
+});
 
 test('only excluded listener sending Daisuki triggers alert, no other gift lookup', async () => {
   let lookups = 0;
