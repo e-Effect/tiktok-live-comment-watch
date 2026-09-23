@@ -14,6 +14,7 @@ import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/earl
 import { searchComments } from "./lib/comment-search.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
+import { createGiftExclusionAlert } from "./lib/gift-exclusion.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
 import {
@@ -53,8 +54,8 @@ const COLLECTOR_HEARTBEAT_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_H
 const COLLECTOR_RECEIVING_STALE_MS = Number(globalThis.process?.env?.COLLECTOR_RECEIVING_STALE_MS || 15 * 60 * 1000);
 const COLLECTOR_NEW_LIVE_GAP_MS = Number(globalThis.process?.env?.COLLECTOR_NEW_LIVE_GAP_MS || 3 * 60 * 60 * 1000);
 const SUPER_LURKER_ALERT_TYPES = new Set(["join"]);
-const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert", "birthday_alert", "birthday_celebration"]);
-const CRITICAL_PERSISTENCE_TYPES = new Set(["comment", "gift", "first_visit_claim_alert", "super_lurker_alert"]);
+const REALTIME_INTEGRATION_TYPES = new Set(["gift", "first_visit_claim_alert", "super_lurker_alert", "birthday_alert", "birthday_celebration", "gift_excluded_alert"]);
+const CRITICAL_PERSISTENCE_TYPES = new Set(["comment", "gift", "first_visit_claim_alert", "super_lurker_alert", "gift_excluded_alert"]);
 const PRESENCE_BROADCAST_INTERVAL_MS = Number(globalThis.process?.env?.PRESENCE_BROADCAST_INTERVAL_MS || 750);
 const SECONDARY_SUMMARY_INTERVAL_MS = Number(globalThis.process?.env?.SECONDARY_SUMMARY_INTERVAL_MS || 1000);
 const REALTIME_INTEGRATION_TICKET_MS = Number(globalThis.process?.env?.REALTIME_INTEGRATION_TICKET_MS || 8 * 60 * 60 * 1000);
@@ -835,6 +836,16 @@ class LiveSession extends EventEmitter {
     return true;
   }
 
+  async checkGiftExclusion(gift) {
+    if (!this.recordingEnabled || isAnonymousListenerIdentity(gift)) return;
+    const alert = await createGiftExclusionAlert(gift, async (userId) => {
+      if (!eventStore.ready) return false;
+      const result = await eventStore.pool.query('SELECT gift_excluded FROM listeners WHERE user_id = $1', [userId]);
+      return result.rows[0]?.gift_excluded === true;
+    });
+    if (alert) this.emitNormalized(alert);
+  }
+
   async checkBirthdayCelebration(gift) {
     if (!this.recordingEnabled || !gift.isHeartMe || gift.source === "initial" || isAnonymousListenerIdentity(gift)) return false;
     const day=japanCalendarDay(gift.at || Date.now());
@@ -970,6 +981,7 @@ class LiveSession extends EventEmitter {
     if (isAnonymousListenerIdentity(event)) return;
     event.serverReceivedAt ||= Date.now();
     publishRealtimeIntegrationEvent(this, event);
+    if (event?.type === "gift") this.checkGiftExclusion(event).catch((error) => console.warn("Gift exclusion check failed:", error.message));
     if (event?.type !== "super_lurker_alert") this.checkSuperLurker(event).catch(() => {});
     this.queueDatabaseEvent(event);
     // Coalesce this HTTP batch into one durable append, without holding SSE.
