@@ -44,7 +44,7 @@ test('gift exclusion persists independently; omitted fields stay unchanged',asyn
   for(const value of [true,false]) {
     store.pool={query:async(sql,args)=>{
       assert.match(sql,/gift_excluded = COALESCE\(\$9::boolean, gift_excluded\)/);
-      assert.deepEqual(args,['123',null,null,null,null,null,null,null,value]);
+      assert.deepEqual(args,['123',null,null,null,null,null,null,null,value,null]);
       return {rows:[{user_id:'123',gift_excluded:value}]};
     }};
     assert.equal((await store.updateListener('123',{giftExcluded:value})).giftExcluded,value);

@@ -1,5 +1,6 @@
 import { setupCommentHistory } from './viewer-comment-history.js?v=20260921';
 const attentionBySession = new Map();
+const welcomeBySession = new Map();
 let attentionTimer;
 const form = document.querySelector("#connectForm");
 const usernameInput = document.querySelector("#username");
@@ -427,17 +428,27 @@ function renderAttentionAlerts() {
   const panel = document.getElementById("attentionAlerts");
   if (!panel) return;
   const now = Date.now();
-  for (const [id, items] of attentionBySession) {
+  for (const collection of [attentionBySession, welcomeBySession]) for (const [id, items] of collection) {
     const current = items.filter(item => item.expiresAt > now);
-    current.length ? attentionBySession.set(id, current) : attentionBySession.delete(id);
+    current.length ? collection.set(id, current) : collection.delete(id);
   }
-  const items = attentionBySession.get(selectedSessionId) || [];
+  const items = [...(attentionBySession.get(selectedSessionId) || []), ...(welcomeBySession.get(selectedSessionId) || [])];
   panel.hidden = !items.length;
   panel.replaceChildren();
   for (const item of [...items].sort((a,b) => b.expiresAt-a.expiresAt)) {
     const row = document.createElement("div");
     row.style.cssText = "background:#b91c35;color:white;border:3px solid #ff7b8b;border-radius:12px;padding:14px 18px;margin:8px 0;font-size:clamp(20px,2.5vw,34px);font-weight:800;overflow-wrap:anywhere";
     row.textContent = `要確認：${item.nickname}${item.uniqueId ? `（@${item.uniqueId}）` : ""} — 反応がありました`;
+    if (item.kind === "welcome") {
+      row.style.background = "#dff4ff"; row.style.color = "#124f70"; row.style.borderColor = "#62bbe6";
+      row.style.display = "flex"; row.style.alignItems = "center"; row.style.gap = "14px";
+      row.innerHTML = renderEventAvatar(item);
+      const message = document.createElement("span");
+      message.textContent = `${item.nickname}さんが来てくれました！`;
+      row.append(message);
+      const avatar = row.querySelector(".event-avatar");
+      if (avatar) avatar.style.cssText = "width:48px;height:48px;flex:0 0 48px";
+    }
     panel.append(row);
   }
   if (items.length) attentionTimer = setTimeout(renderAttentionAlerts, Math.max(50, Math.min(...items.map(item => item.expiresAt))-now+20));
@@ -457,6 +468,14 @@ function openEventStream(sessionId) {
     if (!alert?.userId || !(alert.expiresAt > Date.now())) return;
     const items = attentionBySession.get(sessionId) || [];
     attentionBySession.set(sessionId, [...items.filter(item => item.userId !== alert.userId), alert]);
+    renderAttentionAlerts();
+  });
+  source.addEventListener("welcome_alert", (event) => {
+    markEventStreamActivity(sessionId);
+    const { alert } = JSON.parse(event.data);
+    if (!alert?.userId || !(alert.expiresAt > Date.now())) return;
+    const items = welcomeBySession.get(sessionId) || [];
+    welcomeBySession.set(sessionId, [...items.filter(item => item.userId !== alert.userId), {...alert, kind:"welcome"}]);
     renderAttentionAlerts();
   });
   source.addEventListener("snapshot", (event) => {
@@ -1373,6 +1392,7 @@ function refreshVisibleCommentRows(comments, changedUserIds) {
 function renderSnapshot(snapshot, options = {}) {
   if (!snapshot?.id) return;
   attentionBySession.set(snapshot.id, snapshot.attentionAlerts || []);
+  welcomeBySession.set(snapshot.id, snapshot.welcomeAlerts || []);
   if (snapshot.errorCode === "rate_limited" || isRateLimitMessage(snapshot.message)) {
     setRateLimitCooldown(snapshot.message);
   }

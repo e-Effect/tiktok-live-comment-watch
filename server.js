@@ -13,6 +13,7 @@ import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
+import { WelcomeAlerts } from "./lib/welcome-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { createGiftExclusionAlert, isExcludedPerformanceGift } from "./lib/gift-exclusion.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -79,6 +80,7 @@ const eventStore = new EventStore({
 });
 const runAvatarCacheWork = createAvatarWorkCache();
 const attentionAlerts = new AttentionAlerts();
+const welcomeAlerts = new WelcomeAlerts();
 let attentionRefreshAt = 0;
 let attentionRevision = 0;
 let attentionRefreshPending = false;
@@ -88,8 +90,8 @@ async function refreshAttentionIds() {
   attentionRefreshAt = Date.now();
   const revision = attentionRevision;
   try {
-    const ids = await eventStore.attentionListenerIds();
-    if (revision === attentionRevision) attentionAlerts.replace(ids);
+    const [ids, welcomeIds] = await Promise.all([eventStore.attentionListenerIds(), eventStore.welcomeListenerIds()]);
+    if (revision === attentionRevision) { attentionAlerts.replace(ids); welcomeAlerts.replace(welcomeIds); }
     else attentionRefreshAt = 0;
   }
   catch { attentionRefreshAt = 0; }
@@ -511,6 +513,8 @@ class LiveSession extends EventEmitter {
     if (this.recordingEnabled) {
       const alert = attentionAlerts.accept(this.id, person, at);
       if (alert) this.broadcast("attention_alert", { alert });
+      const welcome = this.currentEventSource() !== "initial" ? welcomeAlerts.accept(this.id, person, at) : null;
+      if (welcome) this.broadcast("welcome_alert", { alert: welcome });
     }
     return true;
   }
@@ -1372,6 +1376,7 @@ class LiveSession extends EventEmitter {
       shareCount: this.shareCount,
       comments: this.comments.map((comment) => this.decorateUserEvent(comment)),
       attentionAlerts: attentionAlerts.active(this.id),
+      welcomeAlerts: welcomeAlerts.active(this.id),
       gifts: this.gifts.map((gift) => this.decorateUserEvent(gift)),
       shares: this.shares.map((share) => this.decorateUserEvent(share)),
       topUsers: topUsers.map(user => this.realtimeUser(user)),
@@ -2955,6 +2960,7 @@ const server = createServer(async (request, response) => {
         if (updated) {
           attentionRevision += 1;
           attentionAlerts.update(updated.userId, updated.needsAttention);
+          welcomeAlerts.update(updated.userId, updated.welcomeNotice);
         }
         sendJson(response, updated ? 200 : 404, updated || { error: "リスナーが見つかりません" });
         return;
