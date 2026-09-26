@@ -64,6 +64,9 @@
           <label>要確認
             <select id="attentionFilter"><option value="all">指定なし</option><option value="yes">要確認のみ</option><option value="no">要確認を除く</option></select>
           </label>
+          <label>来訪お知らせ
+            <select id="welcomeFilter"><option value="all">指定なし</option><option value="yes">チェックありのみ</option><option value="no">チェックなしのみ</option></select>
+          </label>
           <label>ブロック状態
             <select id="blockFilter">
               <option value="all">すべて表示</option>
@@ -117,6 +120,6 @@
       <button id="detailClose" class="detail-close" type="button" aria-label="閉じる">×</button>
       <div id="detailContent"></div>
     </aside>
-    <script src="/listener-manager.js?v=20260927-welcome-notice" type="module"></script>
+    <script src="/listener-manager.js?v=20260927-welcome-filter" type="module"></script>
   </body>
 </html>

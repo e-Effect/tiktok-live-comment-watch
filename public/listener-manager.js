@@ -35,6 +35,7 @@ el.sort.addEventListener("change", markSearchPending);
 el.classificationFilter.addEventListener("change", markSearchPending);
 el.blockFilter.addEventListener("change", markSearchPending);
 el.attentionFilter.addEventListener("change", markSearchPending);
+el.welcomeFilter.addEventListener("change", markSearchPending);
 el.giftExperience.addEventListener("change", markSearchPending);
 el.commentExperience.addEventListener("change", markSearchPending);
 const commentTextState = {cursor:null,search:"",username:"",scanned:0,found:0,busy:false};
@@ -229,6 +230,7 @@ async function refreshListeners(options = {}) {
     const query = new URLSearchParams({
       search, sort:el.sort.value, classification:el.classificationFilter.value, blocked:el.blockFilter.value,
       attention:el.attentionFilter.value,
+      welcome:el.welcomeFilter.value,
       giftExperience:el.giftExperience.value, commentExperience:el.commentExperience.value,
       direction:["first_seen","name"].includes(el.sort.value) ? "asc" : "desc",
       limit:String(state.listenerPageSize), offset:String(state.listenerPage * state.listenerPageSize)
