@@ -188,14 +188,18 @@ async function runSystemCheck() {
   systemCheckList.innerHTML = "";
   let health = null;
   let countPocketOk = false;
+  let smartphoneStreams = 0;
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
     if (response.ok) health = await response.json();
   } catch {}
   try {
-    const now = Date.now();
-    const response = await fetch(`https://count-pocket.a-line.workers.dev/api/live-feed?giftSince=${now}&alertSince=${now}&limit=1&check=${now}`, { cache: "no-store" });
-    countPocketOk = response.ok;
+    const response = await fetch("/api/system-check/smartphone", { cache: "no-store", signal: AbortSignal.timeout(6500) });
+    if (response.ok) {
+      const result = await response.json();
+      countPocketOk = result.reachable === true;
+      smartphoneStreams = Number(result.connectedStreams || 0);
+    }
   } catch {}
 
   const diagnostics = health?.collector?.diagnostics?.collector || health?.collector?.diagnostics || {};
@@ -208,7 +212,8 @@ async function runSystemCheck() {
     { label: "note PCコレクター", ok: Boolean(health?.collector?.connected), detail: health?.collector?.connected ? `送信待ち ${diagnostics.pendingEvents || 0}件` : "TikFinityコレクターの待機信号がありません" },
     { label: "レシートアプリ", ok: receiptChecked && Boolean(receipt.reachable), pending: !receiptChecked, detail: !receiptChecked ? "note PC側の診断機能を更新すると確認できます" : receipt.reachable ? `${receipt.printer || "プリンター"}・印刷待ち ${receipt.queueCount || 0}件` : "note PCのレシートアプリを確認できません" },
     { label: "MP-B20", ok: receiptChecked && Boolean(receipt.printerReady), pending: !receiptChecked, detail: !receiptChecked ? "note PC側の診断機能を更新すると確認できます" : receipt.printerReady ? (receipt.printerVerified ? "接続確認済み" : "印刷キューを確認") : "プリンター電源とBluetoothを確認してください" },
-    { label: "スマホアプリ連携", ok: countPocketOk, detail: countPocketOk ? "Count Pocketの受信経路は正常です" : "Count Pocketの受信経路を確認できません" },
+    { label: "スマホアプリ連携", ok: countPocketOk, detail: countPocketOk ? "Count Pocketのサーバー受信経路は正常です" : "Count Pocketのサーバー受信経路を確認できません" },
+    { label: "アプリ接続", ok: smartphoneStreams > 0, pending: smartphoneStreams === 0, detail: smartphoneStreams > 0 ? `リアルタイム接続 ${smartphoneStreams}件（端末での表示完了は未確認）` : "リアルタイム接続なし・未確認。スマホのアプリを開いて確認してください" },
     { label: "未送信データ", ok: pendingCountsKnown && Number(diagnostics.pendingEvents || 0) === 0 && Number(diagnostics.pendingReceiptEvents || 0) === 0 && (!receiptChecked || Number(receipt.sharedReceiptPendingCount || 0) === 0), pending: !pendingCountsKnown, detail: pendingCountsKnown ? `コメント等 ${diagnostics.pendingEvents || 0}件・印刷 ${diagnostics.pendingReceiptEvents || 0}件・台帳履歴 ${receipt.sharedReceiptPendingCount || 0}件` : "note PC側の更新後に件数を確認できます" },
   ];
   systemCheckList.innerHTML = checks.map((check) => `
@@ -220,7 +225,7 @@ async function runSystemCheck() {
   systemCheckSummary.textContent = failures > 0
     ? `${failures}項目を確認してください。正常な機能はそのまま使えます。`
     : pending > 0
-      ? `クラウド側は正常です。note PC更新後に残り${pending}項目を確認できます。`
+      ? `確認できた項目は正常です。未確認の${pending}項目は各項目の説明を確認してください。`
       : "すべて正常です。このまま配信を開始できます。";
   systemCheckRetryBtn.disabled = false;
 }
