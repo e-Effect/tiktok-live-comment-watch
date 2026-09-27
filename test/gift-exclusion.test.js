@@ -1,21 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGiftExclusionAlert, GiftExclusionCache } from '../lib/gift-exclusion.js';
+import { createGiftExclusionAlert } from '../lib/gift-exclusion.js';
 import { EventStore } from '../lib/event-store.js';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
-test('cached eligibility queues the gift synchronously with no database lookup',()=>{
+test('eligibility is determined before publishing gift and alert; failures suppress draw', async()=>{
   const source=readFileSync(new URL('../server.js',import.meta.url),'utf8');
-  const method=source.slice(source.indexOf('  checkGiftExclusion('),source.indexOf('  async checkBirthdayCelebration('));
-  for(const mode of ['excluded','normal','not-ready']) {
-    const events=[];const cache=new GiftExclusionCache();
-    if(mode!=='not-ready')cache.replace(mode==='excluded'?['123']:[]);
-    const session=vm.runInNewContext(`({emitNormalized:e=>events.push(e),${method}})`,{events,giftExclusions:cache});
-    const result=session.checkGiftExclusion({id:'g',type:'gift',giftId:14007,userId:'123'});
-    assert.equal(result,undefined);
-    assert.equal(events[0].type,'gift');
-    assert.equal(events[0].payload.slotExcluded,mode!=='normal');
+  const method=source.slice(source.indexOf('  async checkGiftExclusion('),source.indexOf('  async checkBirthdayCelebration('));
+  for(const mode of ['excluded','normal','failure']) {
+    const events=[];
+    const session=vm.runInNewContext(`({recordingEnabled:true,emitNormalized:e=>events.push(e),${method}})`,{
+      events,createGiftExclusionAlert,isAnonymousListenerIdentity:()=>false,console:{warn:()=>{}},
+      eventStore:{ready:true,pool:{query:async()=>{if(mode==='failure')throw Error('unavailable');return {rows:[{gift_excluded:mode==='excluded'}]};}}}
+    });
+    await session.checkGiftExclusion({id:'gift-1',type:'gift',giftId:14007,userId:'123',source:'live'});
+    const gift=events.at(-1);
+    assert.equal(gift.type,'gift');
+    assert.equal(gift._giftExclusionChecked,true);
+    assert.equal(gift.payload.slotExcluded,mode!=='normal');
     assert.equal(events.length,mode==='excluded'?2:1);
   }
 });

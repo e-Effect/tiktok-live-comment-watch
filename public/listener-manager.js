@@ -385,8 +385,7 @@ async function setInlineGoodImpression(input) {
     if (!response.ok) throw new Error("チェックの設定を保存できませんでした");
     const updated = await response.json();
     item[field] = Boolean(updated[field]);
-    if (field === "welcomeNotice" && el.welcomeFilter.value !== "all") await refreshListeners({fresh:true});
-    else renderListenerTable();
+    renderListenerTable();
   } catch (error) {
     input.checked = previous;
     showConnectionError(error);

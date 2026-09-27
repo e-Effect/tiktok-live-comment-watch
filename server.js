@@ -14,9 +14,8 @@ import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/earl
 import { searchComments } from "./lib/comment-search.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { WelcomeAlerts } from "./lib/welcome-alerts.js";
-import { checkSmartphoneRoute } from "./lib/smartphone-check.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
-import { GiftExclusionCache, isExcludedPerformanceGift } from "./lib/gift-exclusion.js";
+import { createGiftExclusionAlert, isExcludedPerformanceGift } from "./lib/gift-exclusion.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
 import { giftImageUrlFromEvent } from "./lib/gift-image-url.js";
 import {
@@ -82,7 +81,6 @@ const eventStore = new EventStore({
 const runAvatarCacheWork = createAvatarWorkCache();
 const attentionAlerts = new AttentionAlerts();
 const welcomeAlerts = new WelcomeAlerts();
-const giftExclusions = new GiftExclusionCache();
 let attentionRefreshAt = 0;
 let attentionRevision = 0;
 let attentionRefreshPending = false;
@@ -92,8 +90,8 @@ async function refreshAttentionIds() {
   attentionRefreshAt = Date.now();
   const revision = attentionRevision;
   try {
-    const [ids, welcomeIds, excludedIds] = await Promise.all([eventStore.attentionListenerIds(), eventStore.welcomeListenerIds(), eventStore.giftExcludedListenerIds()]);
-    if (revision === attentionRevision) { attentionAlerts.replace(ids); welcomeAlerts.replace(welcomeIds); giftExclusions.replace(excludedIds); }
+    const [ids, welcomeIds] = await Promise.all([eventStore.attentionListenerIds(), eventStore.welcomeListenerIds()]);
+    if (revision === attentionRevision) { attentionAlerts.replace(ids); welcomeAlerts.replace(welcomeIds); }
     else attentionRefreshAt = 0;
   }
   catch { attentionRefreshAt = 0; }
@@ -842,12 +840,24 @@ class LiveSession extends EventEmitter {
     return true;
   }
 
-  checkGiftExclusion(gift) {
-    const {slotExcluded, alert} = giftExclusions.decide(gift);
-    // Queue synchronously before collector acknowledgment, with no per-gift DB lookup.
+  async checkGiftExclusion(gift) {
+    if (!this.recordingEnabled || isAnonymousListenerIdentity(gift)) return;
+    let alert = null;
+    let slotExcluded = true; // Never start a draw when the eligibility check failed.
+    try {
+      alert = await createGiftExclusionAlert(gift, async (userId) => {
+        if (!eventStore.ready) throw new Error("Database not ready");
+        const result = await eventStore.pool.query('SELECT gift_excluded FROM listeners WHERE user_id = $1', [userId]);
+        return result.rows[0]?.gift_excluded === true;
+      });
+      slotExcluded = Boolean(alert);
+    } catch (error) {
+      console.warn("Gift exclusion check failed:", error.message);
+    }
+    // Decide before publishing the gift so the phone cannot start a slot first.
+    if (alert) this.emitNormalized(alert);
     this.emitNormalized({ ...gift, _giftExclusionChecked: true,
       payload: { ...gift.payload, slotExcluded } });
-    if (alert) this.emitNormalized(alert);
   }
 
   async checkBirthdayCelebration(gift) {
@@ -985,7 +995,7 @@ class LiveSession extends EventEmitter {
     if (isAnonymousListenerIdentity(event)) return;
     event.serverReceivedAt ||= Date.now();
     if (event.type === "gift" && !event._giftExclusionChecked && isExcludedPerformanceGift(event)) {
-      this.checkGiftExclusion(event);
+      this.checkGiftExclusion(event).catch((error) => console.warn("Gift exclusion delivery failed:", error.message));
       return;
     }
     publishRealtimeIntegrationEvent(this, event);
@@ -2513,12 +2523,6 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "GET" && url.pathname === "/api/system-check/smartphone") {
-    const result = await checkSmartphoneRoute();
-    sendJson(response, 200, { ...result, connectedStreams: realtimeIntegrationBus.listenerCount("event") });
-    return;
-  }
-
   if (request.method === "GET" && url.pathname === "/api/health") {
     const collectorSessions = [...sessions.values()].filter((session) => session.recordingEnabled && session.mode === "collector");
     const collectorHeartbeatAt = Math.max(0, ...collectorSessions.map((session) => Number(session.lastCollectorHeartbeatAt || session.lastCollectorAt || 0))) || null;
@@ -2563,9 +2567,7 @@ const server = createServer(async (request, response) => {
       },
       listenerManagement: {
         configured: Boolean(LISTENER_ADMIN_KEY),
-        ready: Boolean(LISTENER_ADMIN_KEY && eventStore.status().ready),
-        giftExclusionReady: giftExclusions.ready,
-        giftExclusionPolicy: "cached-synchronous-queue-v1"
+        ready: Boolean(LISTENER_ADMIN_KEY && eventStore.status().ready)
       },
       liveCue: liveCue.status()
     });
@@ -2961,7 +2963,6 @@ const server = createServer(async (request, response) => {
           attentionRevision += 1;
           attentionAlerts.update(updated.userId, updated.needsAttention);
           welcomeAlerts.update(updated.userId, updated.welcomeNotice);
-          giftExclusions.update(updated.userId, updated.giftExcluded);
         }
         sendJson(response, updated ? 200 : 404, updated || { error: "リスナーが見つかりません" });
         return;
@@ -3089,7 +3090,6 @@ const server = createServer(async (request, response) => {
 });
 
 await eventStore.init();
-await refreshAttentionIds();
 
 server.listen(PORT, () => {
   console.log(`TikTok LIVE app: http://localhost:${PORT}`);
