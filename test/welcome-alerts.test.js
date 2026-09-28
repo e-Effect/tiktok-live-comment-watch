@@ -26,7 +26,7 @@ test('welcome checkbox is independently persisted and normalized',async()=>{
  for(const enabled of [true,false]) {
   store.pool={query:async(sql,args)=>{
    assert.match(sql,/welcome_notice = COALESCE\(\$10::boolean, welcome_notice\)/);
-   assert.deepEqual(args,['u',null,null,null,null,null,null,null,null,enabled]);
+   assert.deepEqual(args,['u',null,null,null,null,null,null,null,null,enabled,null,null]);
    return {rows:[{user_id:'u',welcome_notice:enabled}]};
   }};
   assert.equal((await store.updateListener('u',{welcomeNotice:enabled})).welcomeNotice,enabled);

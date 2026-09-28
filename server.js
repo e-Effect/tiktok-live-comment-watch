@@ -2616,6 +2616,13 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/integrations/stamp-messages" && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    try { sendJson(response, 200, await eventStore.stampMessageConfig()); }
+    catch (error) { sendJson(response, 503, {error:shortError(error)}); }
+    return;
+  }
+
   if (url.pathname === "/api/integrations/receipt-print" && request.method === "POST") {
     if (!requireListenerAdmin(request, response)) return;
     try {
