@@ -15,7 +15,7 @@ test('eligible config batches and caches queries; uses actual host and Japan dat
  const store=new EventStore();store.ready=true;let calls=0;
  store.pool={query:async sql=>{calls++;
   if(sql.includes('FROM listeners')){assert.match(sql,/is_super_fan = TRUE OR stamp_message_enabled = TRUE/);return {rows:[{userId:'1',message:''}]};}
-  assert.match(sql,/mentalist_k/);assert.match(sql,/Asia\/Tokyo/);assert.match(sql,/connected_at IS NOT NULL/);
+  assert.match(sql,/mentalist_k/);assert.match(sql,/Asia\/Tokyo/);assert.match(sql,/FROM viewer_visits/);
   return {rows:[{day:'2026-09-29'}]};
  }};
  const first=await store.stampMessageConfig();assert.deepEqual(first.broadcastDays,['2026-09-29']);
