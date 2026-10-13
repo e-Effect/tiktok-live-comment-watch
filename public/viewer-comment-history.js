@@ -34,7 +34,7 @@ export function setupCommentHistory(list,getContext) {
       for(const item of items){
         const row=document.createElement('li'),date=document.createElement('time'),text=document.createElement('p');
         const at=new Date(item.at);date.textContent=Number.isNaN(at.getTime())?'日時不明':at.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
-        text.textContent=String(item.text||'');row.append(date,text);results.append(row);
+        text.className='comment-text';text.textContent=String(item.text||'');row.append(date,text);results.append(row);
       }
       retry.hidden=false;
     }catch(error){if(error.name!=='AbortError' && ticket===revision){status.textContent=error.message;retry.hidden=false;}}

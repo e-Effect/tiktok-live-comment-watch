@@ -1,4 +1,5 @@
-import { setupCommentHistory } from './viewer-comment-history.js?v=20261014-history20';
+import { setupCommentHistory } from './viewer-comment-history.js?v=20261014-search1';
+import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 const attentionBySession = new Map();
 const welcomeBySession = new Map();
 let attentionTimer;
@@ -34,6 +35,8 @@ const giftDiamonds = document.querySelector("#giftDiamonds");
 const elapsedTime = document.querySelector("#elapsedTime");
 const visitorCount = document.querySelector("#visitorCount");
 const commentList = document.querySelector("#commentList");
+const commentSelection = setupCommentSelectionSearch(commentList, document.querySelector('#viewerCommentHistoryItems'));
+let commentSelectionContext = '';
 const userList = document.querySelector("#userList");
 const giftHistory = document.querySelector("#giftHistory");
 const giftHistoryFilterButton = document.querySelector("#giftHistoryFilterButton");
@@ -1370,6 +1373,10 @@ function refreshEventDisplayState(events, cache) {
 
 function refreshVisibleCommentRows(comments, changedUserIds) {
   if (visitorDemoActive || !changedUserIds?.size || !commentList) return;
+  if (commentSelection.isPaused()) {
+    renderComments(comments);
+    return;
+  }
   const commentsByUser = new Map();
   for (const comment of comments || []) {
     const userId = String(comment?.userId || "");
@@ -1734,12 +1741,17 @@ function renderMetrics(snapshot) {
 setupCommentHistory(commentList,()=>({username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
 
 function renderComments(comments) {
-  if (visitorDemoActive) comments = visitorDemoComments();
-  if (!comments.length) {
-    commentList.innerHTML = `<p class="empty">接続するとコメントがここに流れます。</p>`;
-    return;
+  const context = `${selectedSessionId}:${visitorDemoActive}`;
+  if (commentSelectionContext !== context) {
+    commentSelectionContext = context;
+    commentSelection.reset();
   }
-  commentList.innerHTML = comments.map(commentArticleHtml).join("");
+  if (visitorDemoActive) comments = visitorDemoComments();
+  commentSelection.update(() => {
+    commentList.innerHTML = comments.length
+      ? comments.map(commentArticleHtml).join("")
+      : `<p class="empty">接続するとコメントがここに流れます。</p>`;
+  });
 }
 
 function commentArticleHtml(comment) {
@@ -1753,7 +1765,7 @@ function commentArticleHtml(comment) {
           <span class="time">${formatClock(comment.at)}</span>
         </span>
       </header>
-      <p>${eventSourceBadge(comment)}${escapeHtml(comment.text)}</p>
+      <p class="comment-text">${eventSourceBadge(comment)}${escapeHtml(comment.text)}</p>
     </article>
   `;
 }
