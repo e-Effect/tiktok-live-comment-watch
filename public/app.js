@@ -1,4 +1,4 @@
-import { setupCommentHistory } from './viewer-comment-history.js?v=20260921';
+import { setupCommentHistory } from './viewer-comment-history.js?v=20261014-history20';
 const attentionBySession = new Map();
 const welcomeBySession = new Map();
 let attentionTimer;
@@ -1744,7 +1744,7 @@ function renderComments(comments) {
 
 function commentArticleHtml(comment) {
   return `
-    <article class="comment ${commentVisitClass(comment)}" data-user-id="${escapeHtml(String(comment?.userId || ""))}" data-user-name="${escapeHtml(String(comment.nickname || comment.userId || ""))}" role="button" tabindex="0" title="押すとこの人の最新10件のコメント履歴を表示">
+    <article class="comment ${commentVisitClass(comment)}" data-user-id="${escapeHtml(String(comment?.userId || ""))}" data-user-name="${escapeHtml(String(comment.nickname || comment.userId || ""))}" role="button" tabindex="0" title="押すとこの人の最新20件のコメント履歴を表示">
       <header>
         ${renderEventAvatar(comment)}
         <span class="name">${renderDecoratedName(comment)}</span>

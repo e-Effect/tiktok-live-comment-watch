@@ -1,5 +1,5 @@
 export function historyUrl(userId,username) {
-  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:'10',username})}`;
+  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:'20',username})}`;
 }
 
 export function setupCommentHistory(list,getContext) {
@@ -20,7 +20,7 @@ export function setupCommentHistory(list,getContext) {
     cancel();const ticket=revision;controller=new AbortController();
     results.replaceChildren();retry.hidden=true;
     if(!key){keyForm.hidden=false;status.textContent='コメント履歴を見るには台帳の管理キーを入力してください。';keyInput.focus();return;}
-    keyForm.hidden=true;status.textContent='最新10件を読み込んでいます…';
+    keyForm.hidden=true;status.textContent='最新20件を読み込んでいます…';
     try {
       const response=await fetch(historyUrl(target.userId,target.username),{headers:{Authorization:`Bearer ${key}`},signal:controller.signal,cache:'no-store'});
       if(ticket!==revision || !dialog.open)return;
@@ -29,7 +29,7 @@ export function setupCommentHistory(list,getContext) {
       const data=await response.json();
       if(ticket!==revision || !dialog.open)return;
       localStorage.setItem(storageKey,key);keyInput.value='';
-      const items=(data.items||[]).slice(0,10);
+      const items=(data.items||[]).slice(0,20);
       status.textContent=items.length?`保存済みの最新${items.length}件です。直前のコメントは保存待ちの場合があります。`:'保存済みのコメントはまだありません。';
       for(const item of items){
         const row=document.createElement('li'),date=document.createElement('time'),text=document.createElement('p');
