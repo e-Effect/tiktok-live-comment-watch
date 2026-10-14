@@ -12,6 +12,7 @@ import { ViewerRanks } from "./lib/viewer-ranks.js";
 import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
+import { dailyGiftRewards, rewardStreams, updateGiftReward, RewardError } from "./lib/gift-rewards.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { WelcomeAlerts } from "./lib/welcome-alerts.js";
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
@@ -2571,6 +2572,26 @@ const server = createServer(async (request, response) => {
       },
       liveCue: liveCue.status()
     });
+    return;
+  }
+
+  if (url.pathname === "/api/gift-rewards" || url.pathname === "/api/gift-rewards/streams") {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      if (request.method === "GET" && url.pathname.endsWith("/streams")) {
+        sendJson(response, 200, { items: await rewardStreams(eventStore) });
+      } else if (request.method === "GET") {
+        sendJson(response, 200, await dailyGiftRewards(eventStore, {
+          day: url.searchParams.get("day"), username: url.searchParams.get("username")
+        }));
+      } else if (request.method === "PATCH" && url.pathname === "/api/gift-rewards") {
+        sendJson(response, 200, await updateGiftReward(eventStore, await readBody(request)));
+      } else sendJson(response, 405, { error: "この操作は利用できません" });
+    } catch (error) {
+      sendJson(response, error instanceof RewardError ? error.status : 503, {
+        error: error instanceof RewardError ? error.message : "ギフト履歴を読み書きできませんでした。再試行してください。"
+      });
+    }
     return;
   }
 

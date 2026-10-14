@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>日別ギフト特典</title>
+    <link rel="stylesheet" href="/gift-rewards.css?v=20261014-1" />
+    <script src="/vendor/lucide.min.js" defer></script>
+    <script src="/gift-rewards.js?v=20261014-1" type="module"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a
+        class="back icon-button"
+        href="/"
+        title="コメントビューアー"
+        aria-label="コメントビューアー"
+        ><i data-lucide="arrow-left"></i
+      ></a>
+      <h1>日別ギフト特典</h1>
+      <nav><a href="/listener-manager.html">リスナー台帳</a></nav>
+    </header>
+    <main>
+      <section id="loginPanel" class="login" hidden>
+        <h2>管理キー</h2>
+        <form id="loginForm">
+          <label for="adminKey">リスナー台帳の管理キー</label>
+          <input
+            id="adminKey"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+          <button type="submit" class="primary">開く</button>
+        </form>
+      </section>
+      <p id="notice" class="notice" role="status" aria-live="polite"></p>
+      <p id="error" class="error" role="alert" hidden></p>
+      <div id="app" hidden>
+        <section class="date-band" aria-label="集計日">
+          <div class="date-heading">
+            <p class="eyebrow">DAILY REWARDS</p>
+            <h2 id="dayTitle"></h2>
+            <span class="timezone">日本時間 00:00–24:00</span>
+          </div>
+          <div class="date-controls">
+            <button
+              id="prevDay"
+              class="icon-button"
+              title="前日"
+              aria-label="前日"
+            >
+              <i data-lucide="chevron-left"></i>
+            </button>
+            <input id="day" type="date" aria-label="集計日" required />
+            <button
+              id="nextDay"
+              class="icon-button"
+              title="翌日"
+              aria-label="翌日"
+            >
+              <i data-lucide="chevron-right"></i>
+            </button>
+            <button id="today" class="text-button">今日</button>
+          </div>
+        </section>
+        <div class="filters">
+          <label class="stream-label"
+            >配信者<select id="stream" aria-label="配信者"></select
+          ></label>
+          <label class="search"
+            ><i data-lucide="search"></i
+            ><input
+              id="search"
+              type="search"
+              aria-label="リスナー検索"
+              placeholder="名前・IDで検索"
+          /></label>
+          <label class="pending"
+            ><input id="pendingOnly" type="checkbox" />未発送のみ</label
+          >
+          <button
+            id="refresh"
+            class="icon-button"
+            title="再読み込み"
+            aria-label="再読み込み"
+          >
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+        <div class="tabs" role="tablist" aria-label="特典">
+          <button
+            id="chipTab"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="results"
+            data-tier="chip"
+          >
+            <i data-lucide="circle-dot"></i
+            ><span>5,000達成<small>記念チップ</small></span
+            ><b id="chipCount">0</b>
+          </button>
+          <button
+            id="cardTab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="results"
+            data-tier="card"
+            tabindex="-1"
+          >
+            <i data-lucide="credit-card"></i
+            ><span>10,000達成<small>記念カード</small></span
+            ><b id="cardCount">0</b>
+          </button>
+        </div>
+        <section
+          id="results"
+          role="tabpanel"
+          aria-labelledby="chipTab"
+          aria-busy="false"
+        >
+          <div class="list-heading">
+            <h3 id="listTitle"></h3>
+            <span id="progress"></span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">リスナー</th>
+                  <th scope="col" class="amount">当日コイン</th>
+                  <th scope="col" id="designHeading" hidden>カードデザイン</th>
+                  <th scope="col">発送</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+          <p id="empty" class="empty" hidden></p>
+        </section>
+        <footer>
+          <span id="coverage">保存済み履歴のみ・未受信分は含みません</span
+          ><span id="updatedAt"></span>
+        </footer>
+      </div>
+    </main>
+    <dialog id="designDialog" aria-labelledby="designTitle">
+      <header class="sheet-header">
+        <div>
+          <small id="designDate"></small>
+          <h2 id="designTitle">カードデザイン</h2>
+        </div>
+        <button
+          id="closeDesign"
+          class="icon-button"
+          aria-label="閉じる"
+          title="閉じる"
+        >
+          <i data-lucide="x"></i>
+        </button>
+      </header>
+      <div class="sheet-body">
+        <p id="designPerson"></p>
+        <div
+          id="giftOptions"
+          class="gift-grid"
+          role="radiogroup"
+          aria-label="カードにするギフト"
+        ></div>
+      </div>
+      <footer class="sheet-actions">
+        <button id="clearDesign" class="text-button">選択を解除</button
+        ><button id="saveDesign" class="primary">保存</button>
+      </footer>
+    </dialog>
+  </body>
+</html>
