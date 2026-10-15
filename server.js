@@ -667,10 +667,12 @@ class LiveSession extends EventEmitter {
       current.visitHistoryKnown = false;
       current.visitHistoryStatus = "unknown";
       current.visitCount = 0;
+      current.quietReturnHighlight = false;
     } else {
       current.visitHistoryKnown = true;
       current.visitHistoryStatus = Number(summary.visitCount || 0) === 1 ? "first" : "returning";
       current.visitCount = Math.max(1, Number(summary.visitCount || 1));
+      current.quietReturnHighlight = current.visitCount === 2 && summary.quietReturnHighlight === true;
       current.firstVisitAt = summary.firstVisitAt || current.firstVisitAt || visit.at;
       current.lastVisitAt = summary.lastVisitAt || current.lastVisitAt || visit.at;
       current.previousVisitAt = summary.previousVisitAt || current.previousVisitAt || null;
@@ -1259,6 +1261,7 @@ class LiveSession extends EventEmitter {
       visitHistoryKnown: false,
       visitHistoryStatus: "unknown",
       visitCount: 0,
+      quietReturnHighlight: false,
       visitSource: "",
       firstVisitAt: null,
       lastVisitAt: null,
@@ -1694,6 +1697,7 @@ function userDisplayState(user) {
     visitHistoryKnown: Boolean(user.visitHistoryKnown),
     visitHistoryStatus: user.visitHistoryStatus || "unknown",
     visitCount: Number(user.visitCount || 0),
+    quietReturnHighlight: user.quietReturnHighlight === true,
     firstVisitAt: user.firstVisitAt,
     lastVisitAt: user.lastVisitAt,
     previousVisitAt: user.previousVisitAt

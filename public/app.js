@@ -1364,6 +1364,7 @@ function refreshEventDisplayState(events, cache) {
       visitHistoryKnown: Boolean(user.visitHistoryKnown),
       visitHistoryStatus: user.visitHistoryStatus || "unknown",
       visitCount: Number(user.visitCount || 0),
+      quietReturnHighlight: user.quietReturnHighlight === true,
       firstVisitAt: user.firstVisitAt,
       lastVisitAt: user.lastVisitAt,
       previousVisitAt: user.previousVisitAt
@@ -1773,7 +1774,8 @@ function commentArticleHtml(comment) {
 function commentVisitClass(comment) {
   if (comment.earlyEntryHighlight === true) return "early-entry-comment";
   if (comment.earlyEntryGiftCandidate === true && comment.visitHistoryKnown === true && Number(comment.visitCount) === 1) return "early-entry-comment";
-  return comment.visitHistoryKnown && Number(comment.visitCount || 0) === 1 ? "first-visit-comment" : "";
+  const visits = Number(comment.visitCount || 0);
+  return comment.visitHistoryKnown && (visits === 1 || (visits === 2 && comment.quietReturnHighlight === true)) ? "first-visit-comment" : "";
 }
 
 function commentVisitMeta(comment) {
@@ -2110,7 +2112,7 @@ function renderVisitorHistory(visitors) {
       : "初見";
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
-      <div class="user-row visitor-row ${historyKnown && visits === 1 ? "first-visit-row" : ""}">
+      <div class="user-row visitor-row ${historyKnown && (visits === 1 || (visits === 2 && user.quietReturnHighlight === true)) ? "first-visit-row" : ""}">
         ${renderEventAvatar(user)}
         <span class="name">${renderDecoratedName(user)}</span>
         <span class="visit-meta">

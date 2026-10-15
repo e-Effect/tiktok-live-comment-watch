@@ -19,9 +19,9 @@ test("visitor rows omit source badges and decorated names omit follow-status F m
   assert.match(clientSource, /return `\$\{heartMeMark\(user\)\}\$\{todayFollowMark\(user\)\}\$\{name\}`/);
 });
 
-test("only confirmed first visits receive the yellow first-time style", () => {
-  assert.match(clientSource, /comment\.visitHistoryKnown\s*&&\s*Number\(comment\.visitCount \|\| 0\) === 1/);
-  assert.match(clientSource, /historyKnown\s*&&\s*visits === 1 \? "first-visit-row"/);
+test("yellow covers confirmed first visits and quiet second visits", () => {
+  assert.match(clientSource, /comment\.visitHistoryKnown\s*&&\s*\(visits === 1 \|\| \(visits === 2 && comment\.quietReturnHighlight === true\)\)/);
+  assert.match(clientSource, /historyKnown\s*&&\s*\(visits === 1 \|\| \(visits === 2 && user\.quietReturnHighlight === true\)\)/);
   assert.match(clientSource, /gift-card \$\{commentVisitClass\(gift\)\}/);
   assert.match(clientSource, /share-card \$\{commentVisitClass\(share\)\}/);
   assert.match(clientSource, /履歴確認中/);
