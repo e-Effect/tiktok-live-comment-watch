@@ -628,8 +628,12 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .viewer-history-dialog li { padding:12px 6px; border-bottom:1px solid #dce3e6; }
 .viewer-history-dialog time { color:#526172; font-size:.85rem; }
 .viewer-history-dialog li p { margin:5px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
-#commentList article[role="button"] { cursor:pointer; }
-#commentList article[role="button"]:focus-visible { outline:3px solid #008f82; outline-offset:-3px; }
+[data-comment-history][role="button"] { cursor:pointer; }
+[data-comment-history][role="button"]:focus-visible { outline:3px solid #008f82; outline-offset:-3px; }
+.viewer-history-profile { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:8px 0; overflow-wrap:anywhere; }
+.viewer-history-profile a { color:#006d63; min-height:44px; display:inline-flex; align-items:center; font-weight:700; }
+.viewer-history-profile a[hidden] { display:none; }
+.viewer-history-profile span { color:#526172; font-size:.85rem; }
 .comment-text { -webkit-user-select:text; user-select:text; cursor:text; }
 .comment-search-toolbar { position:fixed; z-index:10000; display:flex; align-items:stretch; gap:0; border:1px solid #cbd5df; border-radius:6px; background:#fff; color:#17212b; box-shadow:0 2px 8px #0002; max-width:calc(100vw - 16px); }
 .comment-search-toolbar[hidden] { display:none; }

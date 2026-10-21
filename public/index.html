@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TikTok LIVE 配信計測</title>
-    <link rel="stylesheet" href="/styles.css?v=20261014-search1">
+    <link rel="stylesheet" href="/styles.css?v=20261022-listeners1">
   </head>
   <body>
     <header class="app-topbar">
@@ -247,10 +247,11 @@
     </dialog>
     <dialog id="viewerCommentHistory" class="viewer-history-dialog" aria-labelledby="viewerCommentHistoryTitle">
       <header><h2 id="viewerCommentHistoryTitle">コメント履歴</h2><button id="viewerCommentHistoryClose" type="button">閉じる</button></header>
+      <div class="viewer-history-profile"><a id="viewerCommentHistoryProfile" target="_blank" rel="noopener noreferrer" hidden>TikTokプロフィールを開く</a><span id="viewerCommentHistoryProfileStatus" role="status"></span></div>
       <p id="viewerCommentHistoryStatus" role="status"></p>
       <form id="viewerCommentHistoryKeyForm" hidden><label>台帳の管理キー<input id="viewerCommentHistoryKey" type="password" autocomplete="current-password" required></label><button type="submit">履歴を開く</button></form>
       <ol id="viewerCommentHistoryItems"></ol><button id="viewerCommentHistoryRetry" type="button" hidden>再取得</button>
     </dialog>
-    <script src="/app.js?v=20261014-search1" type="module"></script>
+    <script src="/app.js?v=20261022-listeners1" type="module"></script>
   </body>
 </html>

@@ -1,4 +1,4 @@
-import { setupCommentHistory } from './viewer-comment-history.js?v=20261014-search1';
+import { setupCommentHistory } from './viewer-comment-history.js?v=20261022-listeners1';
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 const attentionBySession = new Map();
 const welcomeBySession = new Map();
@@ -1351,6 +1351,7 @@ function refreshEventDisplayState(events, cache) {
     if (!user) return event;
     return {
       ...event,
+      uniqueId: user.uniqueId || event.uniqueId || "",
       contributionRank: user.contributionRank || "",
       coins30d: user.coins30d ?? null,
       avatarUrl: event.avatarUrl || user.avatarUrl || "",
@@ -1739,7 +1740,7 @@ function renderMetrics(snapshot) {
   if (visitorCount) visitorCount.textContent = formatNumber(snapshot.viewerStats?.knownJoins || 0);
 }
 
-setupCommentHistory(commentList,()=>({username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
+setupCommentHistory([commentList, visitorHistory, giftHistory, shareHistory],()=>({username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
 
 function renderComments(comments) {
   const context = `${selectedSessionId}:${visitorDemoActive}`;
@@ -1755,9 +1756,13 @@ function renderComments(comments) {
   });
 }
 
+function listenerHistoryAttributes(user) {
+  return `data-comment-history data-user-id="${escapeHtml(String(user?.userId || ""))}" data-user-name="${escapeHtml(String(user.nickname || user.userId || ""))}" data-unique-id="${escapeHtml(String(user.uniqueId || ""))}" role="button" tabindex="0" title="コメント履歴を開く"`;
+}
+
 function commentArticleHtml(comment) {
   return `
-    <article class="comment ${commentVisitClass(comment)}" data-user-id="${escapeHtml(String(comment?.userId || ""))}" data-user-name="${escapeHtml(String(comment.nickname || comment.userId || ""))}" role="button" tabindex="0" title="押すとこの人の最新20件のコメント履歴を表示">
+    <article class="comment ${commentVisitClass(comment)}" ${listenerHistoryAttributes(comment)}>
       <header>
         ${renderEventAvatar(comment)}
         <span class="name">${renderDecoratedName(comment)}</span>
@@ -2047,7 +2052,7 @@ function renderGiftHistory(gifts) {
     return;
   }
   giftHistory.innerHTML = visibleGifts.map((gift) => `
-    <article class="comment gift-card ${commentVisitClass(gift)}">
+    <article class="comment gift-card ${commentVisitClass(gift)}" ${listenerHistoryAttributes(gift)}>
       <header>
         ${renderEventAvatar(gift)}
         <span class="name">${renderDecoratedName(gift)}</span>
@@ -2076,7 +2081,7 @@ function renderShareHistory(shares) {
     return;
   }
   shareHistory.innerHTML = shares.map((share) => `
-    <article class="comment share-card ${commentVisitClass(share)}">
+    <article class="comment share-card ${commentVisitClass(share)}" ${listenerHistoryAttributes(share)}>
       <header>
         ${renderEventAvatar(share)}
         <span class="name">${renderDecoratedName(share)}</span>
@@ -2112,7 +2117,7 @@ function renderVisitorHistory(visitors) {
       : "初見";
     const reentryLabel = entryEvents > 1 ? `・入室通知${formatNumber(entryEvents)}回` : "";
     return `
-      <div class="user-row visitor-row ${historyKnown && (visits === 1 || (visits === 2 && user.quietReturnHighlight === true)) ? "first-visit-row" : ""}">
+      <div class="user-row visitor-row ${historyKnown && (visits === 1 || (visits === 2 && user.quietReturnHighlight === true)) ? "first-visit-row" : ""}" ${listenerHistoryAttributes(user)}>
         ${renderEventAvatar(user)}
         <span class="name">${renderDecoratedName(user)}</span>
         <span class="visit-meta">
