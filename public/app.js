@@ -1,5 +1,7 @@
 import { setupCommentHistory } from './viewer-comment-history.js?v=20261022-listeners1';
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
+import {createSnapshotGuard, patchCommentRows} from './viewer-updates.js?v=20261024-stability1';
+const snapshotGuard = createSnapshotGuard();
 const attentionBySession = new Map();
 const welcomeBySession = new Map();
 let attentionTimer;
@@ -388,9 +390,11 @@ async function restoreSavedSessions() {
         });
         if (activeResponse.ok) sessionId = (await activeResponse.json()).id || sessionId;
       }
+      const snapshotVersion = snapshotGuard.capture(sessionId);
       const response = await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" });
       if (!response.ok) continue;
       const snapshot = await response.json();
+      if (!snapshotGuard.isCurrent(sessionId, snapshotVersion)) continue;
       activateSession(sessionId, saved.username || snapshot.username || "", {
         select: saved.id === selectedSessionId || !selectedSessionId
       });
@@ -538,10 +542,11 @@ async function reconnectActiveSessions() {
 
   await Promise.all([...sessions.keys()].map(async (sessionId) => {
     try {
+      const snapshotVersion = snapshotGuard.capture(sessionId);
       const response = await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" });
       if (!response.ok) throw new Error("セッション切れ");
       const snapshot = await response.json();
-      renderSnapshot(snapshot);
+      if (snapshotGuard.isCurrent(sessionId, snapshotVersion)) renderSnapshot(snapshot);
       if (shouldKeepSessionConnected(snapshot) && !eventSources.has(sessionId)) {
         openEventStream(sessionId);
       }
@@ -566,8 +571,11 @@ function startSnapshotClock() {
     if (document.hidden || snapshotFetchTick % 60 !== 0) return;
     await Promise.all([...sessions.keys()].map(async (sessionId) => {
       try {
-        const snapshot = await (await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" })).json();
-        renderSnapshot(snapshot);
+        const snapshotVersion = snapshotGuard.capture(sessionId);
+        const response = await fetch(`/api/session/${sessionId}/snapshot`, { cache: "no-store" });
+        if (!response.ok) return;
+        const snapshot = await response.json();
+        if (snapshotGuard.isCurrent(sessionId, snapshotVersion)) renderSnapshot(snapshot);
       } catch {
         // Keep the last good state; the event stream or next reconciliation will refresh it.
       }
@@ -1201,6 +1209,7 @@ function applyRealtimePayload(sessionId, type, payload) {
 
   const session = sessions.get(sessionId);
   if (!session?.snapshot) return;
+  snapshotGuard.changed(sessionId);
   const summary = payload?.summary || {};
   const next = {
     ...session.snapshot,
@@ -1375,31 +1384,12 @@ function refreshEventDisplayState(events, cache) {
 
 function refreshVisibleCommentRows(comments, changedUserIds) {
   if (visitorDemoActive || !changedUserIds?.size || !commentList) return;
-  if (commentSelection.isPaused()) {
-    renderComments(comments);
-    return;
-  }
-  const commentsByUser = new Map();
-  for (const comment of comments || []) {
-    const userId = String(comment?.userId || "");
-    if (!changedUserIds.has(userId)) continue;
-    const items = commentsByUser.get(userId) || [];
-    items.push(comment);
-    commentsByUser.set(userId, items);
-  }
-  const usedByUser = new Map();
-  for (const row of commentList.querySelectorAll("article.comment[data-user-id]")) {
-    const userId = String(row.dataset.userId || "");
-    if (!changedUserIds.has(userId)) continue;
-    const index = usedByUser.get(userId) || 0;
-    const comment = commentsByUser.get(userId)?.[index];
-    if (comment) row.outerHTML = commentArticleHtml(comment);
-    usedByUser.set(userId, index + 1);
-  }
+  renderComments(comments);
 }
 
 function renderSnapshot(snapshot, options = {}) {
   if (!snapshot?.id) return;
+  snapshotGuard.changed(snapshot.id);
   attentionBySession.set(snapshot.id, snapshot.attentionAlerts || []);
   welcomeBySession.set(snapshot.id, snapshot.welcomeAlerts || []);
   if (snapshot.errorCode === "rate_limited" || isRateLimitMessage(snapshot.message)) {
@@ -1750,9 +1740,7 @@ function renderComments(comments) {
   }
   if (visitorDemoActive) comments = visitorDemoComments();
   commentSelection.update(() => {
-    commentList.innerHTML = comments.length
-      ? comments.map(commentArticleHtml).join("")
-      : `<p class="empty">接続するとコメントがここに流れます。</p>`;
+    patchCommentRows(commentList, comments, commentArticleHtml, '接続するとコメントがここに流れます。');
   });
 }
 

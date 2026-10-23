@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { AttentionAlerts } from '../lib/attention-alerts.js';
+import {WelcomeAlerts} from '../lib/welcome-alerts.js';
+import {entryDetection} from '../lib/early-entry-comment.js';
 
 const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -11,11 +13,11 @@ const method = server.slice(server.indexOf('  markSeen(person,'), server.indexOf
 test('arrivals publish before history resolves; reentries publish without another lookup', () => {
   const notices = [], checks = [];
   const session = vm.runInNewContext(`({
-    recordingEnabled:true,userStats:new Map(),pendingVisitChecks:new Map(),viewerStats:{knownJoins:0},
+    recordingEnabled:true,userStats:new Map(),pendingVisitChecks:new Map(),viewerStats:{knownJoins:0},currentEventSource(){return 'live'},
     getUserStat(id,name,at){return this.userStats.get(id)||{userId:id,nickname:name,lastSeenAt:at}},
     recordVisit(user){checks.push(user.userId)},enqueueVisitCheck(){},
     broadcastPresence(users){notices.push({...users[0]})},${method}
-  })`, { notices, checks, attentionAlerts: new AttentionAlerts(), isAnonymousListenerIdentity: p => !p.userId });
+  })`, { notices, checks, entryDetection, welcomeAlerts:new WelcomeAlerts(), attentionAlerts: new AttentionAlerts(), isAnonymousListenerIdentity: p => !p.userId });
   const person = {userId:'one',nickname:'One'};
   session.markSeen(person,1000,'member',{entryEvent:true});
   assert.equal(notices.length,1);

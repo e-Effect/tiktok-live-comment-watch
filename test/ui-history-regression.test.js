@@ -16,7 +16,7 @@ test("visitor rows omit source badges and decorated names omit follow-status F m
   assert.doesNotMatch(clientSource, /function visitSourceLabel/);
   assert.doesNotMatch(clientSource, /function followStatusMark/);
   assert.doesNotMatch(clientSource, /follow-status-mark/);
-  assert.match(clientSource, /return `\$\{heartMeMark\(user\)\}\$\{todayFollowMark\(user\)\}\$\{name\}`/);
+  assert.match(clientSource, /return `\$\{heartMeMark\(user\)\}\$\{todayFollowMark\(user\)\}\$\{name\}\$\{badge\}\$\{coins\}`/);
 });
 
 test("yellow covers confirmed first visits and quiet second visits", () => {

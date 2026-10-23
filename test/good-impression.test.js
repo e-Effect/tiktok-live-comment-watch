@@ -6,7 +6,7 @@ test('good impression independently saves true and false and preserves other fla
   for(const value of [true,false]) {
     store.pool={async query(sql,args){
       assert.match(sql,/good_impression = COALESCE\(\$8::boolean, good_impression\)/);
-      assert.deepEqual(args,['user',null,null,null,null,null,null,value]);
+      assert.deepEqual(args,['user',null,null,null,null,null,null,value,null,null,null,null]);
       return {rows:[{user_id:'user',good_impression:value,is_super_fan:true,needs_attention:true}]};
     }};
     const result=await store.updateListener('user',{goodImpression:value});

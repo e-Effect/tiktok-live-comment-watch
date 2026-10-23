@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { EventStore } from "../lib/event-store.js";
 
-const serverSource = await readFile(new URL("../server.js", import.meta.url), "utf8");
+const serverSource = (await readFile(new URL("../server.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const clientSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const collectorSource = await readFile(new URL("../collector/windows/TikFinityCollector.ps1", import.meta.url), "utf8");
@@ -59,7 +59,7 @@ test("event stream keepalives recover a silently stalled display without polling
 
 test("event stream subscribes before its initial snapshot so comments cannot fall into a connect gap", () => {
   const streamRoute = serverSource.match(/if \(request\.method === "GET" && action === "events"\) \{[\s\S]*?\n\s*return;\n\s*\}/)?.[0] || "";
-  assert.ok(streamRoute.indexOf('session.on("event", send)') < streamRoute.indexOf('type: "snapshot"'));
+  assert.ok(streamRoute.indexOf('session.on("event", send)') < streamRoute.indexOf('send({ type: "snapshot"'));
 });
 
 test("busy comment streams throttle expensive secondary panels without delaying the comment list", () => {
