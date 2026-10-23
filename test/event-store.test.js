@@ -361,8 +361,9 @@ test("listener contribution rankings use 90 days and eligibility thresholds and 
       if (sql.includes("shared_app_states")) return {rows:[]};
       calls += 1;
       if(sql.includes('listener_stream_stats')) {
-        assert.deepEqual(values, ["streamer"]);
-        assert.match(sql, /SUM\(gift_coins\) >= 100 AND SUM\(comment_count\) >= 10/);
+        assert.deepEqual(values, ["", "streamer", 500]);
+        assert.match(sql, /GROUP BY user_id ORDER BY user_id LIMIT \$3/);
+        assert.doesNotMatch(sql, /HAVING/);
       }
       if(sql.includes('FROM live_events')) {
         assert.match(sql, /NULLIF\(item_count,0\)>10/);
@@ -407,7 +408,7 @@ test("contribution snapshots survive a new store and restore without aggregation
   const pool={async query(sql,args){
     if(sql.includes('SELECT state FROM shared_app_states')){restores++;return {rows:saved?[{state:saved}]:[]};}
     if(sql.includes('INSERT INTO shared_app_states')){saved=JSON.parse(args[1]);return {rows:[]};}
-    aggregates++;return {rows:[{user_id:'known',recent_comments:20,recent_coins:100,recent_visits:3}]};
+    aggregates++;return {rows:[{user_id:'known',comments:20,coins:100,recent_comments:20,recent_coins:100,recent_visits:3}]};
   }};
   const first=new EventStore();first.ready=true;first.pool=pool;
   const ranked=await first.listenerContributionRankings();

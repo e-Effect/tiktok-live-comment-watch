@@ -2599,6 +2599,26 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/listeners/ranking") {
+    if (!requireListenerAdmin(request, response)) return;
+    if (!["GET", "POST"].includes(request.method)) { sendJson(response,405,{error:"Method not allowed"}); return; }
+    const username = normalizeTikTokUsername(url.searchParams.get("username") || "");
+    try {
+      if (!eventStore.ready) { sendJson(response,503,{error:"データベースに接続できません。しばらくして再試行してください。"}); return; }
+      if (request.method === "POST") {
+        const key = username.toLowerCase() || "*";
+        if (eventStore.contributionRankPromises.size && !eventStore.contributionRankPromises.has(key)) {
+          sendJson(response,409,{error:"別の配信者のランクを計算中です。完了後に再試行してください。"}); return;
+        }
+        void eventStore.refreshListenerContributionRankings(username).catch(() => {});
+      }
+      sendJson(response,request.method === "POST" ? 202 : 200,await eventStore.listenerRankingStatus(username));
+    } catch {
+      sendJson(response,503,{error:"ランクの処理状況を取得できません。しばらくして再試行してください。"});
+    }
+    return;
+  }
+
   if (url.pathname === "/api/listeners/auth") {
     if (!requireListenerAdmin(request, response)) return;
     sendJson(response, 200, { ok: true, database: eventStore.status() });

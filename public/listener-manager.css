@@ -20,3 +20,7 @@
 .good-impression-toggle{width:21px;height:21px;accent-color:#36c998;cursor:pointer;vertical-align:middle}
 .good-impression-toggle:disabled{cursor:wait;opacity:.55}
 .good-impression-check{color:#64dfb4!important}
+.ranking-refresh{flex-wrap:wrap;gap:12px;padding:12px 0}
+.ranking-refresh #rankingStatus{flex:1 1 260px;margin:0;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+.ranking-refresh button{flex:0 0 auto;min-height:40px;padding:8px 14px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.ranking-refresh button:disabled{opacity:.6;cursor:wait}

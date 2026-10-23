@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>リアルタイム・リスナー台帳</title>
-    <link rel="stylesheet" href="/listener-manager.css?v=20260904-blocked1">
+    <link rel="stylesheet" href="/listener-manager.css?v=20261023-rank1">
   </head>
   <body>
     <section id="loginPanel" class="login-panel">
@@ -82,6 +82,7 @@
         <p id="searchHelp" role="status">条件を選んで「検索」を押してください。名前は空欄でも検索できます。</p>
         <p>送信経験は記録済みの全期間が対象です。ギフトは少額も含みます。配信者IDを指定した場合は、その配信者への記録で判定します。</p>
         <p>ランクは直近90日：コメント10件以上、かつ対象ギフト100コイン以上。1個10コイン以下のギフトは除外します。条件未達は「ランクなし」。S〜Dの割合は対象者のみで計算します。更新するには「90日ランク順」で検索してください。問題コメントの自動減点は未導入です。</p>
+        <div class="section-head ranking-refresh"><p id="rankingStatus" role="status" aria-live="polite">ランク集計を確認中…</p><button id="refreshRanking" type="button">ランクを再計算</button></div>
 
         <details class="card"><summary>コメント内容で検索</summary>
           <p>保存中のコメントを新しい順に部分一致で検索します。1回に最大2,000件を確認し、結果は最大50件です。「続きから検索」で古い履歴へ進めます。上の配信者IDのみ共通で、リスナー一覧の他の条件とは別です。</p>
@@ -121,6 +122,6 @@
       <button id="detailClose" class="detail-close" type="button" aria-label="閉じる">×</button>
       <div id="detailContent"></div>
     </aside>
-    <script src="/listener-manager.js?v=20260929-stamp-message" type="module"></script>
+    <script src="/listener-manager.js?v=20261023-rank1" type="module"></script>
   </body>
 </html>

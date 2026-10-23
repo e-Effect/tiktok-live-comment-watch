@@ -1,3 +1,4 @@
+import {setupRankingStatus} from './ranking-status.js?v=20261023-rank1';
 const storageKey = "tiktok-listener-admin-key";
 const state = {
   key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {},
@@ -11,6 +12,9 @@ const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) 
 const number = new Intl.NumberFormat("ja-JP");
 const dateTime = new Intl.DateTimeFormat("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
 const historyDateTime = new Intl.DateTimeFormat("ja-JP", { year:"numeric", month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
+const rankingStatus = setupRankingStatus({button:el.refreshRanking,status:el.rankingStatus,api,username:cleanUsername,
+  onComplete:()=>refreshListeners()});
+el.streamUsername.addEventListener('change',()=>rankingStatus.refresh());
 
 el.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -103,6 +107,7 @@ async function authenticate() {
     el.app.hidden = false;
     el.connectionStatus.textContent = "データベース接続済み";
     el.connectionStatus.classList.remove("error");
+    rankingStatus.refresh();
     await refreshAll();
     scheduleRestoredSearchChecks();
   } catch (error) {
@@ -121,6 +126,7 @@ function normalizeAdminKey(value) {
 }
 
 function logout() {
+  rankingStatus.cancel();
   clearTimeout(state.rankingRetryTimer);
   localStorage.removeItem(storageKey);
   state.key = "";
@@ -240,6 +246,7 @@ async function refreshListeners(options = {}) {
     const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
     const data = await response.json(); state.items = data.items || [];
+    rankingStatus.refresh();
     el.searchHelp.textContent = state.items.length ? "検索結果を表示しています。行を選ぶと詳細が開きます。" : "検索が完了しました。条件に一致するリスナーはいません。";
     if (el.connectionStatus.textContent === "一覧を取得できません") {
       el.connectionStatus.textContent = "データベース接続済み";
