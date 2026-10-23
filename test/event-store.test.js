@@ -217,7 +217,7 @@ test("listener search narrows people before aggregating their stream totals", as
       assert.match(sql, /LOWER\(l\.user_id\) <> 'unknown'/);
       assert.ok(sql.indexOf("FROM listeners l") < sql.indexOf("FROM listener_stream_stats s"));
       assert.match(sql, /JOIN matched_listeners m ON m\.user_id = s\.user_id/);
-      assert.deepEqual(values, ["streamer", "viewer", 250, 0]);
+      assert.deepEqual(values, ["streamer", "viewer", 251, 0]);
       return { rows: [{ user_id:"1", latest_unique_id:"viewer", latest_nickname:"Viewer", visits:"2", full_count:"1" }] };
     }
   };
@@ -234,7 +234,7 @@ test("listener classification filters and sorts lurkers from aggregate activity"
       assert.match(sql, /AS is_lurker/);
       assert.match(sql, /WHERE c\.is_lurker = TRUE/);
       assert.match(sql, /ORDER BY lurker_score DESC/);
-      assert.deepEqual(values, ["streamer", "", 100, 0]);
+      assert.deepEqual(values, ["streamer", "", 101, 0]);
       return { rows: [{ user_id:"silent", visits:"8", comments:"1", coins:"0", full_count:"1" }] };
     }
   };

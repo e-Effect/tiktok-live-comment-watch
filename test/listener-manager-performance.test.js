@@ -11,11 +11,11 @@ test("default listener pages aggregate only the selected hundred listeners", () 
   assert.match(eventStoreSource, /fastSortColumns/);
   assert.match(eventStoreSource, /page AS MATERIALIZED/);
   assert.match(eventStoreSource, /JOIN page p ON p\.user_id = s\.user_id/);
-  assert.match(eventStoreSource, /this\.listenerCount\(\{ search: query, fresh, waitForRefresh: false \}\)/);
+  assert.match(eventStoreSource, /return listenerPageResult\(fastResult.rows, boundedLimit, boundedOffset\)/);
   const fastPath = eventStoreSource.match(/if \(fastOrderBy\) \{([\s\S]*?)\n    const result = await this\.pool\.query/);
   assert.ok(fastPath, "default listener fast path should exist");
   assert.doesNotMatch(fastPath[1], /COUNT\(\*\) OVER\(\)/);
-  assert.ok(fastPath[1].indexOf("LIMIT $2 OFFSET $3") < fastPath[1].indexOf("const countResult"));
+  assert.doesNotMatch(fastPath[1], /this\.listenerCount\(/);
   assert.match(clientSource, /listenerPageSize: 100/);
   assert.match(clientSource, /offset:String\(state\.listenerPage \* state\.listenerPageSize\)/);
   assert.match(htmlSource, /id="listenerPrev"/);
@@ -30,8 +30,9 @@ test("listener pages share a short bounded cache and deduplicate concurrent requ
   assert.match(serverSource, /setBoundedCache\(listenerPageCache/);
   assert.match(serverSource, /if \(updated\) clearListenerCaches\(\)/);
   assert.match(serverSource, /waitForRefresh: false/);
-  assert.match(serverSource, /cached\?\.value\?\.totalPending/);
-  assert.match(clientSource, /data\.rankingPending \|\| data\.totalPending \? setTimeout/);
+  assert.doesNotMatch(serverSource, /cached\?\.value\?\.totalPending/);
+  assert.match(clientSource, /listenerCount.start\(query.toString\(\)/);
+  assert.match(clientSource, /state.rankingRetryTimer = data.rankingPending \? setTimeout/);
   assert.match(clientSource, /人以上/);
 });
 

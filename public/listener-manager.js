@@ -1,11 +1,12 @@
 import {setupRankingStatus} from './ranking-status.js?v=20261023-rank1';
+import {setupListenerCount} from './listener-count-status.js?v=20261023-search1';
 const storageKey = "tiktok-listener-admin-key";
 const state = {
   key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {},
   selectedUserId: "", avatarObjectUrls: new Map(),
   detailData: null,
   searchController: null,
-  listenerPage: 0, listenerPageSize: 100, listenerTotal: 0,
+  listenerPage: 0, listenerPageSize: 100, listenerTotal: 0, listenerHasMore:false,
   lastListenerSearch: null, pendingListenerSearch: null, rankingRetryTimer: null
 };
 const el = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
@@ -14,6 +15,7 @@ const dateTime = new Intl.DateTimeFormat("ja-JP", { month:"numeric", day:"numeri
 const historyDateTime = new Intl.DateTimeFormat("ja-JP", { year:"numeric", month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
 const rankingStatus = setupRankingStatus({button:el.refreshRanking,status:el.rankingStatus,api,username:cleanUsername,
   onComplete:()=>refreshListeners()});
+const listenerCount = setupListenerCount({api});
 el.streamUsername.addEventListener('change',()=>rankingStatus.refresh());
 
 el.loginForm.addEventListener("submit", async (event) => {
@@ -69,6 +71,7 @@ async function runCommentTextSearch(more) {
 }
 
 function markSearchPending() {
+  listenerCount.cancel();
   state.searchController?.abort();
   clearTimeout(state.rankingRetryTimer);
   state.listenerPage = 0;
@@ -81,7 +84,7 @@ el.listenerPrev.addEventListener("click", () => {
   refreshListeners();
 });
 el.listenerNext.addEventListener("click", () => {
-  if ((state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal) return;
+  if (!state.listenerHasMore) return;
   state.listenerPage += 1;
   refreshListeners();
 });
@@ -126,6 +129,7 @@ function normalizeAdminKey(value) {
 }
 
 function logout() {
+  listenerCount.cancel();
   rankingStatus.cancel();
   clearTimeout(state.rankingRetryTimer);
   localStorage.removeItem(storageKey);
@@ -221,6 +225,7 @@ async function refreshSummary(options = {}) {
 }
 
 async function refreshListeners(options = {}) {
+  listenerCount.cancel();
   state.searchController?.abort();
   const controller = new AbortController();
   state.searchController = controller;
@@ -254,8 +259,8 @@ async function refreshListeners(options = {}) {
     }
     state.lastListenerSearch = search;
     state.listenerTotal = Number(data.total || 0);
-    const start = state.listenerTotal ? state.listenerPage * state.listenerPageSize + 1 : 0;
-    const end = Math.min(state.listenerTotal, start + state.items.length - 1);
+    const start = state.items.length ? state.listenerPage * state.listenerPageSize + 1 : 0;
+    const end = start ? start + state.items.length - 1 : 0;
     el.resultCount.textContent = data.totalPending
       ? `${number.format(Math.max(0, end))}人以上（${number.format(start)}～${number.format(Math.max(start, end))}人を表示）`
       : `${number.format(state.listenerTotal)}人中 ${number.format(start)}～${number.format(Math.max(start, end))}人`;
@@ -264,7 +269,8 @@ async function refreshListeners(options = {}) {
       ? ` ・ランク集計：${formatDate(data.rankingGeneratedAt)}`
       : " ・ランク未計算（ランク順を選ぶと計算）";
     el.listenerPrev.disabled = state.listenerPage <= 0;
-    el.listenerNext.disabled = (state.listenerPage + 1) * state.listenerPageSize >= state.listenerTotal;
+    state.listenerHasMore = data.hasMore ?? ((state.listenerPage + 1) * state.listenerPageSize < state.listenerTotal);
+    el.listenerNext.disabled = !state.listenerHasMore;
     el.emptyState.hidden = state.items.length > 0;
     if (data.rankingPending) {
       el.searchHelp.textContent = "90日ランクを計算中です。少人数ずつ処理しています。完了すると表示されます。";
@@ -272,8 +278,20 @@ async function refreshListeners(options = {}) {
       el.emptyState.hidden = true;
     }
     renderListenerTable();
+    if (data.totalPending && !data.rankingPending) {
+      const rankLabel = data.rankingGeneratedAt ? ` ・ランク集計：${formatDate(data.rankingGeneratedAt)}` : " ・ランク未計算";
+      el.resultCount.textContent += " ・総人数を確認中";
+      listenerCount.start(query.toString(), count => {
+        if (count.error) {
+          el.resultCount.textContent = `${number.format(start)}～${number.format(Math.max(0,end))}人を表示 ・総人数は取得できませんでした${rankLabel}`;
+          return;
+        }
+        state.listenerTotal = Number(count.total || 0);
+        el.resultCount.textContent = `${number.format(state.listenerTotal)}人中 ${number.format(state.items.length ? start : 0)}～${number.format(state.items.length ? end : 0)}人${rankLabel}`;
+      });
+    }
     clearTimeout(state.rankingRetryTimer);
-    state.rankingRetryTimer = data.rankingPending || data.totalPending ? setTimeout(() => {
+    state.rankingRetryTimer = data.rankingPending ? setTimeout(() => {
       if (state.key && !document.hidden && currentListenerSearch() === state.lastListenerSearch) refreshListeners();
     }, 10000) : null;
   } catch (error) {

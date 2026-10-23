@@ -2070,6 +2070,25 @@ function setBoundedCache(cache, key, value, maxEntries) {
 function clearListenerCaches() {
   listenerPageCache.clear();
   listenerSummaryCache.clear();
+  eventStore.invalidateListenerPageCounts();
+}
+
+function listenerSearchOptions(url) {
+  return {
+    username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
+    search: normalizeListenerSearch(url.searchParams.get("search") || ""),
+    sort: url.searchParams.get("sort") || "last_seen",
+    direction: url.searchParams.get("direction") || "desc",
+    classification: url.searchParams.get("classification") || "all",
+    blocked: url.searchParams.get("blocked") || "all",
+    attention: url.searchParams.get("attention") || "all",
+    welcome: url.searchParams.get("welcome") || "all",
+    giftExperience: url.searchParams.get("giftExperience") || "all",
+    commentExperience: url.searchParams.get("commentExperience") || "all",
+    limit: Number(url.searchParams.get("limit") || 100),
+    offset: Number(url.searchParams.get("offset") || 0),
+    fresh: url.searchParams.get("fresh") === "1"
+  };
 }
 
 function normalizeListenerSearch(value) {
@@ -2838,24 +2857,16 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/listeners/count" && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    sendJson(response, 200, eventStore.listenerPageCount(listenerSearchOptions(url)));
+    return;
+  }
+
   if (url.pathname === "/api/listeners" && request.method === "GET") {
     if (!requireListenerAdmin(request, response)) return;
     try {
-      const options = {
-        username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
-        search: normalizeListenerSearch(url.searchParams.get("search") || ""),
-        sort: url.searchParams.get("sort") || "last_seen",
-        direction: url.searchParams.get("direction") || "desc",
-        classification: url.searchParams.get("classification") || "all",
-        blocked: url.searchParams.get("blocked") || "all",
-        attention: url.searchParams.get("attention") || "all",
-        welcome: url.searchParams.get("welcome") || "all",
-        giftExperience: url.searchParams.get("giftExperience") || "all",
-        commentExperience: url.searchParams.get("commentExperience") || "all",
-        limit: Number(url.searchParams.get("limit") || 100),
-        offset: Number(url.searchParams.get("offset") || 0),
-        fresh: url.searchParams.get("fresh") === "1"
-      };
+      const options = listenerSearchOptions(url);
       const cacheKey = JSON.stringify({
         username: options.username,
         search: options.search,
@@ -2871,7 +2882,7 @@ const server = createServer(async (request, response) => {
         offset: options.offset
       });
       const cached = listenerPageCache.get(cacheKey);
-      const cacheMs = cached?.value?.totalPending || cached?.value?.rankingPending
+      const cacheMs = cached?.value?.rankingPending
         ? LISTENER_TOTAL_PENDING_CACHE_MS
         : LISTENER_PAGE_CACHE_MS;
       if (!options.fresh && cached && cached.at >= Date.now() - cacheMs) {

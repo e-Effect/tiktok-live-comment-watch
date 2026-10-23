@@ -9,7 +9,7 @@ test('welcome filter applies before pagination for both normal and visits sort',
    assert.ok(sql.includes(`l.welcome_notice = ${welcome==='yes'?'TRUE':'FALSE'}`));
    return {rows:[]};
   }};
-  assert.deepEqual(await store.listeners({sort,welcome}),{items:[],total:0});
+  assert.deepEqual(await store.listeners({sort,welcome}),{items:[],total:0,hasMore:false,totalPending:false});
  }
 });
 test('rank sort filters welcome flags before pagination, independently of attention',async()=>{
