@@ -24,8 +24,11 @@
 .ranking-refresh #rankingStatus{flex:1 1 260px;margin:0;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
 .ranking-refresh button{flex:0 0 auto;min-height:40px;padding:8px 14px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .ranking-refresh button:disabled{opacity:.6;cursor:wait}
-.screenshot-records-panel{margin:20px 0;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);scroll-margin-top:110px}
-.screenshot-records-panel h2{font-size:20px;margin:0}
+.screenshot-records-panel{margin:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);scroll-margin-top:110px}
+.screenshot-records-panel>summary{padding:14px 0;cursor:pointer}
+.screenshot-records-panel>summary:focus-visible{outline:2px solid var(--cyan);outline-offset:4px}
+.screenshot-records-panel h2{display:inline;font-size:17px;margin:0 0 0 6px}
+.screenshot-records-body{padding-bottom:16px}
 .listener-card{scroll-margin-top:110px}
 .screenshot-records-panel button{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:6px;padding:9px 13px;cursor:pointer}
 .screenshot-records-panel button:disabled{opacity:.6;cursor:wait}

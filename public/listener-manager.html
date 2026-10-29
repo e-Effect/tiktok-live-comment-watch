@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>リアルタイム・リスナー台帳</title>
-    <link rel="stylesheet" href="/listener-manager.css?v=20261029-records3">
+    <link rel="stylesheet" href="/listener-manager.css?v=20261029-records4">
   </head>
   <body>
     <section id="loginPanel" class="login-panel">
@@ -88,8 +88,10 @@
         <p>ランクは直近90日：コメント10件以上、かつ対象ギフト100コイン以上。1個10コイン以下のギフトは除外します。条件未達は「ランクなし」。S〜Dの割合は対象者のみで計算します。更新するには「90日ランク順」で検索してください。問題コメントの自動減点は未導入です。</p>
         <div class="section-head ranking-refresh"><p id="rankingStatus" role="status" aria-live="polite">ランク集計を確認中…</p><button id="refreshRanking" type="button">ランクを再計算</button></div>
 
-        <section id="screenshotRecordsPanel" class="screenshot-records-panel" aria-labelledby="screenshotRecordsHeading">
-          <div class="section-head"><h2 id="screenshotRecordsHeading">スクショ記録IDの管理</h2><div class="top-actions"><button id="showScreenshotHistory" type="button">履歴がある人を台帳に表示</button><button id="screenshotRefresh" type="button">再取得</button></div></div>
+        <details id="screenshotRecordsPanel" class="screenshot-records-panel" aria-labelledby="screenshotRecordsHeading">
+          <summary><h2 id="screenshotRecordsHeading">スクショ記録IDの管理</h2></summary>
+          <div class="screenshot-records-body">
+          <div class="top-actions"><button id="showScreenshotHistory" type="button">履歴がある人を台帳に表示</button><button id="screenshotRefresh" type="button">再取得</button></div>
           <div class="screenshot-records-controls">
             <label>配信者ID<input id="screenshotScope" autocomplete="off" value="mentalist_k"></label>
             <label>記録IDを検索<input id="screenshotSearch" type="search" placeholder="ID・名前・記録元"></label>
@@ -102,7 +104,8 @@
             <label>記録元<input id="screenshotSource" maxlength="160" value="スクショ"></label>
             <button type="submit">登録・履歴照合</button>
           </form></details>
-        </section>
+          </div>
+        </details>
         <details class="card"><summary>コメント内容で検索</summary>
           <p>保存中のコメントを新しい順に部分一致で検索します。1回に最大2,000件を確認し、結果は最大50件です。「続きから検索」で古い履歴へ進めます。上の配信者IDのみ共通で、リスナー一覧の他の条件とは別です。</p>
           <form id="commentTextForm" class="controls"><label>コメントに含まれる言葉<input id="commentTextQuery" maxlength="100" required placeholder="例：お願いします"></label><button id="commentTextSubmit" type="submit">コメントを検索</button></form>
