@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import {EventStore} from '../lib/event-store.js';
 import {classifyLurker} from '../lib/lurker-classification.js';
+import {screenshotRecordsSchema} from '../lib/screenshot-records.js';
 
 test('PostgreSQL list/count agree across scope, filters, orders and page boundaries', async t => {
   const db = new PGlite(); t.after(() => db.close());
@@ -71,4 +72,22 @@ test('PostgreSQL list/count agree across scope, filters, orders and page boundar
     assert.equal(count.error,undefined,JSON.stringify(options));
     assert.equal(count.total,expected.length,JSON.stringify(options));
   }
+  await db.exec(screenshotRecordsSchema+`
+    CREATE TABLE listener_aliases(user_id text,unique_id text);
+    INSERT INTO listener_aliases VALUES ('002','old_handle');
+    INSERT INTO screenshot_listener_records(stream_username,tiktok_id,user_id,enabled) VALUES
+      ('host','id1','001',FALSE),('host','old_handle','',FALSE),('host','changed_handle','004',TRUE),
+      ('host','not_yet_seen','',TRUE),('host','id40','040',TRUE),('different','id3','003',TRUE);
+  `);
+  const first=await store.listeners({username:'hOsT',screenshot:'yes',sort:'coins',limit:2});
+  const second=await store.listeners({username:'hOsT',screenshot:'yes',sort:'coins',limit:2,offset:2});
+  assert.equal(first.hasMore,true);assert.equal(second.hasMore,false);
+  assert.deepEqual([...first.items,...second.items].map(r=>r.userId).sort(),['001','002','004']);
+  assert.equal(store.listenerPageCount({username:'host',screenshot:'yes',sort:'coins'}).pending,true);
+  await store.activeListenerPageCount;
+  assert.equal(store.listenerPageCount({username:'host',screenshot:'yes',sort:'coins'}).total,3);
+  assert.equal((await store.listeners({username:'missing',screenshot:'yes'})).items.length,0);
+  store.listenerContributionRankings=async()=>({lifetimeOrder:['004','003','002','001'],recentOrder:[],generatedAt:1,byUserId:new Map()});
+  const ranked=await store.listenerContributionPage({username:'host',screenshot:'yes'});
+  assert.deepEqual(ranked.items.map(r=>r.userId),['004','002','001']);assert.equal(ranked.total,3);
 });

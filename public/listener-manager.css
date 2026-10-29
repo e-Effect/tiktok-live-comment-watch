@@ -26,6 +26,7 @@
 .ranking-refresh button:disabled{opacity:.6;cursor:wait}
 .screenshot-records-panel{margin:20px 0;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);scroll-margin-top:110px}
 .screenshot-records-panel h2{font-size:20px;margin:0}
+.listener-card{scroll-margin-top:110px}
 .screenshot-records-panel button{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:6px;padding:9px 13px;cursor:pointer}
 .screenshot-records-panel button:disabled{opacity:.6;cursor:wait}
 .screenshot-records-controls{display:grid;grid-template-columns:minmax(150px,1fr) minmax(190px,2fr);gap:12px;margin:12px 0}

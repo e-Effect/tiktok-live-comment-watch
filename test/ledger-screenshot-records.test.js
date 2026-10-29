@@ -11,6 +11,7 @@ test('authenticated ledger displays the shared 27 records and saves switches thr
   dom.window.localStorage.setItem('tiktok-listener-admin-key','fixture-only');
   const items=Array.from({length:27},(_,i)=>({tiktok_id:'fixture_user_'+i,history:i<8?'found':'none',source:'photo '+(i%3+1),enabled:i>=8}));
   const calls=[];
+  dom.window.HTMLElement.prototype.scrollIntoView=function(){};
   dom.window.fetch=async(url,options={})=>{
     calls.push({url,options});
     let data={};
@@ -18,7 +19,9 @@ test('authenticated ledger displays the shared 27 records and saves switches thr
       if(options.method==='PATCH'){const body=JSON.parse(options.body);items.find(r=>r.tiktok_id===body.id).enabled=body.enabled;}
       data={items:structuredClone(items)};
     }else if(url.startsWith('/api/listeners/ranking'))data={state:'idle',generatedAt:0};
-    else if(url.startsWith('/api/listeners?'))data={items:[],total:0};
+    else if(url.startsWith('/api/listeners?'))data=new URL(url,'https://ledger.test').searchParams.get('screenshot')==='yes'
+      ? {items:Array.from({length:8},(_,i)=>({userId:'person'+i,uniqueId:'fixture_user_'+i,nickname:'Person '+i,visits:2,comments:0,gifts:0,coins:0})),total:8}
+      : {items:[],total:0};
     return {ok:true,json:async()=>data};
   };
   const files=['ranking-status.js','listener-count-status.js','screenshot-records-panel.js','listener-manager.js'];
@@ -30,7 +33,16 @@ test('authenticated ledger displays the shared 27 records and saves switches thr
   assert.equal(doc.querySelector('#app').hidden,false);
   assert.equal(doc.querySelectorAll('#screenshotRecordsList li').length,27);
   assert.match(doc.querySelector('#screenshotStatus').textContent,/27件.*19件/);
-  assert.equal(doc.querySelector('a[href="#screenshotRecordsPanel"]').textContent,'スクショ記録ID');
+  assert.equal(doc.querySelector('#showScreenshotHistoryTop').textContent,'スクショIDの履歴');
+  doc.querySelector('#sort').value='contribution';
+  doc.querySelector('#showScreenshotHistoryTop').click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(doc.querySelector('#screenshotFilter').value,'yes');
+  assert.equal(doc.querySelector('#sort').value,'last_seen');
+  assert.equal(doc.querySelectorAll('#listenerRows tr').length,8);
+  assert.match(doc.querySelector('#resultCount').textContent,/8人中/);
+  const listenerCall=calls.filter(r=>r.url.startsWith('/api/listeners?')).at(-1);
+  assert.match(listenerCall.url,/screenshot=yes/);assert.match(listenerCall.url,/username=mentalist_k/);
   const scopeCall=calls.find(r=>r.url.startsWith('/api/screenshot-records?'));
   assert.match(scopeCall.url,/username=mentalist_k/);
   const toggle=doc.querySelector('input[aria-label="@fixture_user_8の来訪を強調"]');

@@ -2096,6 +2096,7 @@ function listenerSearchOptions(url) {
     blocked: url.searchParams.get("blocked") || "all",
     attention: url.searchParams.get("attention") || "all",
     welcome: url.searchParams.get("welcome") || "all",
+    screenshot: url.searchParams.get("screenshot") === 'yes' ? 'yes' : 'all',
     giftExperience: url.searchParams.get("giftExperience") || "all",
     commentExperience: url.searchParams.get("commentExperience") || "all",
     limit: Number(url.searchParams.get("limit") || 100),
@@ -2640,6 +2641,7 @@ const server = createServer(async (request, response) => {
       else if (request.method==='PATCH') await toggleScreenshotRecord(eventStore,scope,await readBody(request));
       else if (request.method!=='GET') {sendJson(response,405,{error:'Method not allowed'});return;}
       if (request.method!=='GET') {
+        clearListenerCaches();
         await refreshScreenshotWatch(true);
         for (const session of sessions.values()) if(session.username.toLowerCase()===scope) {
           const snapshot=session.snapshot();
@@ -2909,6 +2911,7 @@ const server = createServer(async (request, response) => {
         blocked: options.blocked,
         attention: options.attention,
         welcome: options.welcome,
+        screenshot: options.screenshot,
         giftExperience: options.giftExperience,
         commentExperience: options.commentExperience,
         limit: options.limit,
