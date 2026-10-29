@@ -24,6 +24,16 @@ test("preview events stay out of the recorded session and normal routing resumes
   await waitForServer(child);
 
   const normal = await postJson("/api/session", { username: "my_account" });
+  const checkUrl=`/api/listeners/read-only-fixture/first-visit-check?sessionId=${normal.id}`;
+  assert.equal((await fetch(baseUrl+checkUrl)).status,401);
+  const missingCheck=await fetch(baseUrl+'/api/listeners/read-only-fixture/first-visit-check?sessionId=missing',{
+    headers:{Authorization:`Bearer ${adminKey}`}
+  });
+  assert.equal(missingCheck.status,404);
+  const unavailableCheck=await fetch(baseUrl+checkUrl,{headers:{Authorization:`Bearer ${adminKey}`}});
+  assert.equal(unavailableCheck.status,503);
+  assert.equal((await unavailableCheck.json()).eligible,null,'unknown history must not be diagnosed as a new listener');
+  assert.equal((await getJson(`/api/session/${normal.id}/snapshot`)).commentCount,0,'diagnosis creates no comments or alerts');
   const preview = await postJson("/api/session", { username: "other_live", preview: true }, adminKey);
   assert.equal(preview.preview, true);
 

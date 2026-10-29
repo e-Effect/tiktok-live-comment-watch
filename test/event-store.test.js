@@ -619,8 +619,11 @@ test("prior listener history excludes the current live and matches stable IDs pl
   store.pool = {
     async query(sql, values) {
       assert.match(sql, /WITH identity_ids AS/);
-      assert.match(sql, /e.event_type IN \('like', 'comment', 'gift'\)/);
-      assert.match(sql, /COUNT\(\*\) FILTER \(WHERE is_visit\)/);
+      assert.match(sql, /VALUES \('like'\), \('comment'\), \('gift'\)/);
+      assert.match(sql, /CROSS JOIN LATERAL/);
+      assert.match(sql, /e.user_id = i.user_id AND e.event_type = kinds.event_type/);
+      assert.match(sql, /ORDER BY e.event_at DESC LIMIT 1/);
+      assert.match(sql, /SELECT COUNT\(\*\) FROM prior_visits/);
       assert.match(sql, /GROUP BY live_key/);
       assert.match(sql, /viewer_visits/);
       assert.match(sql, /live_events/);

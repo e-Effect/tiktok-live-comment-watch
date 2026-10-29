@@ -923,13 +923,20 @@ class LiveSession extends EventEmitter {
     try {
       // Entry-count caches alone cannot distinguish prior actions from entry-only visits.
       // Look up history only for a matching first-visit claim, excluding this LIVE.
-      const history = await eventStore.priorListenerHistory({
+      let history;
+      const startedAt = Date.now();
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        history = await eventStore.priorListenerHistory({
           sessionId: this.id,
           roomId: this.roomId,
           username: this.username,
           userId: comment.userId,
           uniqueId: comment.uniqueId,
         });
+        if (history.known || !this.recordingEnabled || Date.now() - startedAt >= 30000) break;
+        if (attempt < 2) await delay(500 * (attempt + 1));
+      }
+      if (!this.recordingEnabled) return false;
       if (!history.known || (!history.hasPriorInteraction && history.priorVisitCount < 3)) return false;
 
       this.firstVisitClaimAlertedIds.add(identityKey);
@@ -2593,7 +2600,7 @@ const server = createServer(async (request, response) => {
         ...eventStore.status(),
         visitJudgmentMode: "isolated-batch-v4",
         visitBatchStats: eventStore.visitBatchStats,
-        firstVisitClaimPolicy: "prior-action-or-three-prior-lives-v2",
+        firstVisitClaimPolicy: "bounded-prior-action-retry-v3",
         avatarWorkPolicy: "bounded-2-ttl-v1",
         birthdayCelebrationPolicy: "jst-heart-me-once-daily-v1",
         visitEnrichmentPending: eventStore.visitEnrichmentPending,
@@ -3016,6 +3023,25 @@ const server = createServer(async (request, response) => {
         search:url.searchParams.get("search")||"", username:normalizeTikTokUsername(url.searchParams.get("username")||""), cursor:url.searchParams.get("cursor")||""
       }));
     } catch(error) { sendJson(response,503,{error:shortError(error)}); }
+    return;
+  }
+
+  const firstVisitCheckMatch = url.pathname.match(/^\/api\/listeners\/([^/]+)\/first-visit-check$/);
+  if (firstVisitCheckMatch && request.method === "GET") {
+    if (!requireListenerAdmin(request, response)) return;
+    const session = sessions.get(url.searchParams.get('sessionId'));
+    if (!session || !session.recordingEnabled) {
+      sendJson(response,404,{error:'記録中の配信セッションを指定してください'}); return;
+    }
+    const startedAt = Date.now();
+    const history = await eventStore.priorListenerHistory({
+      sessionId:session.id,roomId:session.roomId,username:session.username,
+      userId:decodeURIComponent(firstVisitCheckMatch[1]),uniqueId:url.searchParams.get('uniqueId')||''
+    });
+    // Read only: never emit a popup or change the per-LIVE notification deduplication sets.
+    sendJson(response,history.known?200:503,{...history,
+      eligible:history.known?history.hasPriorInteraction||history.priorVisitCount>=3:null,
+      elapsedMs:Date.now()-startedAt});
     return;
   }
 
