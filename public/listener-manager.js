@@ -1,5 +1,6 @@
 import {setupRankingStatus} from './ranking-status.js?v=20261023-rank1';
 import {setupListenerCount} from './listener-count-status.js?v=20261023-search1';
+import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records2';
 const storageKey = "tiktok-listener-admin-key";
 const state = {
   key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {},
@@ -16,6 +17,8 @@ const historyDateTime = new Intl.DateTimeFormat("ja-JP", { year:"numeric", month
 const rankingStatus = setupRankingStatus({button:el.refreshRanking,status:el.rankingStatus,api,username:cleanUsername,
   onComplete:()=>refreshListeners()});
 const listenerCount = setupListenerCount({api});
+const screenshotPanel = setupScreenshotRecords({root:el.screenshotRecordsPanel,getUsername:()=>cleanUsername()||el.screenshotScope.value});
+el.streamUsername.addEventListener('change',()=>{if(state.key)screenshotPanel.setScope();});
 el.streamUsername.addEventListener('change',()=>rankingStatus.refresh());
 
 el.loginForm.addEventListener("submit", async (event) => {
@@ -111,6 +114,7 @@ async function authenticate() {
     el.connectionStatus.textContent = "データベース接続済み";
     el.connectionStatus.classList.remove("error");
     rankingStatus.refresh();
+    screenshotPanel.setScope(true);
     await refreshAll();
     scheduleRestoredSearchChecks();
   } catch (error) {
@@ -129,6 +133,7 @@ function normalizeAdminKey(value) {
 }
 
 function logout() {
+  screenshotPanel.cancel();
   listenerCount.cancel();
   rankingStatus.cancel();
   clearTimeout(state.rankingRetryTimer);

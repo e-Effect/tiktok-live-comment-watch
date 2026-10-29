@@ -1,5 +1,5 @@
 export function setupScreenshotRecords({root,getUsername,fetcher=fetch,storage=localStorage}) {
-  if(!root)return {setScope(){}};
+  if(!root)return {setScope(){},cancel(){}};
   const find=id=>root.querySelector('#'+id);
   const scope=find('screenshotScope'),status=find('screenshotStatus'),list=find('screenshotRecordsList');
   const keyForm=find('screenshotKeyForm'),key=find('screenshotAdminKey'),refresh=find('screenshotRefresh');
@@ -52,5 +52,8 @@ export function setupScreenshotRecords({root,getUsername,fetcher=fetch,storage=l
   keyForm.addEventListener('submit',event=>{event.preventDefault();request();});
   find('screenshotAddForm').addEventListener('submit',event=>{event.preventDefault();request('POST',{ids:find('screenshotIds').value,source:find('screenshotSource').value});});
   let previous='';
-  return {setScope(){const current=String(getUsername()||'').toLowerCase();if(current && current!==previous){previous=current;scope.value=current;items=[];draw();request();}}};
+  return {
+    setScope(force=false){const current=String(getUsername()||'').toLowerCase();if(current && (force||current!==previous)){previous=current;scope.value=current;items=[];draw();request();}},
+    cancel(){revision++;controller?.abort();setBusy(false);items=[];draw();key.value='';}
+  };
 }
