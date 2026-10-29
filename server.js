@@ -15,6 +15,7 @@ import { searchComments } from "./lib/comment-search.js";
 import { dailyGiftRewards, rewardStreams, updateGiftReward, RewardError } from "./lib/gift-rewards.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { WelcomeAlerts } from "./lib/welcome-alerts.js";
+import {ScreenshotWatch,listScreenshotRecords,addScreenshotRecords,toggleScreenshotRecord} from './lib/screenshot-records.js';
 import { parseBirthdayComment, validBirthday, birthdayLabel, japanCalendarDay } from "./lib/birthday.js";
 import { createGiftExclusionAlert, isExcludedPerformanceGift } from "./lib/gift-exclusion.js";
 import { avatarUrlFromUser } from "./lib/avatar-url.js";
@@ -82,6 +83,13 @@ const eventStore = new EventStore({
 const runAvatarCacheWork = createAvatarWorkCache();
 const attentionAlerts = new AttentionAlerts();
 const welcomeAlerts = new WelcomeAlerts();
+const screenshotWatch = new ScreenshotWatch();
+let screenshotRefreshPending = null;
+function refreshScreenshotWatch(force=false) {
+  if(screenshotRefreshPending) return force ? screenshotRefreshPending.catch(()=>{}).then(()=>refreshScreenshotWatch()) : screenshotRefreshPending;
+  screenshotRefreshPending=screenshotWatch.refresh(eventStore).finally(()=>{screenshotRefreshPending=null;});
+  return screenshotRefreshPending;
+}
 let attentionRefreshAt = 0;
 let attentionRevision = 0;
 let attentionRefreshPending = false;
@@ -512,6 +520,10 @@ class LiveSession extends EventEmitter {
     // using the existing presence timer, not one network request per arrival.
     if (newlySeen || entryEvent) this.broadcastPresence([user]);
     if (this.recordingEnabled) {
+      if (this.currentEventSource() !== 'initial') {
+        const screenshot = screenshotWatch.accept(this.username,this.id,person,at);
+        if (screenshot) this.broadcast('screenshot_alert',{alert:screenshot});
+      }
       const alert = attentionAlerts.accept(this.id, person, at);
       if (alert) this.broadcast("attention_alert", { alert });
       const welcome = this.currentEventSource() !== "initial" ? welcomeAlerts.accept(this.id, person, at) : null;
@@ -1341,7 +1353,7 @@ class LiveSession extends EventEmitter {
   }
 
   realtimeUser(user) {
-    return { ...user, contributionRank: this.viewerRanks.rank(user.userId), coins30d:this.viewerCoins.get(user.userId) };
+    return { ...user, screenshotRecorded:Boolean(screenshotWatch.match(this.username,user)), contributionRank: this.viewerRanks.rank(user.userId), coins30d:this.viewerCoins.get(user.userId) };
   }
 
   snapshot(message = "") {
@@ -1381,6 +1393,7 @@ class LiveSession extends EventEmitter {
       comments: this.comments.map((comment) => this.decorateUserEvent(comment)),
       attentionAlerts: attentionAlerts.active(this.id),
       welcomeAlerts: welcomeAlerts.active(this.id),
+      screenshotAlerts: screenshotWatch.active(this.id),
       gifts: this.gifts.map((gift) => this.decorateUserEvent(gift)),
       shares: this.shares.map((share) => this.decorateUserEvent(share)),
       topUsers: topUsers.map(user => this.realtimeUser(user)),
@@ -1397,7 +1410,7 @@ class LiveSession extends EventEmitter {
 
   decorateUserEvent(event) {
     const user = this.userStats.get(event.userId);
-    return { ...event, ...(user ? userDisplayState(user) : {}), contributionRank: this.viewerRanks.rank(event.userId), coins30d:this.viewerCoins.get(event.userId) };
+    return { ...event, ...(user ? userDisplayState(user) : {}), screenshotRecorded:Boolean(screenshotWatch.match(this.username,user||event)), contributionRank: this.viewerRanks.rank(event.userId), coins30d:this.viewerCoins.get(event.userId) };
   }
 
   broadcast(type, payload) {
@@ -2618,6 +2631,26 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === '/api/screenshot-records') {
+    if (!requireListenerAdmin(request,response)) return;
+    try {
+      const scope=normalizeTikTokUsername(url.searchParams.get('username')||'').toLowerCase();
+      if (!isValidUsername(scope)) {sendJson(response,400,{error:'配信者IDを指定してください'});return;}
+      if (request.method==='POST') await addScreenshotRecords(eventStore,scope,await readBody(request));
+      else if (request.method==='PATCH') await toggleScreenshotRecord(eventStore,scope,await readBody(request));
+      else if (request.method!=='GET') {sendJson(response,405,{error:'Method not allowed'});return;}
+      if (request.method!=='GET') {
+        await refreshScreenshotWatch(true);
+        for (const session of sessions.values()) if(session.username.toLowerCase()===scope) {
+          const snapshot=session.snapshot();
+          session.broadcast('status',{snapshot});
+        }
+      }
+      sendJson(response,200,{items:await listScreenshotRecords(eventStore,scope)});
+    } catch(error) {sendJson(response,error.status||503,{error:error.status?error.message:'記録IDの処理を完了できませんでした。再取得してください。'});}
+    return;
+  }
+
   if (url.pathname === "/api/listeners/ranking") {
     if (!requireListenerAdmin(request, response)) return;
     if (!["GET", "POST"].includes(request.method)) { sendJson(response,405,{error:"Method not allowed"}); return; }
@@ -3159,6 +3192,7 @@ server.listen(PORT, () => {
 });
 
 if ((EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady) && eventStore.status().ready) {
+  void refreshScreenshotWatch().catch(()=>{});
   restorePersistentSessions().catch((error) => {
     console.error(`Session restore failed: ${shortError(error)}`);
   });
@@ -3233,6 +3267,7 @@ async function maintainDatabaseConnection() {
     if (!ready) return false;
     // Auxiliary flags must not hold up durable inbox recovery.
     void refreshAttentionIds().catch(() => {});
+    void refreshScreenshotWatch().catch(()=>{});
     if (!wasReady && (EXTERNAL_COLLECTOR_ENABLED || providerInfo.paidApiReady)) {
       await restorePersistentSessions();
     }

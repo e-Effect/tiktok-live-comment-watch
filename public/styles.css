@@ -10,6 +10,20 @@
   --danger: #b4232e;
   --shadow: 0 16px 42px rgba(19, 35, 40, .14);
 }
+.screenshot-arrival-alert { background:#00634f; color:#fff; border-left:8px solid #67f5b7; padding:16px 20px; margin:8px 0; font-size:24px; font-weight:800; overflow-wrap:anywhere; }
+.screenshot-record-badge { display:inline-block; background:#00634f; color:#fff; font-size:12px; line-height:1.6; padding:1px 6px; margin-left:6px; border-radius:3px; vertical-align:middle; }
+.screenshot-recorded { background:#dcfaed; box-shadow:inset 4px 0 0 #007f5f; }
+.screenshot-records-panel label { display:flex; gap:6px; flex-direction:column; margin:8px 0; }
+.screenshot-records-panel input,.screenshot-records-panel textarea { min-width:0; max-width:100%; width:100%; }
+.screenshot-records-panel textarea { resize:vertical; }
+.screenshot-records-list { list-style:none; padding:0; margin:12px 0; max-height:360px; overflow:auto; }
+.screenshot-records-list li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+.screenshot-records-list li>div { min-width:0; overflow-wrap:anywhere; }
+.screenshot-records-list a { padding:0; color:#00634f; text-align:left; }
+.screenshot-records-list small { display:block; color:var(--muted); }
+.screenshot-records-list label { flex-direction:row; flex-shrink:0; align-items:center; font-size:13px; }
+.screenshot-records-list input { width:18px; height:18px; accent-color:#00634f; }
+@media(max-width:480px) { .screenshot-records-list li { align-items:flex-start; flex-wrap:wrap; } .screenshot-arrival-alert { font-size:20px; } }
 
 * { box-sizing: border-box; }
 html { color-scheme: light; font-size: 16px; }

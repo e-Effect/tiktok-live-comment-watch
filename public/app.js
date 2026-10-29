@@ -1,9 +1,11 @@
 import { setupCommentHistory } from './viewer-comment-history.js?v=20261022-listeners1';
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 import {createSnapshotGuard, patchCommentRows} from './viewer-updates.js?v=20261024-stability1';
+import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records1';
 const snapshotGuard = createSnapshotGuard();
 const attentionBySession = new Map();
 const welcomeBySession = new Map();
+const screenshotBySession = new Map();
 let attentionTimer;
 const form = document.querySelector("#connectForm");
 const usernameInput = document.querySelector("#username");
@@ -149,6 +151,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", reconnectActiveSessions);
 window.addEventListener("online", reconnectActiveSessions);
 
+const screenshotPanel = setupScreenshotRecords({root:document.getElementById('screenshotRecordsPanel'),getUsername:()=>sessions.get(selectedSessionId)?.username||cleanUsername(usernameInput.value)||readFixedAccount()});
 setupPanelToggles();
 setupLayoutTools();
 setupFontSizeTools();
@@ -435,11 +438,11 @@ function renderAttentionAlerts() {
   const panel = document.getElementById("attentionAlerts");
   if (!panel) return;
   const now = Date.now();
-  for (const collection of [attentionBySession, welcomeBySession]) for (const [id, items] of collection) {
+  for (const collection of [attentionBySession, welcomeBySession, screenshotBySession]) for (const [id, items] of collection) {
     const current = items.filter(item => item.expiresAt > now);
     current.length ? collection.set(id, current) : collection.delete(id);
   }
-  const items = [...(attentionBySession.get(selectedSessionId) || []), ...(welcomeBySession.get(selectedSessionId) || [])];
+  const items = [...(attentionBySession.get(selectedSessionId) || []), ...(welcomeBySession.get(selectedSessionId) || []), ...(screenshotBySession.get(selectedSessionId) || [])];
   panel.hidden = !items.length;
   panel.replaceChildren();
   for (const item of [...items].sort((a,b) => b.expiresAt-a.expiresAt)) {
@@ -455,6 +458,10 @@ function renderAttentionAlerts() {
       row.append(message);
       const avatar = row.querySelector(".event-avatar");
       if (avatar) avatar.style.cssText = "width:48px;height:48px;flex:0 0 48px";
+    }
+    if(item.kind==='screenshot') {
+      row.className='screenshot-arrival-alert';row.removeAttribute('style');
+      row.textContent=`スクショ記録ID：${item.nickname}${item.uniqueId ? `（@${item.uniqueId}）` : ''} を検知しました`;
     }
     panel.append(row);
   }
@@ -488,6 +495,14 @@ function openEventStream(sessionId) {
   source.addEventListener("snapshot", (event) => {
     markEventStreamActivity(sessionId);
     renderSnapshot(JSON.parse(event.data));
+  });
+  source.addEventListener('screenshot_alert',event=>{
+    markEventStreamActivity(sessionId);
+    const {alert}=JSON.parse(event.data);
+    if(!alert?.userId || alert.expiresAt<=Date.now())return;
+    const items=screenshotBySession.get(sessionId)||[];
+    screenshotBySession.set(sessionId,[...items.filter(item=>item.userId!==alert.userId),alert]);
+    renderAttentionAlerts();
   });
   source.addEventListener("status", (event) => {
     markEventStreamActivity(sessionId);
@@ -1360,6 +1375,7 @@ function refreshEventDisplayState(events, cache) {
     if (!user) return event;
     return {
       ...event,
+      screenshotRecorded:Boolean(user.screenshotRecorded),
       uniqueId: user.uniqueId || event.uniqueId || "",
       contributionRank: user.contributionRank || "",
       coins30d: user.coins30d ?? null,
@@ -1392,6 +1408,7 @@ function renderSnapshot(snapshot, options = {}) {
   snapshotGuard.changed(snapshot.id);
   attentionBySession.set(snapshot.id, snapshot.attentionAlerts || []);
   welcomeBySession.set(snapshot.id, snapshot.welcomeAlerts || []);
+  screenshotBySession.set(snapshot.id,snapshot.screenshotAlerts||[]);
   if (snapshot.errorCode === "rate_limited" || isRateLimitMessage(snapshot.message)) {
     setRateLimitCooldown(snapshot.message);
   }
@@ -1424,6 +1441,7 @@ function renderSnapshot(snapshot, options = {}) {
 }
 
 function renderSelectedSession(options = {}) {
+  screenshotPanel.setScope();
   renderAttentionAlerts();
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   const snapshot = selected?.snapshot;
@@ -1765,6 +1783,7 @@ function commentArticleHtml(comment) {
 }
 
 function commentVisitClass(comment) {
+  if(comment.screenshotRecorded)return 'screenshot-recorded';
   if (comment.earlyEntryHighlight === true) return "early-entry-comment";
   if (comment.earlyEntryGiftCandidate === true && comment.visitHistoryKnown === true && Number(comment.visitCount) === 1) return "early-entry-comment";
   const visits = Number(comment.visitCount || 0);
@@ -2186,7 +2205,8 @@ function renderDecoratedName(user) {
   const badge = rank ? `<span class="viewer-rank viewer-rank-${rank.toLowerCase()}" title="直近90日のリスナーランク：${rank}" aria-label="ランク${rank}">${rank}</span>` : "";
   const coins = typeof user.coins30d === "number" && Number.isFinite(user.coins30d)
     ? `<span class="viewer-coins" title="直近30日間にこの配信者へ送った合計コイン（少額ギフト含む・保存済み記録）">30日：${formatNumber(user.coins30d)}コイン</span>` : "";
-  return `${heartMeMark(user)}${todayFollowMark(user)}${name}${badge}${coins}`;
+  const recorded=user.screenshotRecorded ? '<span class="screenshot-record-badge">記録ID</span>' : '';
+  return `${heartMeMark(user)}${todayFollowMark(user)}${name}${recorded}${badge}${coins}`;
 }
 
 function renderEventAvatar(user) {

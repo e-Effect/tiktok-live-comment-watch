@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TikTok LIVE 配信計測</title>
-    <link rel="stylesheet" href="/styles.css?v=20261022-listeners1">
+    <link rel="stylesheet" href="/styles.css?v=20261029-records1">
   </head>
   <body>
     <header class="app-topbar">
@@ -117,6 +117,7 @@
             <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
             <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
             <label><input type="checkbox" data-panel-toggle="giftHistory" checked> ギフト履歴</label>
+            <label><input type="checkbox" data-panel-toggle="screenshotRecords" checked> スクショ記録ID</label>
             <div class="layout-tools">
               <label><input id="layoutEditToggle" type="checkbox"> レイアウト編集</label>
               <button id="resetLayoutBtn" type="button">初期配置</button>
@@ -160,6 +161,19 @@
 
         <div id="attentionAlerts" hidden role="status" aria-live="polite"></div>
         <div class="grid">
+          <section id="screenshotRecordsPanel" data-panel="screenshotRecords" class="screenshot-records-panel">
+            <div class="gift-history-head"><h2>スクショ記録ID</h2><button id="screenshotRefresh" type="button">再取得</button></div>
+            <label>配信者ID<input id="screenshotScope" autocomplete="off" placeholder="@配信者ID"></label>
+            <p id="screenshotStatus" role="status">配信者を選択してください</p>
+            <form id="screenshotKeyForm" hidden><label>台帳の管理キー<input id="screenshotAdminKey" type="password" autocomplete="current-password" required></label><button type="submit">確認</button></form>
+            <label>記録IDを検索<input id="screenshotSearch" type="search" placeholder="ID・名前・記録元"></label>
+            <ul id="screenshotRecordsList" class="screenshot-records-list"></ul>
+            <details><summary>IDを登録</summary><form id="screenshotAddForm">
+              <label>TikTok ID<textarea id="screenshotIds" rows="3" maxlength="5000" required placeholder="@tiktok_id"></textarea></label>
+              <label>記録元<input id="screenshotSource" maxlength="160" value="スクショ"></label>
+              <button type="submit">登録・履歴照合</button>
+            </form></details>
+          </section>
           <section data-panel="report" class="report-board">
             <h2>集計レポート</h2>
             <div id="reportList" class="report-list">
@@ -252,6 +266,6 @@
       <form id="viewerCommentHistoryKeyForm" hidden><label>台帳の管理キー<input id="viewerCommentHistoryKey" type="password" autocomplete="current-password" required></label><button type="submit">履歴を開く</button></form>
       <ol id="viewerCommentHistoryItems"></ol><button id="viewerCommentHistoryRetry" type="button" hidden>再取得</button>
     </dialog>
-    <script src="/app.js?v=20261024-stability1" type="module"></script>
+    <script src="/app.js?v=20261029-records1" type="module"></script>
   </body>
 </html>

@@ -17,7 +17,7 @@ test('arrivals publish before history resolves; reentries publish without anothe
     getUserStat(id,name,at){return this.userStats.get(id)||{userId:id,nickname:name,lastSeenAt:at}},
     recordVisit(user){checks.push(user.userId)},enqueueVisitCheck(){},
     broadcastPresence(users){notices.push({...users[0]})},${method}
-  })`, { notices, checks, entryDetection, welcomeAlerts:new WelcomeAlerts(), attentionAlerts: new AttentionAlerts(), isAnonymousListenerIdentity: p => !p.userId });
+  })`, { notices, checks, entryDetection, screenshotWatch:{accept:()=>null}, welcomeAlerts:new WelcomeAlerts(), attentionAlerts: new AttentionAlerts(), isAnonymousListenerIdentity: p => !p.userId });
   const person = {userId:'one',nickname:'One'};
   session.markSeen(person,1000,'member',{entryEvent:true});
   assert.equal(notices.length,1);
