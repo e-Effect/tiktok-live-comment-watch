@@ -34,6 +34,7 @@ import { shouldRotateCollectorSession } from "./lib/external-collector.js";
 import { createAvatarWorkCache } from "./lib/avatar-work-cache.js";
 import { optimizeAvatarImage } from "./lib/avatar-image.js";
 import { tiktokProfileFromUser } from "./lib/tiktok-profile.js";
+import { attachCollectorStream } from './lib/collector-stream.js';
 
 if (!globalThis.process) {
   globalThis.process = { env: {} };
@@ -1214,6 +1215,10 @@ class LiveSession extends EventEmitter {
         recoveredAt: pipelineTimestamp(raw.lastDeliveryFailure.recoveredAt)
       } : null,
       pendingReceiptEvents: Math.max(0, Number(raw.pendingReceiptEvents) || 0),
+      transport: cleanText(raw.transport,30),
+      renderState: cleanText(raw.renderState,30),
+      lastRenderSuccessAt: cleanText(raw.lastRenderSuccessAt,80),
+      renderRetryAt: cleanText(raw.renderRetryAt,80),
       receipt: {
         reachable: receipt.reachable === true,
         printerReady: receipt.printerReady === true,
@@ -2392,6 +2397,31 @@ async function serveStatic(response, urlPath) {
   }
 }
 
+async function ingestCollectorBatch(body) {
+  const username=normalizeTikTokUsername(body.streamUsername||body.username);
+  if(!isValidUsername(username))throw Error('Invalid stream username');
+  const incoming=Array.isArray(body.events)?body.events.slice(0,250):[];
+  const normalizedIncoming=incoming.map(normalizeCollectorEvent).filter(Boolean);
+  const session=normalizedIncoming.length?collectorSessionForEvents(username,normalizedIncoming):ensureCollectorSession(username);
+  let accepted=0,dropped=Math.max(0,incoming.length-normalizedIncoming.length);
+  session.updateCollectorDiagnostics(body.diagnostics);
+  for(const normalized of normalizedIncoming){
+    if(isDuplicateCollectorEvent(session,normalized.key)){
+      session.noteIngestion('duplicate',normalized.type);dropped++;continue;
+    }
+    activateCollectorSession(session);session.noteIngestion('accepted',normalized.type);
+    session.collectorBridge.emit(normalized.type,{...normalized.data,serverReceivedAt:Date.now()});
+    if(normalized.roomId)session.roomId=String(normalized.roomId);
+    session.lastCollectorEventAt=Math.max(Number(session.lastCollectorEventAt||0),Number(normalized.at||Date.now()));accepted++;
+  }
+  session.lastCollectorAt=Date.now();session.lastCollectorHeartbeatAt=session.lastCollectorAt;
+  if(!accepted&&body.heartbeat)session.broadcastSummary('note PCのTikFinityコレクターから待機信号を受信しました。');
+  session.persistSession();
+  const durable = incoming.length === 0 || await session.awaitCollectorDurability();
+  return {ok:true,durable,sessionId:session.id,preview:!session.recordingEnabled,status:session.status,accepted,dropped,
+    lastCollectorAt:session.lastCollectorAt,collectorState:accepted?'receiving':'waiting'};
+}
+
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
@@ -2473,58 +2503,7 @@ const server = createServer(async (request, response) => {
 
     try {
       const body = await readBody(request);
-      const username = normalizeTikTokUsername(body.streamUsername || body.username);
-      if (!isValidUsername(username)) {
-        sendJson(response, 400, { error: "配信者のTikTok IDを確認してください。" });
-        return;
-      }
-
-      const incoming = Array.isArray(body.events) ? body.events.slice(0, 250) : [];
-      const normalizedIncoming = incoming.map(normalizeCollectorEvent).filter(Boolean);
-      const session = normalizedIncoming.length > 0
-        ? collectorSessionForEvents(username, normalizedIncoming)
-        : ensureCollectorSession(username);
-      let accepted = 0;
-      let dropped = Math.max(0, incoming.length - normalizedIncoming.length);
-      session.updateCollectorDiagnostics(body.diagnostics);
-      for (const normalized of normalizedIncoming) {
-        if (!normalized) {
-          dropped += 1;
-          continue;
-        }
-        if (isDuplicateCollectorEvent(session, normalized.key)) {
-          session.noteIngestion("duplicate", normalized.type);
-          dropped += 1;
-          continue;
-        }
-        activateCollectorSession(session);
-        session.noteIngestion("accepted", normalized.type);
-        session.collectorBridge.emit(normalized.type, {
-          ...normalized.data,
-          serverReceivedAt: Date.now()
-        });
-        if (normalized.roomId) session.roomId = String(normalized.roomId);
-        session.lastCollectorEventAt = Math.max(Number(session.lastCollectorEventAt || 0), Number(normalized.at || Date.now()));
-        accepted += 1;
-      }
-      session.lastCollectorAt = Date.now();
-      session.lastCollectorHeartbeatAt = session.lastCollectorAt;
-      if (accepted === 0 && body.heartbeat) {
-        session.broadcastSummary("note PCのTikFinityコレクターから待機信号を受信しました。");
-      }
-      session.persistSession();
-      const durable = incoming.length === 0 || await session.awaitCollectorDurability();
-      sendJson(response, 202, {
-        ok: true,
-        durable,
-        sessionId: session.id,
-        preview: !session.recordingEnabled,
-        status: session.status,
-        accepted,
-        dropped,
-        lastCollectorAt: session.lastCollectorAt,
-        collectorState: accepted > 0 ? "receiving" : "waiting"
-      });
+      sendJson(response, 202, await ingestCollectorBatch(body));
     } catch (error) {
       sendJson(response, 400, { error: shortError(error) });
     }
@@ -2587,6 +2566,7 @@ const server = createServer(async (request, response) => {
       uptimeSeconds: Math.floor(getUptimeSeconds()),
       provider: providerInfo,
       collector: {
+        transport: collectorStream.status(),
         enabled: EXTERNAL_COLLECTOR_ENABLED,
         connected: collectorConnected,
         state: collectorState,
@@ -3215,6 +3195,9 @@ const server = createServer(async (request, response) => {
 });
 
 await eventStore.init();
+
+const collectorStream=attachCollectorStream(server,{enabled:EXTERNAL_COLLECTOR_ENABLED,
+  authorize:request=>isAuthorizedWithKey(request,COLLECTOR_INGEST_KEY),ingest:ingestCollectorBatch});
 
 server.listen(PORT, () => {
   console.log(`TikTok LIVE app: http://localhost:${PORT}`);

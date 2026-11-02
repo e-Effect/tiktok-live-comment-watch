@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=2 \"test/*.test.js\""
   },
   "engines": {
     "node": ">=24"
@@ -15,7 +15,8 @@
     "@tiktool/live": "^2.12.1",
     "pg": "^8.23.0",
     "sharp": "^0.35.3",
-    "tiktok-live-connector": "^2.1.1-beta1"
+    "tiktok-live-connector": "^2.1.1-beta1",
+    "ws": "8.21.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.9",

@@ -40,15 +40,25 @@ $deliveryBatchCount = 0
 $deliveryRetryAt = [DateTime]::MinValue
 $deliveryFailureCount = 0
 $lastDeliveryAttemptAt = [DateTime]::MinValue
+$deliveryMinimumIntervalMs = 2000
 $lastRenderSuccessAt = $null
 $lastRenderError = ''
 $deliveryHistoryPath = Join-Path $PSScriptRoot 'delivery-failures.json'
 $deliveryHistory = @()
 try {
     if (Test-Path -LiteralPath $deliveryHistoryPath) {
-        $deliveryHistory = @(Get-Content -LiteralPath $deliveryHistoryPath -Raw | ConvertFrom-Json | Select-Object -Last 20)
+        $savedHistory = Get-Content -LiteralPath $deliveryHistoryPath -Raw | ConvertFrom-Json
+        $flatHistory = @(foreach ($group in $savedHistory) { foreach ($item in $group) { if ($null -ne $item.at) { $item } } })
+        $deliveryHistory = @($flatHistory | Select-Object -Last 20)
     }
 } catch { $deliveryHistory = @() }
+# Preserve any outstanding server cooldown across a collector restart.
+foreach ($failure in @($deliveryHistory | Where-Object { -not $_.recoveredAt })) {
+    $seconds = [double]$failure.retrySeconds
+    if ($failure.httpStatus -eq 429) { $seconds = [Math]::Max(120, $seconds) }
+    $until = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$failure.at).UtcDateTime.AddSeconds($seconds)
+    if ($until -gt $deliveryRetryAt) { $deliveryRetryAt = $until }
+}
 $lastStatusWriteAt = [DateTime]::MinValue
 $lastStatusLogAt = [DateTime]::MinValue
 $lastPendingSaveAt = [DateTime]::UtcNow
@@ -92,7 +102,8 @@ function Get-CollectorDiagnostics {
         lastDeliveryFailure = if ($script:deliveryHistory.Count) { $script:deliveryHistory[-1] } else { $null }
         pendingReceiptEvents = $script:receiptPending.Count
         deliveryInFlight = $null -ne $script:deliveryTask
-        renderState = if ($null -ne $script:deliveryTask) { 'sending' } elseif ($script:pending.Count -gt 0) { 'buffering' } else { 'connected' }
+        transport = if ($script:collectorStreamAvailable) { Get-CollectorTransport } else { 'http' }
+        renderState = if ($script:collectorStreamAvailable -and (Get-CollectorTransport) -eq 'websocket') { Get-CollectorStreamState } elseif ($null -ne $script:deliveryTask) { 'sending' } elseif ($script:pending.Count -gt 0) { 'buffering' } elseif ($script:lastRenderSuccessAt) { 'connected' } else { 'offline' }
         lastRenderSuccessAt = $script:lastRenderSuccessAt
         lastRenderError = $script:lastRenderError
         renderRetryAt = if ($script:deliveryRetryAt -gt [DateTime]::UtcNow) { $script:deliveryRetryAt.ToString('o') } else { $null }
@@ -120,7 +131,7 @@ function Write-CollectorStatus {
         updatedAt = $now
         diagnostics = Get-CollectorDiagnostics
     }
-    $status | ConvertTo-Json -Compress | Set-Content -LiteralPath $statusPath -Encoding UTF8
+    $status | ConvertTo-Json -Depth 8 -Compress | Set-Content -LiteralPath $statusPath -Encoding UTF8
     if ($Force -or ($nowValue - $script:lastStatusLogAt).TotalSeconds -ge 10) {
         $script:lastStatusLogAt = $nowValue
         "[$now] $State - $Message" | Add-Content -LiteralPath $logPath -Encoding UTF8
@@ -146,6 +157,7 @@ function Start-CollectorDelivery {
     param($Config, [bool]$Heartbeat = $false)
     if ($null -ne $script:deliveryTask) { return $false }
     if ([DateTime]::UtcNow -lt $script:deliveryRetryAt) { return $false }
+    if (([DateTime]::UtcNow - $script:lastDeliveryAttemptAt).TotalMilliseconds -lt $script:deliveryMinimumIntervalMs) { return $false }
 
     $take = [Math]::Min(25, $script:pending.Count)
     if ($take -eq 0 -and -not $Heartbeat) { return $false }
@@ -195,13 +207,19 @@ function Complete-CollectorDelivery {
     $deliverySucceeded = $false
     $failureKind = 'transport'
     $httpStatus = $null
+    $retryAfterSeconds = 0
     try {
         $response = $script:deliveryTask.GetAwaiter().GetResult()
         $httpStatus = [int]$response.StatusCode
         $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode) {
             $failureKind = 'http'
-            throw "Render response $([int]$response.StatusCode): $text"
+            if ($response.Headers.RetryAfter) {
+                if ($null -ne $response.Headers.RetryAfter.Delta) { $retryAfterSeconds = $response.Headers.RetryAfter.Delta.TotalSeconds }
+                elseif ($null -ne $response.Headers.RetryAfter.Date) { $retryAfterSeconds = ($response.Headers.RetryAfter.Date.UtcDateTime - [DateTime]::UtcNow).TotalSeconds }
+            }
+            # HTML challenges can be large and must not be sent back in every heartbeat.
+            throw "Render response $([int]$response.StatusCode); queued events are retained."
         }
         $failureKind = 'response'
         $delivery = $text | ConvertFrom-Json
@@ -226,6 +244,8 @@ function Complete-CollectorDelivery {
     catch {
         $script:deliveryFailureCount++
         $delaySeconds = [Math]::Min(60, [Math]::Max(3, [Math]::Pow(2, [Math]::Min(5, $script:deliveryFailureCount - 1)) * 3))
+        if ($httpStatus -eq 429) { $delaySeconds = [Math]::Min(600, [Math]::Max(120, [Math]::Pow(2, [Math]::Min(3, $script:deliveryFailureCount - 1)) * 120)) }
+        $delaySeconds = [Math]::Max($delaySeconds, [Math]::Ceiling($retryAfterSeconds))
         $script:deliveryRetryAt = [DateTime]::UtcNow.AddSeconds($delaySeconds)
         $script:lastRenderError = $_.Exception.Message
         $baseError = $_.Exception.GetBaseException()
@@ -266,6 +286,7 @@ function Complete-CollectorDelivery {
 
 function Invoke-CollectorDeliveryPump {
     param($Config, [bool]$Heartbeat = $false)
+    if ($script:collectorStreamAvailable -and (Invoke-CollectorStreamPump -Config $Config -Heartbeat $Heartbeat)) { Save-PendingEventsIfDue; return }
     [void](Complete-CollectorDelivery)
     Save-PendingEventsIfDue
     if ($null -ne $script:deliveryTask -or [DateTime]::UtcNow -lt $script:deliveryRetryAt) { return }
@@ -494,6 +515,8 @@ function Add-PendingEvent {
     return $queuedRaw
 }
 
+$script:collectorStreamAvailable = Test-Path -LiteralPath (Join-Path $PSScriptRoot 'CollectorStream.ps1')
+if ($script:collectorStreamAvailable) { . (Join-Path $PSScriptRoot 'CollectorStream.ps1') }
 Load-PendingEvents
 Load-ReceiptPending
 Write-CollectorStatus -State 'starting' -Message 'Waiting for TikFinity.' -PendingCount ($pending.Count + $receiptPending.Count) -Force
@@ -503,7 +526,15 @@ while ($true) {
     try {
         $config = Read-CollectorConfig
         $socket = New-Object System.Net.WebSockets.ClientWebSocket
-        $socket.ConnectAsync([Uri]$tikFinityUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $connectCancel = New-Object Threading.CancellationTokenSource
+        $connectCancel.CancelAfter(5000)
+        $connectTask = $socket.ConnectAsync([Uri]$tikFinityUrl, $connectCancel.Token)
+        while (-not $connectTask.IsCompleted) {
+            Invoke-CollectorDeliveryPump -Config $config
+            Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $false
+            Start-Sleep -Milliseconds 50
+        }
+        try { [void]$connectTask.GetAwaiter().GetResult() } finally { $connectCancel.Dispose() }
         Invoke-CollectorDeliveryPump -Config $config -Heartbeat $true
         Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $true
         $script:lastReceiptHeartbeatAt = [DateTime]::UtcNow
@@ -582,5 +613,8 @@ while ($true) {
         if ($socket) { $socket.Dispose() }
         Save-PendingEventsIfDue -Force
     }
-    Start-Sleep -Seconds 3
+    for ($retryTick=0; $retryTick -lt 30; $retryTick++) {
+        if ($config) { Invoke-CollectorDeliveryPump -Config $config; Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $false }
+        Start-Sleep -Milliseconds 100
+    }
 }
