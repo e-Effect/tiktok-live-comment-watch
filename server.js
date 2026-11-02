@@ -35,6 +35,7 @@ import { createAvatarWorkCache } from "./lib/avatar-work-cache.js";
 import { optimizeAvatarImage } from "./lib/avatar-image.js";
 import { tiktokProfileFromUser } from "./lib/tiktok-profile.js";
 import { attachCollectorStream } from './lib/collector-stream.js';
+import {roomUserVisitEventId} from './lib/room-user-visits.js';
 
 if (!globalThis.process) {
   globalThis.process = { env: {} };
@@ -356,6 +357,21 @@ class LiveSession extends EventEmitter {
       });
     });
 
+    connection.on('roomUserVisit', (data) => {
+      const person = personFromEvent(data);
+      if (this.userStats.get(person.userId)?.hasJoined) return;
+      const at = Number(data.snapshotAt);
+      this.markSeen(person, at, 'roomUser', {passive:true});
+      if (!this.recordingEnabled) return;
+      // This is durable presence evidence, not an instantaneous entry or a gift.
+      this.queueDatabaseEvent({
+        id:roomUserVisitEventId(data.roomId,person.userId),type:'room_user_visit',
+        ...person,...pipelineTimestamps(data),at,source:'roomUser',
+        payload:{roomId:data.roomId,snapshotList:data.snapshotList,detection:'snapshot'},
+      });
+      queueMicrotask(() => this.flushPendingDatabaseEvents().catch(() => {}));
+    });
+
     connection.on(events.FOLLOW || "follow", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
@@ -487,7 +503,7 @@ class LiveSession extends EventEmitter {
     });
   }
 
-  markSeen(person, at, presenceSource = "event", { entryEvent = false, detection = entryDetection() } = {}) {
+  markSeen(person, at, presenceSource = "event", { entryEvent = false, detection = entryDetection(), passive = false } = {}) {
     if (isAnonymousListenerIdentity(person)) return false;
     this.lastEventAt = Math.max(this.lastEventAt || 0, at);
     const user = this.getUserStat(person.userId, person.nickname, at, person.signals);
@@ -507,7 +523,7 @@ class LiveSession extends EventEmitter {
       user.visitSource = presenceSource;
       user.entryEventCount = entryEvent ? 1 : Number(user.entryEventCount || 0);
       this.viewerStats.knownJoins += 1;
-      this.recordVisit(user, at, presenceSource);
+      if (!passive) this.recordVisit(user, at, presenceSource);
     } else if (entryEvent) {
       user.lastJoinAt = Math.max(Number(user.lastJoinAt || 0), at);
       user.entryEventCount = Number(user.entryEventCount || 0) + 1;
@@ -515,12 +531,13 @@ class LiveSession extends EventEmitter {
     if (["comment", "gift"].includes(presenceSource) && this.pendingVisitChecks.has(user.userId)) {
       this.enqueueVisitCheck(user.userId, true);
     }
+    if (!passive && user.visitSource==='roomUser' && !user.visitHistoryKnown) this.recordVisit(user,at,presenceSource);
     user.lastSeenAt = Math.max(user.lastSeenAt, at);
     this.userStats.set(user.userId, user);
     // Show arrivals before the database judgment completes. Coalesce updates
     // using the existing presence timer, not one network request per arrival.
     if (newlySeen || entryEvent) this.broadcastPresence([user]);
-    if (this.recordingEnabled) {
+    if (this.recordingEnabled && !passive) {
       if (this.currentEventSource() !== 'initial') {
         const screenshot = screenshotWatch.accept(this.username,this.id,person,at);
         if (screenshot) this.broadcast('screenshot_alert',{alert:screenshot});
@@ -1058,6 +1075,10 @@ class LiveSession extends EventEmitter {
         else {
           this.noteIngestion("stored", event.type);
           this.notePipelineLatency(event);
+          if(event.type==='room_user_visit'){
+            const user=this.userStats.get(event.userId);
+            if(user)this.recordVisit(user,event.at,'roomUser');
+          }
           cacheListenerAvatar(event.userId, event.avatarUrl).catch(() => {});
         }
       }
@@ -1202,6 +1223,17 @@ class LiveSession extends EventEmitter {
       receivedByType: cleanCounts(raw.receivedByType),
       forwardedByType: cleanCounts(raw.forwardedByType),
       unknownByType: cleanCounts(raw.unknownByType),
+      roomUserVisits: {
+        enabled:raw.roomUserVisits?.enabled===true,
+        snapshots:Math.max(0,Number(raw.roomUserVisits?.snapshots)||0),
+        candidates:Math.max(0,Number(raw.roomUserVisits?.candidates)||0),
+        queued:Math.max(0,Number(raw.roomUserVisits?.queued)||0),
+        duplicate:Math.max(0,Number(raw.roomUserVisits?.duplicate)||0),
+        missingRoomId:Math.max(0,Number(raw.roomUserVisits?.missingRoomId)||0),
+        invalidIdentity:Math.max(0,Number(raw.roomUserVisits?.invalidIdentity)||0),
+        lastRoomId:cleanText(raw.roomUserVisits?.lastRoomId,100),
+        lastSnapshotAt:pipelineTimestamp(raw.roomUserVisits?.lastSnapshotAt),
+      },
       serverAccepted: Math.max(0, Number(raw.serverAccepted) || 0),
       serverDropped: Math.max(0, Number(raw.serverDropped) || 0),
       pendingEvents: Math.max(0, Number(raw.pendingEvents) || 0),
@@ -2402,10 +2434,16 @@ async function ingestCollectorBatch(body) {
   if(!isValidUsername(username))throw Error('Invalid stream username');
   const incoming=Array.isArray(body.events)?body.events.slice(0,250):[];
   const normalizedIncoming=incoming.map(normalizeCollectorEvent).filter(Boolean);
-  const session=normalizedIncoming.length?collectorSessionForEvents(username,normalizedIncoming):ensureCollectorSession(username);
+  let session=normalizedIncoming.length?collectorSessionForEvents(username,[normalizedIncoming[0]]):ensureCollectorSession(username);
+  const touchedSessions=new Set([session]);
   let accepted=0,dropped=Math.max(0,incoming.length-normalizedIncoming.length);
   session.updateCollectorDiagnostics(body.diagnostics);
   for(const normalized of normalizedIncoming){
+    if(session.stoppedAt || (normalized.roomId && session.roomId && normalized.roomId!==session.roomId)){
+      session=collectorSessionForEvents(username,[normalized]);
+      touchedSessions.add(session);
+      session.updateCollectorDiagnostics(body.diagnostics);
+    }
     if(isDuplicateCollectorEvent(session,normalized.key)){
       session.noteIngestion('duplicate',normalized.type);dropped++;continue;
     }
@@ -2416,9 +2454,10 @@ async function ingestCollectorBatch(body) {
   }
   session.lastCollectorAt=Date.now();session.lastCollectorHeartbeatAt=session.lastCollectorAt;
   if(!accepted&&body.heartbeat)session.broadcastSummary('note PCのTikFinityコレクターから待機信号を受信しました。');
-  session.persistSession();
+  for(const touched of touchedSessions)touched.persistSession();
   const durable = incoming.length === 0 || await session.awaitCollectorDurability();
-  return {ok:true,durable,sessionId:session.id,preview:!session.recordingEnabled,status:session.status,accepted,dropped,
+  const othersDurable=await Promise.all([...touchedSessions].filter(touched=>touched!==session).map(touched=>touched.awaitCollectorDurability()));
+  return {ok:true,durable:durable&&othersDurable.every(Boolean),sessionId:session.id,preview:!session.recordingEnabled,status:session.status,accepted,dropped,
     lastCollectorAt:session.lastCollectorAt,collectorState:accepted?'receiving':'waiting'};
 }
 
@@ -2579,6 +2618,7 @@ const server = createServer(async (request, response) => {
       database: {
         ...eventStore.status(),
         visitJudgmentMode: "isolated-batch-v4",
+        roomUserVisitPolicy: "per-live-passive-v1",
         visitBatchStats: eventStore.visitBatchStats,
         firstVisitClaimPolicy: "bounded-prior-action-retry-v3",
         avatarWorkPolicy: "bounded-2-ttl-v1",

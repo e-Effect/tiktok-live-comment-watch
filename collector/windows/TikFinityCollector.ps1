@@ -95,6 +95,7 @@ function Get-CollectorDiagnostics {
         receivedByType = $script:receivedCounts
         forwardedByType = $script:forwardedCounts
         unknownByType = $script:unknownCounts
+        roomUserVisits = if ($script:roomUserVisitsAvailable) { [void](Get-RoomUserVisitsEnabled); $script:roomUserDiagnostics } else { @{enabled=$false} }
         serverAccepted = $script:deliveryAccepted
         serverDropped = $script:deliveryDropped
         pendingEvents = $script:pending.Count
@@ -517,6 +518,8 @@ function Add-PendingEvent {
 
 $script:collectorStreamAvailable = Test-Path -LiteralPath (Join-Path $PSScriptRoot 'CollectorStream.ps1')
 if ($script:collectorStreamAvailable) { . (Join-Path $PSScriptRoot 'CollectorStream.ps1') }
+$script:roomUserVisitsAvailable = Test-Path -LiteralPath (Join-Path $PSScriptRoot 'RoomUserVisits.ps1')
+if ($script:roomUserVisitsAvailable) { . (Join-Path $PSScriptRoot 'RoomUserVisits.ps1') }
 Load-PendingEvents
 Load-ReceiptPending
 Write-CollectorStatus -State 'starting' -Message 'Waiting for TikFinity.' -PendingCount ($pending.Count + $receiptPending.Count) -Force
@@ -582,9 +585,17 @@ while ($true) {
             Add-DiagnosticCount -Bucket $script:receivedCounts -Name $eventType
             $script:lastReceivedEventType = $eventType
             if ($localOnlyEvents -contains $eventType.ToLowerInvariant()) {
-                # Viewer-count events contain no dependable full viewer roster.
-                # Keep the local diagnostic count, but do not use disk/network
-                # bandwidth for data that is no longer shown by the viewer.
+                # Keep full viewer-count snapshots local; do not use disk/network
+                # bandwidth for repeated ranking snapshots. Queue only new IDs.
+                if ($script:roomUserVisitsAvailable) {
+                    foreach ($visitEnvelope in @(Get-RoomUserVisitEnvelopes -Envelope $event -StreamUsername $config.streamUsername)) {
+                        $visitRaw = $visitEnvelope | ConvertTo-Json -Depth 8 -Compress
+                        [void](Add-PendingEvent -Raw $visitRaw)
+                        Confirm-RoomUserVisitQueued -Envelope $visitEnvelope -StreamUsername $config.streamUsername
+                        Add-DiagnosticCount -Bucket $script:forwardedCounts -Name 'roomUserVisit'
+                    }
+                    Invoke-CollectorDeliveryPump -Config $config
+                }
                 $script:lastReceivedEventType = ''
             }
             elseif ($allowedEvents -contains $eventType.ToLowerInvariant()) {
