@@ -106,6 +106,54 @@ test('a batch spanning two LIVE rooms never attributes both sets of users to one
   assert.equal(acknowledged.length,2);assert.equal(reply.durable,false,'Both rooms must be durably acknowledged');
 });
 
+test('PowerShell uses only a fresh verified room when the ranking has no room ID',{skip:process.platform!=='win32'},()=>{
+  const script=String.raw`
+    $ErrorActionPreference='Stop'
+    . (Join-Path (Get-Location) 'collector/windows/RoomUserVisits.ps1')
+    function Get-RoomUserVisitsEnabled { return $true }
+    function Update-VerifiedRoom { param($Config,[long]$At) }
+    $frame='{"data":{"topViewers":[{"user":{"id":"700000000000000011","uniqueId":"one"}}]}}'|ConvertFrom-Json
+    $config=@{streamUsername='host'}
+    if (@(Get-RoomUserVisitEnvelopes -Envelope $frame -StreamUsername host -Config $config).Count) { throw 'Missing room accepted' }
+    $script:verifiedRoomId='700000000000000001'
+    $script:verifiedRoomUntil=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()+22000
+    $events=@(Get-RoomUserVisitEnvelopes -Envelope $frame -StreamUsername host -Config $config)
+    if ($events.Count -ne 1 -or $events[0].data.roomId -ne $script:verifiedRoomId) { throw 'Verified room was not used' }
+    Reset-VerifiedRoom
+    if (@(Get-RoomUserVisitEnvelopes -Envelope $frame -StreamUsername host -Config $config).Count) { throw 'Old room was reused' }
+    if ($script:roomUserDiagnostics.rankingFrames -ne 3 -or $script:roomUserDiagnostics.verifiedRoomFrames -ne 1) { throw 'Bad counters' }
+  `;
+  const result=spawnSync('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',timeout:15000});
+  assert.equal(result.status,0,result.stdout+result.stderr);
+});
+
+test('PowerShell stay checkpoints exclude absent intervals, large gaps and single sightings',{skip:process.platform!=='win32'},()=>{
+  const script=String.raw`
+    $ErrorActionPreference='Stop'
+    . (Join-Path (Get-Location) 'collector/windows/RoomUserVisits.ps1')
+    $script:saved=New-Object System.Collections.Generic.List[object]
+    function Add-PendingEvent {param($Raw);$script:saved.Add(($Raw|ConvertFrom-Json))}
+    function Add-DiagnosticCount {}
+    $ids=New-Object 'System.Collections.Generic.HashSet[string]'
+    $none=New-Object 'System.Collections.Generic.HashSet[string]'
+    [void]$ids.Add('700000000000000011')
+    $base=1793664000000
+    foreach($offset in @(0,30000,60000,70000)){Update-RoomUserStay 'host:one' 'one' $ids ($base+$offset)}
+    Update-RoomUserStay 'host:one' 'one' $none ($base+72000)
+    foreach($offset in @(90000,100000,150000,155000)){Update-RoomUserStay 'host:one' 'one' $ids ($base+$offset)}
+    Update-RoomUserStay 'host:two' 'two' $ids ($base+160000)
+    Close-RoomUserStay
+    $script:saved.ToArray()|ConvertTo-Json -Depth 6 -Compress
+  `;
+  const result=spawnSync('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',timeout:15000});
+  assert.equal(result.status,0,result.stdout+result.stderr);
+  const events=JSON.parse(result.stdout.trim());
+  assert.deepEqual(events.map(event=>event.data.lastAt-event.data.firstAt),[60000,10000,10000,5000]);
+  assert.equal(new Set(events.map(event=>event.collectorEventId)).size,4);
+  assert.ok(events.every(event=>normalizeCollectorEvent(event)?.type==='roomUserStay'));
+  assert.equal(normalizeCollectorEvent({...events[0],data:{...events[0].data,lastAt:events[0].data.firstAt+110000}}),null);
+});
+
 test('real PostgreSQL persists the LIVE and provenance once across snapshots, normal entries and reconnects',async()=>{
   const db=new PGlite(),store=new EventStore();store.ready=true;
   store.pool=db;store.writePool=db;store.visitPool=db;store.resolveListenerId=async id=>id;
@@ -148,6 +196,19 @@ test('real PostgreSQL persists the LIVE and provenance once across snapshots, no
     assert.equal(history.total,2);
     assert.equal(history.items[0].broadcasts[0].roomId,'room-two');
     assert.deepEqual(history.items[0].broadcasts[0].sources,['roomUser']);
+    assert.equal(history.items[0].broadcasts[0].observedStayMs,null);
+    await db.query("INSERT INTO live_events(event_key,session_id,stream_username,event_type,event_at,user_id) VALUES ('join-one','first','host','join',$1,'123456')",
+      [new Date(event.at-1000)]);
+    for(const [first,last] of [[0,10000],[5000,20000],[30000,40000],[0,10000]]){
+      const stay={id:'stay-'+first+'-'+last,type:'room_user_stay',userId:'123456',at:event.at+last,
+        payload:{roomId:'room-one',firstAt:event.at+first,lastAt:event.at+last}};
+      assert.equal(await store.stageEvents(session,[stay]),true);
+      assert.equal(await store.recordEvent(session,stay),true,store.lastError);
+    }
+    const observed=(await store.listenerHistory('123456',{kind:'visits',username:'host'})).items[1].broadcasts[0];
+    assert.equal(Number(observed.observedStayMs),30000,'Overlapping samples count once, missing samples do not count');
+    assert.equal(Date.parse(observed.enteredAt),event.at-1000);
+    assert.equal(Number((await db.query("SELECT visit_count FROM listener_stream_stats WHERE user_id='123456'")).rows[0].visit_count),2);
     assert.equal(await store.recordEvent({...next,roomId:'wrong'},second),false);
     assert.equal((await db.query("SELECT * FROM viewer_visits WHERE user_id='123456'")).rows.length,2);
     // Fail the atomic write, preserve the durable inbox, then recover once.

@@ -4,6 +4,7 @@ import {historyUrl,setupCommentHistory,tiktokProfileUrl} from '../public/viewer-
 test('history URL requests only twenty comments scoped to streamer',()=>{
  const u=new URL(historyUrl('id/one','host'),'https://example.com');
  assert.equal(u.pathname,'/api/listeners/id%2Fone/history');assert.equal(u.searchParams.get('limit'),'20');assert.equal(u.searchParams.get('username'),'host');
+ assert.equal(u.searchParams.get('includeVisits'),'1');
 });
 test('no background fetch, click loads authenticated history safely, capped at twenty',async()=>{
  const previous={document:globalThis.document,window:globalThis.window,localStorage:globalThis.localStorage,fetch:globalThis.fetch};
@@ -12,7 +13,10 @@ test('no background fetch, click loads authenticated history safely, capped at t
  try {
  globalThis.document={getElementById(id){if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);},createElement:node};
  globalThis.window={getSelection:()=>({toString:()=>''})};globalThis.localStorage={getItem:()=> 'test-key',setItem(){}};
- globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer test-key');assert.match(url,/limit=20/);return {ok:true,json:async()=>({items:Array.from({length:22},()=>({at:'2026-09-21T00:00:00Z',text:'<img onerror=bad>'}))})};};
+ globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer test-key');assert.match(url,/limit=20/);return {ok:true,json:async()=>({
+  items:Array.from({length:22},()=>({at:'2026-09-21T00:00:00Z',text:'<img onerror=bad>'})),
+  recentVisits:Array.from({length:6},(_,i)=>i===0?{enteredAt:'2026-11-03T10:00:00Z',observedStayMs:125000}:{firstSeenAt:'2026-11-02T10:00:00Z',observedStayMs:null})
+ })};};
  setupCommentHistory(list,()=>({username:'host'}));assert.equal(calls,0);
  list.handlers.click({target:{closest:selector=>selector.startsWith('[data-')?{dataset:{userId:'user',userName:'名前',uniqueId:'test.viewer'}}:null}});
  await new Promise(r=>setImmediate(r));
@@ -20,6 +24,12 @@ test('no background fetch, click loads authenticated history safely, capped at t
  assert.equal(nodes.get('viewerCommentHistoryItems').children[0].children[1].textContent,'<img onerror=bad>');
  assert.match(nodes.get('viewerCommentHistoryTitle').textContent,/名前/);
  assert.equal(nodes.get('viewerCommentHistoryProfile').href,'https://www.tiktok.com/@test.viewer');
+ const visits=nodes.get('viewerRecentVisitsItems').children;
+ assert.equal(visits.length,5);
+ assert.match(visits[0].children[0].textContent,/入室通知.*19:00:00/);
+ assert.equal(visits[0].children[1].textContent,'観測滞在 約2分5秒');
+ assert.match(visits[1].children[0].textContent,/初回検知/);
+ assert.equal(visits[1].children.length,1);
  nodes.get('viewerCommentHistoryClose').handlers.click();assert.equal(nodes.get('viewerCommentHistory').open,false);
  } finally {Object.assign(globalThis,previous);}
 });
@@ -86,4 +96,14 @@ test('unknown profile is never guessed from a numeric user ID and does not hide 
  assert.equal(h.nodes.get('viewerCommentHistoryProfile').hidden,true);
  assert.equal(h.nodes.get('viewerCommentHistoryProfile').href,undefined);
  assert.match(h.nodes.get('viewerCommentHistoryStatus').textContent,/まだありません/);
+});
+
+test('missing visits do not hide comments, and switching to preview clears the previous listener',async t=>{
+ const h=harness(t,async()=>({ok:true,json:async()=>({items:[{at:1,text:'コメント'}],recentVisits:null})}));
+ h.roots[0].handlers.click({target:h.row('one','known')});await tick();
+ assert.match(h.nodes.get('viewerRecentVisitsStatus').textContent,/取得できません/);
+ assert.equal(h.nodes.get('viewerCommentHistoryItems').children.length,1);
+ h.preview(true);h.roots[1].handlers.click({target:h.row('demo','known')});await tick();
+ assert.equal(h.nodes.get('viewerRecentVisits').hidden,true);
+ assert.equal(h.nodes.get('viewerRecentVisitsItems').children.length,0);
 });

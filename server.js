@@ -9,6 +9,7 @@ import { EventStore } from "./lib/event-store.js";
 import { trialOptions } from "./lib/trial-metrics.js";
 import { noContributionRank } from "./lib/contribution-rank-v2.js";
 import { ViewerRanks } from "./lib/viewer-ranks.js";
+import { ViewerLeagues } from "./lib/viewer-leagues.js";
 import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
@@ -36,6 +37,7 @@ import { optimizeAvatarImage } from "./lib/avatar-image.js";
 import { tiktokProfileFromUser } from "./lib/tiktok-profile.js";
 import { attachCollectorStream } from './lib/collector-stream.js';
 import {roomUserVisitEventId} from './lib/room-user-visits.js';
+import {createCollectorLiveRoomLookup} from './lib/collector-live-room.js';
 
 if (!globalThis.process) {
   globalThis.process = { env: {} };
@@ -86,6 +88,17 @@ const runAvatarCacheWork = createAvatarWorkCache();
 const attentionAlerts = new AttentionAlerts();
 const welcomeAlerts = new WelcomeAlerts();
 const screenshotWatch = new ScreenshotWatch();
+const lookupCollectorLiveRoom = createCollectorLiveRoomLookup();
+const viewerLeagues = new ViewerLeagues({
+  apiKey: globalThis.process?.env?.VIEWER_LEAGUE_TIKTOOLS_API_KEY,
+  onChange(matches) {
+    for (const session of sessions.values()) {
+      if (session.stoppedAt) continue;
+      const users = [...session.userStats.values()].filter(user => matches(user.uniqueId));
+      if (users.length) session.broadcastPresence(users);
+    }
+  }
+});
 let screenshotRefreshPending = null;
 function refreshScreenshotWatch(force=false) {
   if(screenshotRefreshPending) return force ? screenshotRefreshPending.catch(()=>{}).then(()=>refreshScreenshotWatch()) : screenshotRefreshPending;
@@ -372,6 +385,16 @@ class LiveSession extends EventEmitter {
       queueMicrotask(() => this.flushPendingDatabaseEvents().catch(() => {}));
     });
 
+    connection.on('roomUserStay',({roomId,userId,firstAt,lastAt})=>{
+      if(!this.recordingEnabled)return;
+      this.queueDatabaseEvent({
+        id:'room-stay:'+roomId+':'+userId+':'+firstAt+':'+lastAt,
+        type:'room_user_stay',userId,at:lastAt,source:'roomUser',
+        payload:{roomId,firstAt,lastAt},
+      });
+      queueMicrotask(()=>this.flushPendingDatabaseEvents().catch(()=>{}));
+    });
+
     connection.on(events.FOLLOW || "follow", (data) => {
       const person = personFromEvent(data);
       const at = eventTime(data);
@@ -542,7 +565,8 @@ class LiveSession extends EventEmitter {
         const screenshot = screenshotWatch.accept(this.username,this.id,person,at);
         if (screenshot) this.broadcast('screenshot_alert',{alert:screenshot});
       }
-      const alert = attentionAlerts.accept(this.id, person, at);
+      const attentionScope=this.roomId?`room:${this.username.toLowerCase()}:${this.roomId}`:this.id;
+      const alert = attentionAlerts.accept(this.id, person, at, undefined, attentionScope);
       if (alert) this.broadcast("attention_alert", { alert });
       const welcome = this.currentEventSource() !== "initial" ? welcomeAlerts.accept(this.id, person, at) : null;
       if (welcome) this.broadcast("welcome_alert", { alert: welcome });
@@ -1225,6 +1249,12 @@ class LiveSession extends EventEmitter {
       unknownByType: cleanCounts(raw.unknownByType),
       roomUserVisits: {
         enabled:raw.roomUserVisits?.enabled===true,
+        stayEnabled:raw.roomUserVisits?.stayEnabled===true,
+        stayQueued:Math.max(0,Number(raw.roomUserVisits?.stayQueued)||0),
+        stayWriteFailures:Math.max(0,Number(raw.roomUserVisits?.stayWriteFailures)||0),
+        rankingFrames:Math.max(0,Number(raw.roomUserVisits?.rankingFrames)||0),
+        verifiedRoomFrames:Math.max(0,Number(raw.roomUserVisits?.verifiedRoomFrames)||0),
+        roomLookupStatus:cleanText(raw.roomUserVisits?.roomLookupStatus,32),
         snapshots:Math.max(0,Number(raw.roomUserVisits?.snapshots)||0),
         candidates:Math.max(0,Number(raw.roomUserVisits?.candidates)||0),
         queued:Math.max(0,Number(raw.roomUserVisits?.queued)||0),
@@ -1397,7 +1427,7 @@ class LiveSession extends EventEmitter {
   }
 
   realtimeUser(user) {
-    return { ...user, screenshotRecorded:Boolean(screenshotWatch.match(this.username,user)), contributionRank: this.viewerRanks.rank(user.userId), coins30d:this.viewerCoins.get(user.userId) };
+    return { ...user, screenshotRecorded:Boolean(screenshotWatch.match(this.username,user)), contributionRank: this.viewerRanks.rank(user.userId), creatorLeague: viewerLeagues.get(user.uniqueId), coins30d:this.viewerCoins.get(user.userId) };
   }
 
   snapshot(message = "") {
@@ -1454,7 +1484,7 @@ class LiveSession extends EventEmitter {
 
   decorateUserEvent(event) {
     const user = this.userStats.get(event.userId);
-    return { ...event, ...(user ? userDisplayState(user) : {}), screenshotRecorded:Boolean(screenshotWatch.match(this.username,user||event)), contributionRank: this.viewerRanks.rank(event.userId), coins30d:this.viewerCoins.get(event.userId) };
+    return { ...event, ...(user ? userDisplayState(user) : {}), screenshotRecorded:Boolean(screenshotWatch.match(this.username,user||event)), contributionRank: this.viewerRanks.rank(event.userId), creatorLeague: viewerLeagues.get(user?.uniqueId || event.uniqueId), coins30d:this.viewerCoins.get(event.userId) };
   }
 
   broadcast(type, payload) {
@@ -2530,6 +2560,20 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/collector/live-room") {
+    if (!EXTERNAL_COLLECTOR_ENABLED || !isAuthorizedWithKey(request, COLLECTOR_INGEST_KEY)) {
+      sendJson(response, 401, { error: "Collector authentication required" });
+      return;
+    }
+    const username = normalizeTikTokUsername(url.searchParams.get("username") || "");
+    if (!isValidUsername(username)) {
+      sendJson(response, 400, { error: "Invalid stream username" });
+      return;
+    }
+    sendJson(response, 200, await lookupCollectorLiveRoom(username.toLowerCase()));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/collector/events") {
     if (!EXTERNAL_COLLECTOR_ENABLED) {
       sendJson(response, 503, { error: "外部コレクターが設定されていません。" });
@@ -2618,7 +2662,7 @@ const server = createServer(async (request, response) => {
       database: {
         ...eventStore.status(),
         visitJudgmentMode: "isolated-batch-v4",
-        roomUserVisitPolicy: "per-live-passive-v1",
+        roomUserVisitPolicy: "verified-live-ranked-stay-v2",
         visitBatchStats: eventStore.visitBatchStats,
         firstVisitClaimPolicy: "bounded-prior-action-retry-v3",
         avatarWorkPolicy: "bounded-2-ttl-v1",
@@ -3069,13 +3113,17 @@ const server = createServer(async (request, response) => {
   if (listenerHistoryMatch && request.method === "GET") {
     if (!requireListenerAdmin(request, response)) return;
     try {
-      const history = await eventStore.listenerHistory(decodeURIComponent(listenerHistoryMatch[1]), {
-        username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
-        kind: url.searchParams.get("kind") === "visits" ? "visits" : "comments",
-        limit: Number(url.searchParams.get("limit") || 200),
-        offset: Number(url.searchParams.get("offset") || 0)
-      });
-      sendJson(response, 200, history);
+      const userId=decodeURIComponent(listenerHistoryMatch[1]);
+      const username=normalizeTikTokUsername(url.searchParams.get("username") || "");
+      const kind=url.searchParams.get("kind")==="visits"?"visits":"comments";
+      const withVisits=kind==="comments"&&url.searchParams.get("includeVisits")==="1";
+      const [history,recentVisits]=await Promise.all([
+        eventStore.listenerHistory(userId,{username,kind,
+          limit:withVisits?20:Number(url.searchParams.get("limit")||200),
+          offset:withVisits?0:Number(url.searchParams.get("offset")||0)}),
+        withVisits?eventStore.recentListenerVisits(userId,username).catch(()=>null):undefined,
+      ]);
+      sendJson(response,200,withVisits?{...history,recentVisits}:history);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }

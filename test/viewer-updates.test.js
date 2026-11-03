@@ -56,7 +56,7 @@ test('the actual viewer boots and renders live comments with incremental updates
   const dom=new JSDOM(html,{url:'https://viewer.test/',runScripts:'outside-only'});
   t.after(()=>dom.window.close());
   dom.window.fetch=async()=>({ok:true,json:async()=>({ok:true,sessions:0,provider:{},collector:{},database:{}})});
-  const files=['viewer-comment-history.js','comment-selection-search.js','viewer-updates.js','screenshot-records-panel.js','app.js'];
+  const files=['listener-history-format.js','viewer-comment-history.js','comment-selection-search.js','viewer-updates.js','screenshot-records-panel.js','app.js'];
   const sources=await Promise.all(files.map(file=>readFile(new URL('../public/'+file,import.meta.url),'utf8')));
   const script=sources.map(source=>source.replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'')).join('\n');
   vm.runInContext(script+'\n globalThis.auditViewer={renderSnapshot,applyRealtimePayload,sessions};',dom.getInternalVMContext());
@@ -65,10 +65,17 @@ test('the actual viewer boots and renders live comments with incremental updates
   renderSnapshot(snapshot);
   renderSnapshot({...snapshot,screenshotAlerts:[{kind:'screenshot',userId:'u',nickname:'Recorded',expiresAt:Date.now()+60000}]});
   assert.match(dom.window.document.querySelector('.screenshot-arrival-alert').textContent,/スクショ記録ID/);
-  applyRealtimePayload('audit','comment',{comment:{id:'c1',userId:'u',nickname:'Listener',text:'<safe text>',at:Date.now(),screenshotRecorded:true},summary:{commentCount:1}});
+  applyRealtimePayload('audit','comment',{comment:{id:'c1',userId:'u',nickname:'Listener',text:'<safe text>',at:Date.now(),screenshotRecorded:true,contributionRank:'S',creatorLeague:'A1'},summary:{commentCount:1}});
   await new Promise(resolve=>setTimeout(resolve,100));
   const comment=dom.window.document.querySelector('article.comment');
   assert.ok(comment);assert.equal(comment.querySelector('.comment-text').textContent,'<safe text>');
   assert.equal(comment.querySelector('safe'),null);
   assert.ok(comment.querySelector('.screenshot-record-badge'));
+  assert.equal(comment.querySelector('.viewer-league').textContent,'リーグ A1');
+  assert.equal(comment.querySelector('.viewer-rank').textContent,'S');
+  applyRealtimePayload('audit','presence',{users:[{userId:'u',nickname:'Listener',contributionRank:'S',creatorLeague:''}]});
+  await new Promise(resolve=>setTimeout(resolve,1050));
+  const updated=dom.window.document.querySelector('article.comment');
+  assert.equal(updated.querySelector('.viewer-league'),null);
+  assert.equal(updated.querySelector('.viewer-rank').textContent,'S');
 });

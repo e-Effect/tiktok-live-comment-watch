@@ -1,4 +1,4 @@
-import { setupCommentHistory } from './viewer-comment-history.js?v=20261022-listeners1';
+import { setupCommentHistory } from './viewer-comment-history.js?v=20261103-history1';
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 import {createSnapshotGuard, patchCommentRows} from './viewer-updates.js?v=20261024-stability1';
 import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records1';
@@ -1238,8 +1238,11 @@ function applyRealtimePayload(sessionId, type, payload) {
 
   if (!session.pendingDisplayUserIds) session.pendingDisplayUserIds = new Set();
   for (const user of payload?.users || []) {
-    if (user.coins30d !== cache.get(String(user.userId || ""))?.coins30d &&
-      (next.gifts || []).some(gift => gift.userId === user.userId)) session.giftCoinsChanged = true;
+    const prior = cache.get(String(user.userId || ""));
+    const leagueChanged = (user.creatorLeague || "") !== (prior?.creatorLeague || "");
+    if ((user.coins30d !== prior?.coins30d || leagueChanged) &&
+      (next.gifts || []).some(gift => gift.userId === user.userId)) session.giftDetailsChanged = true;
+    if (leagueChanged && (next.shares || []).some(share => share.userId === user.userId)) session.shareLeagueChanged = true;
     upsertRealtimeUser(cache, user);
     const userId = String(user?.userId || "");
     if (userId) session.pendingDisplayUserIds.add(userId);
@@ -1292,11 +1295,13 @@ function scheduleRealtimeListRebuild(sessionId) {
     if (!session?.snapshot) return;
     rebuildRealtimeLists(session.snapshot, session.userCache || new Map());
     refreshVisibleCommentRows(session.snapshot.comments || [], session.pendingDisplayUserIds || new Set());
-    if (selectedSessionId === sessionId && (session.giftCoinsChanged || (session.snapshot.gifts || []).some(gift =>
+    if (selectedSessionId === sessionId && (session.giftDetailsChanged || (session.snapshot.gifts || []).some(gift =>
       gift.earlyEntryGiftCandidate === true && session.pendingDisplayUserIds?.has(String(gift.userId || ""))))) {
       renderGiftHistory(session.snapshot.gifts || []);
     }
-    session.giftCoinsChanged = false;
+    if (selectedSessionId === sessionId && session.shareLeagueChanged) renderShareHistory(session.snapshot.shares || []);
+    session.giftDetailsChanged = false;
+    session.shareLeagueChanged = false;
     session.pendingDisplayUserIds?.clear();
     lastRealtimeListRebuildAt.set(sessionId, Date.now());
     if (selectedSessionId === sessionId) {
@@ -1378,6 +1383,7 @@ function refreshEventDisplayState(events, cache) {
       screenshotRecorded:Boolean(user.screenshotRecorded),
       uniqueId: user.uniqueId || event.uniqueId || "",
       contributionRank: user.contributionRank || "",
+      creatorLeague: user.creatorLeague ?? event.creatorLeague,
       coins30d: user.coins30d ?? null,
       avatarUrl: event.avatarUrl || user.avatarUrl || "",
       followedToday: Boolean(user.followedToday),
@@ -1763,7 +1769,7 @@ function renderComments(comments) {
 }
 
 function listenerHistoryAttributes(user) {
-  return `data-comment-history data-user-id="${escapeHtml(String(user?.userId || ""))}" data-user-name="${escapeHtml(String(user.nickname || user.userId || ""))}" data-unique-id="${escapeHtml(String(user.uniqueId || ""))}" role="button" tabindex="0" title="コメント履歴を開く"`;
+  return `data-comment-history data-user-id="${escapeHtml(String(user?.userId || ""))}" data-user-name="${escapeHtml(String(user.nickname || user.userId || ""))}" data-unique-id="${escapeHtml(String(user.uniqueId || ""))}" role="button" tabindex="0" title="来訪・コメント履歴を開く"`;
 }
 
 function commentArticleHtml(comment) {
@@ -2203,10 +2209,12 @@ function renderDecoratedName(user) {
   const name = escapeHtml(user.nickname || user.userId);
   const rank = /^[SABCD]$/.test(user.contributionRank || "") ? user.contributionRank : "";
   const badge = rank ? `<span class="viewer-rank viewer-rank-${rank.toLowerCase()}" title="直近90日のリスナーランク：${rank}" aria-label="ランク${rank}">${rank}</span>` : "";
+  const league = /^(?:A[123]|B[123])$/.test(user.creatorLeague || "") ? user.creatorLeague : "";
+  const leagueBadge = league ? `<span class="viewer-league" title="TikTok LIVE 日本リーグのランキング掲載区分">リーグ ${league}</span>` : "";
   const coins = typeof user.coins30d === "number" && Number.isFinite(user.coins30d)
     ? `<span class="viewer-coins" title="直近30日間にこの配信者へ送った合計コイン（少額ギフト含む・保存済み記録）">30日：${formatNumber(user.coins30d)}コイン</span>` : "";
   const recorded=user.screenshotRecorded ? '<span class="screenshot-record-badge">記録ID</span>' : '';
-  return `${heartMeMark(user)}${todayFollowMark(user)}${name}${recorded}${badge}${coins}`;
+  return `${heartMeMark(user)}${todayFollowMark(user)}${name}${leagueBadge}${recorded}${badge}${coins}`;
 }
 
 function renderEventAvatar(user) {

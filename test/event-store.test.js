@@ -924,3 +924,18 @@ test("preserves cached avatar bytes when a placeholder listener is merged", asyn
   assert.match(queries[1], /avatar_data, avatar_mime/);
   assert.match(queries[1], /avatar_data = COALESCE\(listeners\.avatar_data, EXCLUDED\.avatar_data\)/);
 });
+
+test('viewer gets at most five distinct recent broadcasts with only its history fields',async()=>{
+  const store=new EventStore();
+  const at=Date.parse('2026-11-03T00:00:00Z');
+  store.listenerHistory=async(userId,options)=>{
+    assert.equal(userId,'viewer');
+    assert.deepEqual(options,{username:'host',kind:'visits',limit:5});
+    const lives=Array.from({length:7},(_,i)=>({liveKey:String(i),streamUsername:'host',
+      firstSeenAt:new Date(at+i*1000).toISOString(),observedStayMs:i*1000}));
+    return {items:[{broadcasts:lives},{broadcasts:[{...lives[6],streamUsername:'HOST'}]}]};
+  };
+  const recent=await store.recentListenerVisits('viewer','host');
+  assert.deepEqual(recent.map(row=>row.observedStayMs),[6000,5000,4000,3000,2000]);
+  assert.deepEqual(Object.keys(recent[0]),['enteredAt','firstSeenAt','observedStayMs']);
+});

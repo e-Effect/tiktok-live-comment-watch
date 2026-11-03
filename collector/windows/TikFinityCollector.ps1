@@ -551,6 +551,7 @@ while ($true) {
                 $receiveTask = $socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
                 while (-not $receiveTask.Wait(50)) {
                     $now = [DateTime]::UtcNow
+                    if ($script:roomUserVisitsAvailable) { Flush-IdleRoomUserStay }
                     Invoke-CollectorDeliveryPump -Config $config
                     Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $false
                     if (-not [string]::IsNullOrWhiteSpace($script:lastReceivedEventType) -and ($now - $script:lastStatusWriteAt.ToUniversalTime()).TotalMilliseconds -ge 1000) {
@@ -584,11 +585,15 @@ while ($true) {
             }
             Add-DiagnosticCount -Bucket $script:receivedCounts -Name $eventType
             $script:lastReceivedEventType = $eventType
+            if ($script:roomUserVisitsAvailable -and $eventType -ieq 'liveStatusChange') {
+                Close-RoomUserStay
+                Reset-VerifiedRoom
+            }
             if ($localOnlyEvents -contains $eventType.ToLowerInvariant()) {
                 # Keep full viewer-count snapshots local; do not use disk/network
                 # bandwidth for repeated ranking snapshots. Queue only new IDs.
                 if ($script:roomUserVisitsAvailable) {
-                    foreach ($visitEnvelope in @(Get-RoomUserVisitEnvelopes -Envelope $event -StreamUsername $config.streamUsername)) {
+                    foreach ($visitEnvelope in @(Get-RoomUserVisitEnvelopes -Envelope $event -StreamUsername $config.streamUsername -Config $config)) {
                         $visitRaw = $visitEnvelope | ConvertTo-Json -Depth 8 -Compress
                         [void](Add-PendingEvent -Raw $visitRaw)
                         Confirm-RoomUserVisitQueued -Envelope $visitEnvelope -StreamUsername $config.streamUsername
@@ -599,6 +604,12 @@ while ($true) {
                 $script:lastReceivedEventType = ''
             }
             elseif ($allowedEvents -contains $eventType.ToLowerInvariant()) {
+                if ($script:roomUserVisitsAvailable -and
+                    ($eventType -ieq 'streamend' -or ($eventType -ieq 'control' -and $event.data.action -eq 3) -or
+                     ($eventType -ieq 'room' -and $event.data.status -eq 4))) {
+                    Close-RoomUserStay
+                    Reset-VerifiedRoom
+                }
                 Add-DiagnosticCount -Bucket $script:forwardedCounts -Name $eventType
                 $queuedRaw = Add-PendingEvent -Raw $raw
                 if ($eventType -ieq 'gift') {
@@ -622,6 +633,7 @@ while ($true) {
     }
     finally {
         if ($socket) { $socket.Dispose() }
+        if ($script:roomUserVisitsAvailable) { Close-RoomUserStay; Reset-VerifiedRoom }
         Save-PendingEventsIfDue -Force
     }
     for ($retryTick=0; $retryTick -lt 30; $retryTick++) {

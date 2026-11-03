@@ -6,6 +6,10 @@ test("recognizes common first-visit claims and spelling variations", () => {
   const claims = [
     "初見",
     "初見です",
+    "初見です🙂‍↕️",
+    "こんばんわ〜初見です🥰",
+    "初見ですやりたいです！",
+    "初見です。フォローしてハートミーしました😊",
     "初見でーす！",
     "初見ですよー",
     "しょけんです",
@@ -33,10 +37,15 @@ test("does not react to questions, greetings aimed at others, or admitted jokes"
     "初見のふりをしました",
     "はじめましてじゃないけどよろしく",
     "初見さんいる？",
+    "こんばんわ初見さんいらっしゃい🥰",
+    "初見ではないですが参加したいです",
+    "初見ですけど、どう言うことですか？？",
+    "フォローしてハートミーしました😊",
   ];
   for (const claim of nonClaims) assert.equal(isFirstVisitClaim(claim), false, claim);
 });
 
 test("normalization absorbs punctuation, spaces, emoji, and long sound marks", () => {
   assert.equal(normalizeFirstVisitClaim(" 初見 で〜す 🙋 "), "初見です");
+  assert.equal(normalizeFirstVisitClaim("初見です🙂‍↕️"), "初見です");
 });

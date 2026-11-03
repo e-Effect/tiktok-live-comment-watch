@@ -1,5 +1,7 @@
+import {formatObservedStay} from './listener-history-format.js';
+
 export function historyUrl(userId,username) {
-  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:'20',username})}`;
+  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:'20',includeVisits:'1',username})}`;
 }
 
 export function tiktokProfileUrl(uniqueId) {
@@ -12,6 +14,9 @@ export function setupCommentHistory(list,getContext) {
   const title=document.getElementById('viewerCommentHistoryTitle');
   const status=document.getElementById('viewerCommentHistoryStatus');
   const results=document.getElementById('viewerCommentHistoryItems');
+  const visits=document.getElementById('viewerRecentVisits');
+  const visitStatus=document.getElementById('viewerRecentVisitsStatus');
+  const visitResults=document.getElementById('viewerRecentVisitsItems');
   const keyForm=document.getElementById('viewerCommentHistoryKeyForm');
   const keyInput=document.getElementById('viewerCommentHistoryKey');
   const retry=document.getElementById('viewerCommentHistoryRetry');
@@ -20,6 +25,26 @@ export function setupCommentHistory(list,getContext) {
   const storageKey='tiktok-listener-admin-key';
   let target=null,controller=null,revision=0;
   const cancel=()=>{revision++;controller?.abort();controller=null;};
+  const clearVisits=()=>{visits.hidden=true;visitStatus.textContent='';visitResults.replaceChildren();};
+  function showVisits(items) {
+    visits.hidden=false;
+    visitStatus.textContent=!Array.isArray(items)?'来訪履歴を取得できませんでした。'
+      :items.length?'':'保存済みの来訪記録はありません。';
+    for(const item of Array.isArray(items)?items.slice(0,5):[]){
+      const row=document.createElement('li'),date=document.createElement('span');
+      const at=new Date(item.enteredAt||item.firstSeenAt||NaN);
+      date.textContent=(item.enteredAt?'入室通知 ':'初回検知 ')+(Number.isNaN(at.getTime())?'日時不明':at.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'}));
+      row.append(date);
+      const duration=Number(item.observedStayMs);
+      if(Number.isFinite(duration)&&duration>0){
+        const stay=document.createElement('span');
+        stay.className='viewer-recent-stay';
+        stay.textContent='観測滞在 約'+formatObservedStay(duration);
+        row.append(stay);
+      }
+      visitResults.append(row);
+    }
+  }
   function showProfile(uniqueId) {
     const url=tiktokProfileUrl(uniqueId);
     profile.hidden=!url;
@@ -43,9 +68,9 @@ export function setupCommentHistory(list,getContext) {
   dialog.addEventListener('click',event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}});
   async function load(key) {
     cancel();const ticket=revision;controller=new AbortController();
-    results.replaceChildren();retry.hidden=true;
-    if(!key){keyForm.hidden=false;status.textContent='コメント履歴を見るには台帳の管理キーを入力してください。';keyInput.focus();return;}
-    keyForm.hidden=true;status.textContent='最新20件を読み込んでいます…';
+    results.replaceChildren();clearVisits();retry.hidden=true;
+    if(!key){keyForm.hidden=false;status.textContent='履歴を見るには台帳の管理キーを入力してください。';keyInput.focus();return;}
+    keyForm.hidden=true;status.textContent='履歴を読み込んでいます…';
     loadProfile(key,ticket,controller.signal);
     try {
       const response=await fetch(historyUrl(target.userId,target.username),{headers:{Authorization:`Bearer ${key}`},signal:controller.signal,cache:'no-store'});
@@ -55,6 +80,7 @@ export function setupCommentHistory(list,getContext) {
       const data=await response.json();
       if(ticket!==revision || !dialog.open)return;
       localStorage.setItem(storageKey,key);keyInput.value='';
+      showVisits(data.recentVisits);
       const items=(data.items||[]).slice(0,20);
       status.textContent=items.length?`保存済みの最新${items.length}件です。直前のコメントは保存待ちの場合があります。`:'保存済みのコメントはまだありません。';
       for(const item of items){
@@ -72,9 +98,9 @@ export function setupCommentHistory(list,getContext) {
     if(!row?.dataset.userId || !context?.username)return;
     cancel();target={userId:row.dataset.userId,username:context.username,uniqueId:row.dataset.uniqueId||''};
     showProfile(context.preview?'':target.uniqueId);
-    title.textContent=`${row.dataset.userName||target.userId}さんのコメント履歴`;
+    title.textContent=`${row.dataset.userName||target.userId}さんの履歴`;
     if(!dialog.open)dialog.showModal();
-    if(context.preview){results.replaceChildren();keyForm.hidden=true;retry.hidden=true;status.textContent='テスト表示では保存された履歴はありません。';return;}
+    if(context.preview){results.replaceChildren();clearVisits();keyForm.hidden=true;retry.hidden=true;status.textContent='テスト表示では保存された履歴はありません。';return;}
     load(localStorage.getItem(storageKey)||'');
   };
   for(const root of (Array.isArray(list)?list:[list]).filter(Boolean)) {

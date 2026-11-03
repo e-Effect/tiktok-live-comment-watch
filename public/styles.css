@@ -633,6 +633,19 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .viewer-rank-b { color: #3e317d; background: #ece5ff; }
 .viewer-rank-c { color: #164a70; background: #dcefff; }
 .viewer-rank-d { color: #404954; background: #edf0f4; }
+.viewer-league {
+  display: inline-block;
+  margin-left: .4em;
+  padding: .12em .35em;
+  border-radius: .25em;
+  color: #155d50;
+  background: #e4f4ed;
+  font-size: .8em;
+  font-weight: 750;
+  line-height: 1.25;
+  white-space: nowrap;
+  vertical-align: middle;
+}
 .viewer-coins { display:inline-block; margin-left:.55em; padding:.1em .35em; border-radius:.3em; color:#59420c; background:#fff2c9; font-size:.8em; font-weight:700; white-space:nowrap; vertical-align:middle; }
 .viewer-history-dialog { width:min(620px,calc(100vw - 32px)); max-height:80vh; overflow:auto; padding:20px; border:1px solid #cbd5df; border-radius:12px; background:#fff; color:#17212b; }
 .viewer-history-dialog::backdrop { background:rgba(0,0,0,.4); }
@@ -648,6 +661,13 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .viewer-history-profile a { color:#006d63; min-height:44px; display:inline-flex; align-items:center; font-weight:700; }
 .viewer-history-profile a[hidden] { display:none; }
 .viewer-history-profile span { color:#526172; font-size:.85rem; }
+.viewer-recent-visits { border-top:1px solid #dce3e6; margin:4px 0 16px; }
+.viewer-recent-visits h3 { font-size:.95rem; margin:12px 0 4px; }
+.viewer-recent-visits p { color:#526172; margin:6px 0; font-size:.85rem; }
+.viewer-recent-visits p:empty { display:none; }
+.viewer-recent-visits ul { list-style:none; padding:0; margin:0; }
+.viewer-recent-visits li { display:flex; flex-wrap:wrap; gap:4px 12px; padding:7px 0; font-size:.85rem; }
+.viewer-recent-stay { color:#006d63; font-weight:700; }
 .comment-text { -webkit-user-select:text; user-select:text; cursor:text; }
 .comment-search-toolbar { position:fixed; z-index:10000; display:flex; align-items:stretch; gap:0; border:1px solid #cbd5df; border-radius:6px; background:#fff; color:#17212b; box-shadow:0 2px 8px #0002; max-width:calc(100vw - 16px); }
 .comment-search-toolbar[hidden] { display:none; }
