@@ -95,7 +95,7 @@ function Get-CollectorDiagnostics {
         receivedByType = $script:receivedCounts
         forwardedByType = $script:forwardedCounts
         unknownByType = $script:unknownCounts
-        roomUserVisits = if ($script:roomUserVisitsAvailable) { [void](Get-RoomUserVisitsEnabled); $script:roomUserDiagnostics } else { @{enabled=$false} }
+        roomUserVisits = if ($script:roomUserVisitsAvailable) { [void](Get-RoomUserVisitsEnabled); $script:roomUserDiagnostics } else { @{enabled=$false; stayEnabled=$false; configStatus='module-missing'; stopReason='module-missing'} }
         serverAccepted = $script:deliveryAccepted
         serverDropped = $script:deliveryDropped
         pendingEvents = $script:pending.Count
@@ -287,6 +287,7 @@ function Complete-CollectorDelivery {
 
 function Invoke-CollectorDeliveryPump {
     param($Config, [bool]$Heartbeat = $false)
+    if ($script:roomUserVisitsAvailable) { Flush-IdleRoomUserStay }
     if ($script:collectorStreamAvailable -and (Invoke-CollectorStreamPump -Config $Config -Heartbeat $Heartbeat)) { Save-PendingEventsIfDue; return }
     [void](Complete-CollectorDelivery)
     Save-PendingEventsIfDue
@@ -551,9 +552,11 @@ while ($true) {
                 $receiveTask = $socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
                 while (-not $receiveTask.Wait(50)) {
                     $now = [DateTime]::UtcNow
-                    if ($script:roomUserVisitsAvailable) { Flush-IdleRoomUserStay }
                     Invoke-CollectorDeliveryPump -Config $config
                     Send-LocalReceiptPayload -Config $config -Events @() -Heartbeat $false
+                    if (($now - $script:lastStatusWriteAt.ToUniversalTime()).TotalSeconds -ge 5) {
+                        Write-CollectorStatus -State 'connected' -Message 'Connected to TikFinity; monitoring events.' -PendingCount $pending.Count
+                    }
                     if (-not [string]::IsNullOrWhiteSpace($script:lastReceivedEventType) -and ($now - $script:lastStatusWriteAt.ToUniversalTime()).TotalMilliseconds -ge 1000) {
                         Write-CollectorStatus -State 'receiving' -Message "Received: $($script:lastReceivedEventType)" -PendingCount $pending.Count
                         $script:lastReceivedEventType = ''
@@ -602,6 +605,7 @@ while ($true) {
                     Invoke-CollectorDeliveryPump -Config $config
                 }
                 $script:lastReceivedEventType = ''
+                Write-CollectorStatus -State 'receiving' -Message "Received: $eventType" -PendingCount $pending.Count
             }
             elseif ($allowedEvents -contains $eventType.ToLowerInvariant()) {
                 if ($script:roomUserVisitsAvailable -and

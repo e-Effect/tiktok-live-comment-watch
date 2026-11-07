@@ -60,6 +60,27 @@ test("preview events stay out of the recorded session and normal routing resumes
   const deduplicatedSnapshot = await getJson(`/api/session/${normal.id}/snapshot`);
   assert.equal(deduplicatedSnapshot.commentCount, 1);
   assert.equal(deduplicatedSnapshot.ingestionDiagnostics.duplicateByType.chat, 1);
+
+  // Empty heartbeats must carry stop/repair diagnostics even without new events.
+  const now=Date.now();
+  for (const configStatus of ['invalid-json','enabled']) {
+    const response=await fetch(baseUrl+'/api/collector/events',{
+      method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${collectorKey}`},
+      body:JSON.stringify({streamUsername:'my_account',events:[],diagnostics:{updatedAt:now,roomUserVisits:{
+        configStatus,enabled:configStatus==='enabled',stayEnabled:configStatus==='enabled',
+        stopReason:configStatus==='enabled'?'':'config-invalid-json',configCheckedAt:now,configChangedAt:now,
+        lastReceivedAt:now-1000,error:'private exception',configContents:'private key',
+      }}}),
+    });
+    assert.equal(response.status,202);
+    const health=await getJson('/api/health');
+    const diagnostic=health.collector.diagnostics.collector.roomUserVisits;
+    assert.equal(diagnostic.configStatus,configStatus);
+    assert.equal(diagnostic.stayEnabled,configStatus==='enabled');
+    assert.equal(diagnostic.configCheckedAt,now);
+    assert.equal(diagnostic.lastReceivedAt,now-1000);
+    assert.doesNotMatch(JSON.stringify(diagnostic),/private/);
+  }
 });
 
 async function waitForServer(child) {

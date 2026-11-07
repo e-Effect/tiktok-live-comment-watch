@@ -5,7 +5,14 @@ $script:roomUserStayScope = ''
 $script:roomUserStayRoom = ''
 $script:roomUserStayTracks = @{}
 $script:roomUserQueued = @{}
+$script:roomUserControlPath = Join-Path $PSScriptRoot 'collector-roomuser.json'
 $script:roomUserDiagnostics = [ordered]@{ enabled=$false; stayEnabled=$false; stayQueued=0; stayWriteFailures=0; snapshots=0; rankingFrames=0; verifiedRoomFrames=0; roomLookupStatus='idle'; candidates=0; queued=0; duplicate=0; missingRoomId=0; invalidIdentity=0; lastRoomId=''; lastSnapshotAt=$null }
+$script:roomUserDiagnostics.configStatus = 'unchecked'
+$script:roomUserDiagnostics.configInvalidField = ''
+$script:roomUserDiagnostics.configCheckedAt = $null
+$script:roomUserDiagnostics.configChangedAt = $null
+$script:roomUserDiagnostics.stopReason = 'config-unchecked'
+$script:roomUserDiagnostics.lastReceivedAt = $null
 $script:roomLookupTask = $null
 $script:roomLookupRequest = $null
 $script:roomLookupGeneration = 0
@@ -67,13 +74,49 @@ function Update-VerifiedRoom {
 function Get-RoomUserVisitsEnabled {
     if (([DateTime]::UtcNow - $script:roomUserCheckedAt).TotalSeconds -ge 5) {
         $script:roomUserCheckedAt = [DateTime]::UtcNow
-        $script:roomUserEnabled = $false
-        $script:roomUserStayEnabled = $false
+        $enabled = $false
+        $stayEnabled = $false
+        $status = 'read-error'
+        $invalidField = ''
+        $rawControl = $null
         try {
-            $control = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'collector-roomuser.json')) | ConvertFrom-Json
-            $script:roomUserEnabled = $control.enabled -eq $true
-            $script:roomUserStayEnabled = $script:roomUserEnabled -and $control.trackStay -eq $true
-        } catch { }
+            $rawControl = [IO.File]::ReadAllText($script:roomUserControlPath)
+        } catch {
+            $cause = $_.Exception.GetBaseException()
+            if ($cause -is [IO.FileNotFoundException] -or $cause -is [IO.DirectoryNotFoundException]) { $status = 'missing' }
+        }
+        if ($null -ne $rawControl) {
+            try {
+                if ([string]::IsNullOrWhiteSpace($rawControl)) { throw 'Empty JSON' }
+                $control = ConvertFrom-Json -InputObject $rawControl -ErrorAction Stop
+                $status = 'invalid-values'
+                if (-not $rawControl.TrimStart().StartsWith('{') -or $control -isnot [pscustomobject]) { $invalidField = 'root' }
+                elseif ($control.enabled -isnot [bool]) { $invalidField = 'enabled' }
+                elseif ($control.trackStay -isnot [bool]) { $invalidField = 'trackStay' }
+                else {
+                    $enabled = $control.enabled
+                    $stayEnabled = $enabled -and $control.trackStay
+                    $status = if ($enabled) { 'enabled' } else { 'disabled' }
+                }
+            } catch { $status = 'invalid-json'; $invalidField = '' }
+        }
+        # End at the last actual observation, never at the config-check time.
+        # This also runs when diagnostics or an idle pump discovers the change.
+        if (-not $stayEnabled) { Close-RoomUserStay }
+        if ($script:roomUserEnabled -and -not $enabled) { Reset-VerifiedRoom }
+        $checkedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $reason = if ($status -eq 'enabled') { if ($stayEnabled) { '' } else { 'track-stay-disabled' } }
+                  elseif ($status -eq 'disabled') { 'disabled' } else { 'config-' + $status }
+        if ($status -ne $script:roomUserDiagnostics.configStatus -or $reason -ne $script:roomUserDiagnostics.stopReason -or
+            $invalidField -ne $script:roomUserDiagnostics.configInvalidField) {
+            $script:roomUserDiagnostics.configChangedAt = $checkedAt
+        }
+        $script:roomUserEnabled = $enabled
+        $script:roomUserStayEnabled = $stayEnabled
+        $script:roomUserDiagnostics.configStatus = $status
+        $script:roomUserDiagnostics.configInvalidField = $invalidField
+        $script:roomUserDiagnostics.configCheckedAt = $checkedAt
+        $script:roomUserDiagnostics.stopReason = $reason
     }
     $script:roomUserDiagnostics.enabled = $script:roomUserEnabled
     $script:roomUserDiagnostics.stayEnabled = $script:roomUserStayEnabled
@@ -90,6 +133,7 @@ function Get-RoomUserText {
 
 function Get-RoomUserVisitEnvelopes {
     param($Envelope,[string]$StreamUsername,$Config)
+    $script:roomUserDiagnostics.lastReceivedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     if (-not (Get-RoomUserVisitsEnabled)) { Close-RoomUserStay; return }
     $data = $Envelope.data
     $script:roomUserDiagnostics.snapshots++
@@ -153,6 +197,7 @@ function Get-RoomUserVisitEnvelopes {
 }
 
 function Flush-IdleRoomUserStay {
+    [void](Get-RoomUserVisitsEnabled)
     if ($script:roomUserStayTracks.Count -and $script:roomUserDiagnostics.lastSnapshotAt -and
         [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $script:roomUserDiagnostics.lastSnapshotAt -gt 45000) {
         Close-RoomUserStay

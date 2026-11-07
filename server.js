@@ -1250,6 +1250,16 @@ class LiveSession extends EventEmitter {
       roomUserVisits: {
         enabled:raw.roomUserVisits?.enabled===true,
         stayEnabled:raw.roomUserVisits?.stayEnabled===true,
+        // Only publish fixed codes, never local paths or config/error contents.
+        configStatus:['unchecked','missing','read-error','invalid-json','invalid-values','disabled','enabled','module-missing'].includes(raw.roomUserVisits?.configStatus)
+          ? raw.roomUserVisits.configStatus : 'unknown',
+        configInvalidField:['root','enabled','trackStay'].includes(raw.roomUserVisits?.configInvalidField)
+          ? raw.roomUserVisits.configInvalidField : '',
+        stopReason:['','config-unchecked','config-missing','config-read-error','config-invalid-json','config-invalid-values','disabled','track-stay-disabled','module-missing'].includes(raw.roomUserVisits?.stopReason)
+          ? raw.roomUserVisits.stopReason : 'unknown',
+        configCheckedAt:pipelineTimestamp(raw.roomUserVisits?.configCheckedAt),
+        configChangedAt:pipelineTimestamp(raw.roomUserVisits?.configChangedAt),
+        lastReceivedAt:pipelineTimestamp(raw.roomUserVisits?.lastReceivedAt),
         stayQueued:Math.max(0,Number(raw.roomUserVisits?.stayQueued)||0),
         stayWriteFailures:Math.max(0,Number(raw.roomUserVisits?.stayWriteFailures)||0),
         rankingFrames:Math.max(0,Number(raw.roomUserVisits?.rankingFrames)||0),
