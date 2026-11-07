@@ -2891,7 +2891,8 @@ const server = createServer(async (request, response) => {
         items: await eventStore.recentListenerEvents({
           username: normalizeTikTokUsername(url.searchParams.get("username") || ""),
           since: Number(url.searchParams.get("since") || 0),
-          limit: Number(url.searchParams.get("limit") || 100)
+          limit: Number(url.searchParams.get("limit") || 100),
+          eventType: url.searchParams.get("eventType") === "gift" ? "gift" : ""
         })
       });
     } catch (error) {
