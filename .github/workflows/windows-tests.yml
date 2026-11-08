@@ -1,0 +1,52 @@
+name: Windows tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-tests:
+    name: Node.js 24 / Windows 2025
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell
+    env:
+      # Integration tests use loopback servers, fixture keys and an empty DB URL.
+      # No repository secrets or production service settings are supplied.
+      LIVE_SOURCE: collector
+      DATABASE_URL: ''
+      TIKTOOLS_API_KEY: ''
+      VIEWER_LEAGUE_TIKTOOLS_API_KEY: ''
+      LIVECUE_ENDPOINT: ''
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Show Windows PowerShell and Node.js environment
+        run: |
+          (Get-Command powershell.exe -ErrorAction Stop).Source
+          $PSVersionTable | Format-Table -AutoSize
+          node --version
+          npm --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run all tests and require both Windows config tests
+        # Both reporters consume the SAME npm test run. The custom reporter
+        # fails on a missing, skipped, TODO, duplicated or failed required test.
+        # NODE_OPTIONS places the flags before the existing test-file glob.
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter=./.github/ci/required-windows-tests.mjs --test-reporter-destination=stdout --test-reporter-destination=stdout
+        run: npm test
