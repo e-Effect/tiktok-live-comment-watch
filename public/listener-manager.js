@@ -1,7 +1,7 @@
 import {setupRankingStatus} from './ranking-status.js?v=20261023-rank1';
 import {setupListenerCount} from './listener-count-status.js?v=20261023-search1';
 import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records2';
-import {formatObservedStay} from './listener-history-format.js';
+import {formatObservedWatchTime} from './listener-history-format.js?v=20261110-watch1';
 const storageKey = "tiktok-listener-admin-key";
 const state = {
   key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {},
@@ -606,9 +606,9 @@ function visitBroadcastRows(visit) {
   return visit.broadcasts.map(live=>{
     const source=live.sources?.includes('roomUser')?'・roomUser補完':'';
     const label=live.enteredAt?'入室通知':'初回検知';
-    const stay=Number(live.observedStayMs)>0
-      ? '・観測滞在 約'+formatObservedStay(live.observedStayMs) : '';
-    return `<p><small>@${escapeHtml(live.streamUsername||"")}・配信ID ${escapeHtml(live.roomId||live.liveKey||"")}・${label} ${escapeHtml(formatHistoryDate(live.enteredAt||live.firstSeenAt))}${source}${stay}</small></p>`;
+    const duration=Number(live.observedStayMs),measured=Number.isFinite(duration)&&duration>0;
+    const stay=formatObservedWatchTime(live.observedStayMs);
+    return `<p><small>@${escapeHtml(live.streamUsername||"")}・配信ID ${escapeHtml(live.roomId||live.liveKey||"")}・${label} ${escapeHtml(formatHistoryDate(live.enteredAt||live.firstSeenAt))}${source}</small><strong class="visit-watch-time${measured?'':' is-unmeasured'}">${escapeHtml(stay)}</strong></p>`;
   }).join('');
 }
 
