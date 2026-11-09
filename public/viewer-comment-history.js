@@ -1,4 +1,4 @@
-import {formatObservedStay} from './listener-history-format.js';
+import {formatObservedWatchTime} from './listener-history-format.js?v=20261110-watch1';
 
 export function historyUrl(userId,username) {
   return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:'20',includeVisits:'1',username})}`;
@@ -36,12 +36,11 @@ export function setupCommentHistory(list,getContext) {
       date.textContent=(item.enteredAt?'入室通知 ':'初回検知 ')+(Number.isNaN(at.getTime())?'日時不明':at.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'}));
       row.append(date);
       const duration=Number(item.observedStayMs);
-      if(Number.isFinite(duration)&&duration>0){
-        const stay=document.createElement('span');
-        stay.className='viewer-recent-stay';
-        stay.textContent='観測滞在 約'+formatObservedStay(duration);
-        row.append(stay);
-      }
+      const measured=Number.isFinite(duration)&&duration>0;
+      const stay=document.createElement('span');
+      stay.className='viewer-recent-stay'+(measured?'':' is-unmeasured');
+      stay.textContent=formatObservedWatchTime(item.observedStayMs);
+      row.append(stay);
       visitResults.append(row);
     }
   }

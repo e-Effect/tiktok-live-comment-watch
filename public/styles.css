@@ -668,6 +668,7 @@ h2 { min-width: 0; margin: 2px 0 9px; overflow: hidden; text-overflow: ellipsis;
 .viewer-recent-visits ul { list-style:none; padding:0; margin:0; }
 .viewer-recent-visits li { display:flex; flex-wrap:wrap; gap:4px 12px; padding:7px 0; font-size:.85rem; }
 .viewer-recent-stay { color:#006d63; font-weight:700; }
+.viewer-recent-stay.is-unmeasured { color:#63706c; font-weight:400; }
 .comment-text { -webkit-user-select:text; user-select:text; cursor:text; }
 .comment-search-toolbar { position:fixed; z-index:10000; display:flex; align-items:stretch; gap:0; border:1px solid #cbd5df; border-radius:6px; background:#fff; color:#17212b; box-shadow:0 2px 8px #0002; max-width:calc(100vw - 16px); }
 .comment-search-toolbar[hidden] { display:none; }

@@ -43,3 +43,5 @@
 .screenshot-records-list label{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .screenshot-records-list input{width:18px;height:18px;accent-color:var(--green);padding:0}
 @media(max-width:600px){.screenshot-records-controls{grid-template-columns:1fr}.screenshot-records-list li{align-items:flex-start;flex-wrap:wrap}}
+.visit-watch-time { display:block; margin-top:4px; color:var(--cyan); font-size:14px; font-weight:650; }
+.visit-watch-time.is-unmeasured { color:var(--muted); font-weight:400; }

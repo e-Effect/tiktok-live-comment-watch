@@ -27,9 +27,9 @@ test('no background fetch, click loads authenticated history safely, capped at t
  const visits=nodes.get('viewerRecentVisitsItems').children;
  assert.equal(visits.length,5);
  assert.match(visits[0].children[0].textContent,/入室通知.*19:00:00/);
- assert.equal(visits[0].children[1].textContent,'観測滞在 約2分5秒');
+ assert.equal(visits[0].children[1].textContent,'推定視聴 約2分5秒');
  assert.match(visits[1].children[0].textContent,/初回検知/);
- assert.equal(visits[1].children.length,1);
+ assert.equal(visits[1].children[1].textContent,'視聴時間 未計測');
  nodes.get('viewerCommentHistoryClose').handlers.click();assert.equal(nodes.get('viewerCommentHistory').open,false);
  } finally {Object.assign(globalThis,previous);}
 });
