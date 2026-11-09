@@ -50,3 +50,20 @@ jobs:
         env:
           NODE_OPTIONS: --test-reporter=spec --test-reporter=./.github/ci/required-windows-tests.mjs --test-reporter-destination=stdout --test-reporter-destination=stdout
         run: npm test
+
+  release-gate:
+    name: Release gate
+    needs: [windows-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      WINDOWS_RESULT: ${{ needs.windows-tests.result }}
+    steps:
+      - name: Require successful Windows tests
+        shell: bash
+        run: |
+          if [ "$WINDOWS_RESULT" != "success" ]; then
+            echo "::error::Windows tests must succeed."
+            exit 1
+          fi
