@@ -38,7 +38,10 @@ test('collector batches requests and respects 429 Retry-After without losing que
     $start=$source.IndexOf('$deliveryHistory = @()');$end=$source.IndexOf('$lastStatusWriteAt =')
     Invoke-Expression $source.Substring($start,$end-$start)
     if($deliveryHistory.Count -ne 2 -or $deliveryHistory[-1].httpStatus -ne 429){throw 'Restart nested the failure history'}
-    if(($deliveryRetryAt-[DateTime]::UtcNow).TotalSeconds -lt 119){throw 'Restart discarded the existing cooldown'}
+    # Compare the restored deadline itself, not time left after PowerShell startup
+    # and filesystem work. A slow CI runner must not shorten the expected window.
+    $expectedRetryAt=[DateTimeOffset]::FromUnixTimeMilliseconds($now).UtcDateTime.AddSeconds(120)
+    if($deliveryRetryAt -ne $expectedRetryAt){throw ('Restart discarded the existing cooldown: expected '+$expectedRetryAt.ToString('o')+' actual '+$deliveryRetryAt.ToString('o'))}
   }finally{[IO.File]::Delete($fixture)}
   Write-Output 'PASS'
   `;
