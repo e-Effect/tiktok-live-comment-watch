@@ -1,7 +1,9 @@
 import {formatObservedWatchTime} from './listener-history-format.js?v=20261110-watch1';
 
+const commentHistoryLimit=30;
+
 export function historyUrl(userId,username) {
-  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:'20',includeVisits:'1',username})}`;
+  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:String(commentHistoryLimit),includeVisits:'1',username})}`;
 }
 
 export function tiktokProfileUrl(uniqueId) {
@@ -80,7 +82,7 @@ export function setupCommentHistory(list,getContext) {
       if(ticket!==revision || !dialog.open)return;
       localStorage.setItem(storageKey,key);keyInput.value='';
       showVisits(data.recentVisits);
-      const items=(data.items||[]).slice(0,20);
+      const items=(data.items||[]).slice(0,commentHistoryLimit);
       status.textContent=items.length?`保存済みの最新${items.length}件です。直前のコメントは保存待ちの場合があります。`:'保存済みのコメントはまだありません。';
       for(const item of items){
         const row=document.createElement('li'),date=document.createElement('time'),text=document.createElement('p');
