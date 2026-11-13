@@ -1,4 +1,4 @@
-import { setupCommentHistory } from './viewer-comment-history.js?v=20261110-watch1';
+import { setupCommentHistory } from './viewer-comment-history.js?v=20261114-history30';
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 import {createSnapshotGuard, patchCommentRows} from './viewer-updates.js?v=20261024-stability1';
 import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records1';

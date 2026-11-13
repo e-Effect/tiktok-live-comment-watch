@@ -1,27 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {historyUrl,setupCommentHistory,tiktokProfileUrl} from '../public/viewer-comment-history.js';
-test('history URL requests only twenty comments scoped to streamer',()=>{
+test('history URL requests thirty comments scoped to streamer',()=>{
  const u=new URL(historyUrl('id/one','host'),'https://example.com');
- assert.equal(u.pathname,'/api/listeners/id%2Fone/history');assert.equal(u.searchParams.get('limit'),'20');assert.equal(u.searchParams.get('username'),'host');
+ assert.equal(u.pathname,'/api/listeners/id%2Fone/history');assert.equal(u.searchParams.get('limit'),'30');assert.equal(u.searchParams.get('username'),'host');
  assert.equal(u.searchParams.get('includeVisits'),'1');
 });
-test('no background fetch, click loads authenticated history safely, capped at twenty',async()=>{
+test('no background fetch, click loads authenticated history safely, capped at thirty',async()=>{
  const previous={document:globalThis.document,window:globalThis.window,localStorage:globalThis.localStorage,fetch:globalThis.fetch};
  function node(){return {handlers:{},children:[],value:'',open:false,dataset:{},removeAttribute(k){delete this[k];},addEventListener(k,fn){this.handlers[k]=fn;},replaceChildren(){this.children=[];},append(...v){this.children.push(...v);},showModal(){this.open=true;},close(){this.open=false;this.handlers.close?.();},focus(){}};}
  const nodes=new Map(),list=node();let calls=0;
  try {
  globalThis.document={getElementById(id){if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);},createElement:node};
  globalThis.window={getSelection:()=>({toString:()=>''})};globalThis.localStorage={getItem:()=> 'test-key',setItem(){}};
- globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer test-key');assert.match(url,/limit=20/);return {ok:true,json:async()=>({
-  items:Array.from({length:22},()=>({at:'2026-09-21T00:00:00Z',text:'<img onerror=bad>'})),
+ globalThis.fetch=async(url,options)=>{calls++;assert.equal(options.headers.Authorization,'Bearer test-key');assert.match(url,/limit=30/);return {ok:true,json:async()=>({
+  items:Array.from({length:32},(_,index)=>({at:'2026-09-21T00:00:00Z',text:index===0?'<img onerror=bad>':`コメント${index+1}`})),
   recentVisits:Array.from({length:6},(_,i)=>i===0?{enteredAt:'2026-11-03T10:00:00Z',observedStayMs:125000}:{firstSeenAt:'2026-11-02T10:00:00Z',observedStayMs:null})
  })};};
  setupCommentHistory(list,()=>({username:'host'}));assert.equal(calls,0);
  list.handlers.click({target:{closest:selector=>selector.startsWith('[data-')?{dataset:{userId:'user',userName:'名前',uniqueId:'test.viewer'}}:null}});
  await new Promise(r=>setImmediate(r));
- assert.equal(calls,1);assert.equal(nodes.get('viewerCommentHistoryItems').children.length,20);
+ assert.equal(calls,1);assert.equal(nodes.get('viewerCommentHistoryItems').children.length,30);
  assert.equal(nodes.get('viewerCommentHistoryItems').children[0].children[1].textContent,'<img onerror=bad>');
+ assert.equal(nodes.get('viewerCommentHistoryItems').children[29].children[1].textContent,'コメント30');
+ assert.match(nodes.get('viewerCommentHistoryStatus').textContent,/最新30件/);
  assert.match(nodes.get('viewerCommentHistoryTitle').textContent,/名前/);
  assert.equal(nodes.get('viewerCommentHistoryProfile').href,'https://www.tiktok.com/@test.viewer');
  const visits=nodes.get('viewerRecentVisitsItems').children;

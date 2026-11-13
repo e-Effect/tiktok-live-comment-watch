@@ -3130,7 +3130,7 @@ const server = createServer(async (request, response) => {
       const withVisits=kind==="comments"&&url.searchParams.get("includeVisits")==="1";
       const [history,recentVisits]=await Promise.all([
         eventStore.listenerHistory(userId,{username,kind,
-          limit:withVisits?20:Number(url.searchParams.get("limit")||200),
+          limit:withVisits?30:Number(url.searchParams.get("limit")||200),
           offset:withVisits?0:Number(url.searchParams.get("offset")||0)}),
         withVisits?eventStore.recentListenerVisits(userId,username).catch(()=>null):undefined,
       ]);
