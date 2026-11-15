@@ -30,6 +30,26 @@ test('count failure is not zero matches and is not retried on every poll',async 
   assert.equal(calls,1);
 });
 
+test('counts avoid metric aggregation unless a totals-based condition requires it',async () => {
+  for (const options of [{},{blocked:'blocked',attention:'yes'},{username:'host'},
+    {username:'hOsT',search:'alpha_beta',welcome:'yes'}]) {
+    const store=new EventStore();store.ready=true;let query;
+    store.pool={async query(sql){query=sql;return {rows:[{total:'3'}]};}};
+    store.listenerPageCount(options);await store.activeListenerPageCount;
+    assert.doesNotMatch(query,/SUM\(|GROUP BY/);
+    assert.match(query,options.username?/COUNT\(DISTINCT s\.user_id\)/:/COUNT\(\*\)/);
+    assert.equal(store.listenerPageCount(options).total,3);
+  }
+  for(const options of [{giftExperience:'no'},{username:'host',commentExperience:'yes'},
+    {classification:'non_lurker'}]) {
+    const store=new EventStore();store.ready=true;let query;
+    store.pool={async query(sql){query=sql;return {rows:[{total:'2'}]};}};
+    store.listenerPageCount(options);await store.activeListenerPageCount;
+    assert.match(query,/SUM\(/);
+    assert.equal(store.listenerPageCount(options).total,2);
+  }
+});
+
 test('count polling updates only counts and cancels stale filter results',async () => {
   const requests=[], results=[], scheduled=[];
   const api=(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}));

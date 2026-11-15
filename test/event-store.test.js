@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventStore, rangeStart } from "../lib/event-store.js";
 
+test("health identifies literal NFKC ledger search without querying the database", () => {
+  const store = new EventStore();
+  store.pool = {query() {assert.fail('diagnostics must not query the database');}};
+  assert.equal(store.status().listenerSearchPolicy, 'literal-nfkc-stable-membership-v2');
+});
+
 test("gift and comment experience combine before pagination", async () => {
   for (const gift of ['all','yes','no']) for (const comment of ['all','yes','no']) {
     const store=new EventStore();store.ready=true;let sql;

@@ -7,7 +7,9 @@ const state = {
   key: normalizeAdminKey(localStorage.getItem(storageKey)), items: [], summary: {},
   selectedUserId: "", avatarObjectUrls: new Map(),
   detailData: null,
+  detailController: null,
   searchController: null,
+  searchRevision: 0,
   listenerPage: 0, listenerPageSize: 100, listenerTotal: 0, listenerHasMore:false,
   lastListenerSearch: null, pendingListenerSearch: null, rankingRetryTimer: null
 };
@@ -86,6 +88,7 @@ async function runCommentTextSearch(more) {
 }
 
 function markSearchPending() {
+  state.searchRevision += 1;
   listenerCount.cancel();
   state.searchController?.abort();
   clearTimeout(state.rankingRetryTimer);
@@ -145,6 +148,9 @@ function normalizeAdminKey(value) {
 }
 
 function logout() {
+  state.searchRevision += 1;
+  state.searchController?.abort();
+  closeDetail();
   screenshotPanel.cancel();
   listenerCount.cancel();
   rankingStatus.cancel();
@@ -245,6 +251,7 @@ async function refreshListeners(options = {}) {
   listenerCount.cancel();
   state.searchController?.abort();
   const controller = new AbortController();
+  const revision = ++state.searchRevision;
   state.searchController = controller;
   try {
     const search = currentListenerSearch();
@@ -268,7 +275,9 @@ async function refreshListeners(options = {}) {
     const username = cleanUsername(); if (username) query.set("username",username);
     const response = await api(`/api/listeners?${query}`, {signal:controller.signal});
     if (!response.ok) throw new Error("一覧を取得できません");
-    const data = await response.json(); state.items = data.items || [];
+    const data = await response.json();
+    if (controller.signal.aborted || revision !== state.searchRevision || !state.key) return;
+    state.items = data.items || [];
     rankingStatus.refresh();
     el.searchHelp.textContent = state.items.length ? "検索結果を表示しています。行を選ぶと詳細が開きます。" : "検索が完了しました。条件に一致するリスナーはいません。";
     if (el.connectionStatus.textContent === "一覧を取得できません") {
@@ -300,6 +309,7 @@ async function refreshListeners(options = {}) {
       const rankLabel = data.rankingGeneratedAt ? ` ・ランク集計：${formatDate(data.rankingGeneratedAt)}` : " ・ランク未計算";
       el.resultCount.textContent += " ・総人数を確認中";
       listenerCount.start(query.toString(), count => {
+        if (revision !== state.searchRevision || !state.key) return;
         if (count.error) {
           el.resultCount.textContent = `${number.format(start)}～${number.format(Math.max(0,end))}人を表示 ・総人数は取得できませんでした${rankLabel}`;
           return;
@@ -310,10 +320,10 @@ async function refreshListeners(options = {}) {
     }
     clearTimeout(state.rankingRetryTimer);
     state.rankingRetryTimer = data.rankingPending ? setTimeout(() => {
-      if (state.key && !document.hidden && currentListenerSearch() === state.lastListenerSearch) refreshListeners();
+      if (revision === state.searchRevision && state.key && !document.hidden && currentListenerSearch() === state.lastListenerSearch) refreshListeners();
     }, 10000) : null;
   } catch (error) {
-    if (error?.name !== "AbortError") {
+    if (!controller.signal.aborted && revision === state.searchRevision && state.key && error?.name !== "AbortError") {
       el.resultCount.textContent = "検索を完了できませんでした";
       el.searchHelp.textContent = "検索に失敗しました。「該当者なし」ではありません。もう一度「検索」を押してください。";
       showConnectionError(error);
@@ -515,23 +525,35 @@ async function setInlineBlocked(input) {
 
 
 async function openDetail(userId) {
+  state.detailController?.abort();
+  const controller = new AbortController();
+  state.detailController = controller;
   state.selectedUserId = userId;
+  state.detailData = null;
   el.detailBackdrop.hidden = false; el.detailPanel.classList.add("open"); el.detailPanel.setAttribute("aria-hidden","false");
   el.detailContent.innerHTML = `<p class="empty">読み込み中…</p>`;
   try {
     const [response, commentsResponse, visitsResponse] = await Promise.all([
-      api(`/api/listeners/${encodeURIComponent(userId)}${params()}`),
-      api(listenerHistoryUrl(userId,"comments",0)),
-      api(listenerHistoryUrl(userId,"visits",0))
+      api(`/api/listeners/${encodeURIComponent(userId)}${params()}`, {signal:controller.signal}),
+      api(listenerHistoryUrl(userId,"comments",0), {signal:controller.signal}),
+      api(listenerHistoryUrl(userId,"visits",0), {signal:controller.signal})
     ]);
     if (!response.ok || !commentsResponse.ok || !visitsResponse.ok) throw new Error("詳細を取得できません");
-    state.detailData = {
-      ...(await response.json()),
-      commentHistory:await commentsResponse.json(),
-      visitHistory:await visitsResponse.json()
-    };
+    const [data, commentHistory, visitHistory] = await Promise.all([
+      response.json(), commentsResponse.json(), visitsResponse.json()
+    ]);
+    if (!isCurrentDetail(controller, userId)) return;
+    if (String(data.listener?.userId) !== String(userId)) throw new Error("詳細の対象が一致しません。開き直してください");
+    state.detailData = {...data, commentHistory, visitHistory};
     renderDetail(state.detailData);
-  } catch (error) { el.detailContent.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`; }
+  } catch (error) {
+    if (isCurrentDetail(controller, userId) && error?.name !== "AbortError") el.detailContent.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function isCurrentDetail(controller, userId) {
+  return Boolean(controller && !controller.signal.aborted && state.detailController === controller &&
+    state.selectedUserId === userId && state.key && el.detailPanel.classList.contains("open"));
 }
 
 function renderDetail(data) {
@@ -559,7 +581,8 @@ function renderDetail(data) {
   birthdaySection.innerHTML='<h3>誕生日（月日）</h3><p data-birthday-status>読み込み中…</p><label>月 <input data-birthday-month type="number" min="1" max="12" style="width:5em"></label> <label>日 <input data-birthday-day type="number" min="1" max="31" style="width:5em"></label> <button type="button" data-birthday-save>誕生日を保存・変更確認</button>';
   el.detailContent.querySelector('.detail-hero').after(birthdaySection);
   loadBirthdaySection(birthdaySection,item.userId);
-  document.getElementById("detailForm")?.addEventListener("submit", saveDetail);
+  const form = document.getElementById("detailForm");
+  if (form) { form.dataset.userId = item.userId; form.addEventListener("submit", saveDetail); }
   el.detailContent.querySelectorAll("[data-load-history]").forEach((button)=>button.addEventListener("click",()=>loadMoreHistory(button.dataset.loadHistory)));
 }
 
@@ -620,25 +643,35 @@ function listenerHistoryUrl(userId, kind, offset) {
 
 async function loadMoreHistory(kind) {
   if (!state.selectedUserId || !state.detailData) return;
+  const userId = state.selectedUserId;
+  const controller = state.detailController;
+  const detailData = state.detailData;
   const key = kind === "visits" ? "visitHistory" : "commentHistory";
   const current = state.detailData[key] || {items:[],total:0};
   const button = el.detailContent.querySelector(`[data-load-history="${kind}"]`);
   if (button) { button.disabled = true; button.textContent = "読み込み中…"; }
   try {
-    const response = await api(listenerHistoryUrl(state.selectedUserId,kind,current.items.length));
+    const response = await api(listenerHistoryUrl(userId,kind,current.items.length), {signal:controller.signal});
     if (!response.ok) throw new Error("続きを取得できません");
     const next = await response.json();
+    if (!isCurrentDetail(controller, userId) || state.detailData !== detailData) return;
     state.detailData[key] = {items:[...current.items,...(next.items||[])],total:Number(next.total||current.total||0)};
     const scrollTop = el.detailPanel.scrollTop;
     renderDetail(state.detailData);
     el.detailPanel.scrollTop = scrollTop;
-  } catch (error) { showConnectionError(error); if (button) button.disabled = false; }
+  } catch (error) {
+    if (isCurrentDetail(controller, userId) && error?.name !== "AbortError") { showConnectionError(error); if (button) button.disabled = false; }
+  }
 }
 
 function stampLabel(type){return({visit:"来店スタンプ",action:"応援スタンプ",legacy:"過去分スタンプ",standard:"スタンプ"})[type]||type||"スタンプ"}
 
 async function saveDetail(event) {
   event.preventDefault();
+  const form = event.currentTarget || document.getElementById("detailForm");
+  const userId = form?.dataset.userId;
+  const controller = state.detailController;
+  if (!userId || !isCurrentDetail(controller, userId) || String(state.detailData?.listener?.userId) !== userId) return;
   const superFan = document.getElementById("detailSuperFan");
   const needsAttention = document.getElementById("detailNeedsAttention");
   const superLurker = document.getElementById("detailSuperLurker");
@@ -647,12 +680,17 @@ async function saveDetail(event) {
   const tags = document.getElementById("detailTags");
   const saveStatus = document.getElementById("detailSaveStatus");
   const payload = { stampMessageEnabled:Boolean(document.getElementById("detailStampMessageEnabled")?.checked), stampMessage:document.getElementById("detailStampMessage")?.value || "", welcomeNotice:Boolean(document.getElementById("detailWelcomeNotice")?.checked), giftExcluded:Boolean(document.getElementById("detailGiftExcluded")?.checked), goodImpression:Boolean(document.getElementById("detailGoodImpression")?.checked), isSuperFan:Boolean(superFan?.checked), needsAttention:Boolean(needsAttention?.checked), isSuperLurker:Boolean(superLurker?.checked), isBlocked:Boolean(blocked?.checked), notes:notes?.value || "", tags:(tags?.value || "").split(",").map(v=>v.trim()).filter(Boolean) };
-  const response = await api(`/api/listeners/${encodeURIComponent(state.selectedUserId)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-  if (saveStatus) saveStatus.textContent = response.ok ? "保存しました" : "保存できませんでした";
-  if (response.ok) refreshAll();
+  try {
+    const response = await api(`/api/listeners/${encodeURIComponent(userId)}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    if (!isCurrentDetail(controller, userId)) return;
+    if (saveStatus) saveStatus.textContent = response.ok ? "保存しました" : "保存できませんでした";
+    if (response.ok) refreshAll();
+  } catch (error) {
+    if (isCurrentDetail(controller, userId) && saveStatus) saveStatus.textContent = "保存できませんでした。通信を確認してください";
+  }
 }
 
-function closeDetail(){el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId="";state.detailData=null}
+function closeDetail(){state.detailController?.abort();state.detailController=null;el.detailBackdrop.hidden=true;el.detailPanel.classList.remove("open");el.detailPanel.setAttribute("aria-hidden","true");state.selectedUserId="";state.detailData=null}
 function metric(label,value){return `<div class="metric"><span>${label}</span><strong>${number.format(value||0)}</strong></div>`}
 function textMetric(label,value){return `<div class="metric"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`}
 function contributionDetail(item,range){const recent=range==="recent";const rank=recent?item.recentContributionRank:item.contributionRank;const score=recent?item.recentContributionScore:item.contributionScore;const position=recent?item.recentContributionPosition:item.contributionPosition;const total=recent?item.recentContributionTotal:item.contributionTotal;return Number(position)>0?`${rank}・${number.format(score||0)}点・${number.format(position)}/${number.format(total)}位`:Number(score)<0?`${rank}・${number.format(score)}点`:String(rank||"未計算")}

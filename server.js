@@ -3004,6 +3004,7 @@ const server = createServer(async (request, response) => {
         ? LISTENER_TOTAL_PENDING_CACHE_MS
         : LISTENER_PAGE_CACHE_MS;
       if (!options.fresh && cached && cached.at >= Date.now() - cacheMs) {
+        response.setHeader("Server-Timing", 'ledger-cache;desc="hit"');
         sendJson(response, 200, cached.value);
         return;
       }
@@ -3013,7 +3014,9 @@ const server = createServer(async (request, response) => {
           if (options.sort === "contribution" || options.sort === "recent_contribution") {
             return eventStore.listenerContributionPage(options);
           }
+          const startedAt = performance.now();
           const result = await eventStore.listeners(options);
+          const pageFinishedAt = performance.now();
           const ranks = await eventStore.listenerContributionRankings({
             username: options.username,
             fresh: options.fresh,
@@ -3023,13 +3026,18 @@ const server = createServer(async (request, response) => {
             ...result,
             items: result.items.map((item) => ({ ...item, ...publicContributionRank(ranks.byUserId.get(item.userId) || noContributionRank(Boolean(ranks.generatedAt))) })),
             rankingGeneratedAt: ranks.generatedAt,
-            rankingPending: Boolean(ranks.pending)
+            rankingPending: Boolean(ranks.pending),
+            searchTimings: {
+              pageMs: Math.round(pageFinishedAt - startedAt),
+              savedRankMs: Math.round(performance.now() - pageFinishedAt)
+            }
           };
         })();
         listenerPagePromises.set(cacheKey, pending);
       }
       try {
         const value = await pending;
+        if (value.searchTimings) response.setHeader("Server-Timing", `ledger-page;dur=${value.searchTimings.pageMs}, ledger-saved-ranks;dur=${value.searchTimings.savedRankMs}`);
         setBoundedCache(listenerPageCache, cacheKey, { at: Date.now(), value }, LISTENER_PAGE_CACHE_MAX);
         sendJson(response, 200, value);
       } finally {
