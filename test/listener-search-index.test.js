@@ -85,7 +85,7 @@ test('valid normalized index is metadata-only and health never polls the databas
 test('missing normalized index builds concurrently with bounded session timeouts and an identical search expression', async () => {
   const {store,state,pool}=fixture();
   assert.equal(await store.initializeListenerSearchIndex(),true);
-  assert.ok(state.calls.some(({sql})=>sql === "SET lock_timeout = '1s'"));
+  assert.ok(state.calls.some(({sql})=>sql === "SET lock_timeout = '30s'"));
   assert.ok(state.calls.some(({sql})=>sql === "SET statement_timeout = '120s'"));
   for (const {args} of state.calls.filter(({sql})=>sql.startsWith('SELECT set_config'))) {
     assert.match(args[0],/^\d+ms$/);
@@ -191,8 +191,8 @@ test('maintenance exceeding the general 35s timeout retains a bounded per-query 
 
 test('startup schedules optional index maintenance only after readiness without awaiting it', () => {
   const initialize=EventStore.prototype.initialize.toString();
-  assert.match(initialize,/this\.schemaReady = true;\s*this\.ready = true;\s*this\.lastError = "";[\s\S]*?void this\.initializeListenerSearchIndex\(pool\)\.catch\(\(\) => \{\}\);\s*return true;/);
-  assert.doesNotMatch(initialize,/await this\.initializeListenerSearchIndex/);
+  assert.match(initialize,/this\.schemaReady = true;\s*this\.ready = true;\s*this\.lastError = "";[\s\S]*?void this\.startListenerSearchIndexMaintenance\(pool\)\.catch\(\(\) => \{\}\);\s*return true;/);
+  assert.doesNotMatch(initialize,/await this\.(?:initializeListenerSearchIndex|startListenerSearchIndexMaintenance)/);
 });
 
 test('connection and unsupported-index failures do not make the application unavailable', async () => {
@@ -207,4 +207,113 @@ test('connection and unsupported-index failures do not make the application unav
   assert.equal(store.status().listenerSearchIndexPending,false);
   assert.equal(store.ready,true);
   assert.equal(store.lastError,'');
+});
+
+function retryClock(t) {
+  const timers=[];
+  t.mock.method(globalThis,'setTimeout',(callback,ms)=>{
+    const timer={callback,ms,unrefCalled:false,cancelled:false,unref(){this.unrefCalled=true;}};
+    timers.push(timer);
+    return timer;
+  });
+  t.mock.method(globalThis,'clearTimeout',timer=>{if(timer) timer.cancelled=true;});
+  return timers;
+}
+
+test('index stages identify checking, invalid cleanup, build, verification and readiness', async () => {
+  const stages=[];
+  const {store,state}=fixture({valid:false,onQuery(sql){
+    if (/SELECT indisvalid|^DROP INDEX|^CREATE INDEX/.test(sql)) stages.push(store.status().listenerSearchIndexStage);
+  }});
+  assert.equal(await store.initializeListenerSearchIndex(),true);
+  assert.deepEqual(stages,['checking','checking','dropping-invalid','building','verifying']);
+  assert.equal(store.status().listenerSearchIndexStage,'ready');
+  assert.equal(store.status().listenerSearchIndexFailedStage,'');
+  assertReleased(state);
+});
+
+test('lock timeout reports dropping-invalid as the failed stage without building', async () => {
+  const {store,state}=fixture({valid:false,onQuery(sql){
+    if (sql.startsWith('DROP INDEX')) throw Object.assign(new Error('lock timeout'),{code:'55P03'});
+  }});
+  assert.equal(await store.initializeListenerSearchIndex(),false);
+  assert.equal(store.status().listenerSearchIndexStage,'failed');
+  assert.equal(store.status().listenerSearchIndexFailedStage,'dropping-invalid');
+  assert.equal(store.status().listenerSearchIndexError,'55P03');
+  assert.ok(!state.calls.some(({sql})=>sql.startsWith('CREATE INDEX')));
+  assertReleased(state);
+});
+
+for (const reason of ['55P03','BUILD_BUSY']) test(`startup retries ${reason} once after an unref'd 15s delay`, async t => {
+  const timers=retryClock(t);
+  const {store,state}=fixture({failCreate:reason==='55P03'?'55P03':undefined,busy:reason==='BUILD_BUSY'});
+  assert.equal(await store.startListenerSearchIndexMaintenance(),false);
+  assert.equal(store.status().listenerSearchIndexFailedStage,reason==='55P03'?'building':'checking');
+  assert.equal(store.status().listenerSearchIndexRetryPending,true);
+  assert.equal(timers.length,1);
+  assert.equal(timers[0].ms,15000);
+  assert.equal(timers[0].unrefCalled,true);
+  state.busy=false;state.failCreate=null;
+  timers[0].callback();
+  assert.equal(await store.listenerSearchIndexPromise,true);
+  assert.equal(store.status().listenerSearchIndexStage,'ready');
+  assert.equal(store.status().listenerSearchIndexFailedStage,'');
+  assert.equal(store.status().listenerSearchIndexRetryPending,false);
+  assert.equal(timers.length,1);
+  assert.equal(state.clients.length,2);
+  assertReleased(state);
+});
+
+test('a failed startup retry cannot schedule another retry or restart the startup job', async t => {
+  const timers=retryClock(t);
+  const {store,state}=fixture({failCreate:'55P03'});
+  assert.equal(await store.startListenerSearchIndexMaintenance(),false);
+  timers[0].callback();
+  assert.equal(await store.listenerSearchIndexPromise,false);
+  assert.equal(await store.startListenerSearchIndexMaintenance(),false);
+  assert.equal(timers.length,1);
+  assert.equal(state.clients.length,2);
+  assert.equal(store.status().listenerSearchIndexRetryPending,false);
+  assert.equal(store.status().listenerSearchIndexError,'55P03');
+  assertReleased(state);
+});
+
+test('startup does not retry timeouts or unsupported-index errors', async t => {
+  const timers=retryClock(t);
+  for (const code of ['57014','42704']) {
+    const {store,state}=fixture({failCreate:code});
+    assert.equal(await store.startListenerSearchIndexMaintenance(),false);
+    assert.equal(store.status().listenerSearchIndexFailedStage,'building');
+    assert.equal(store.status().listenerSearchIndexRetryPending,false);
+    assertReleased(state);
+  }
+  assert.equal(timers.length,0);
+});
+
+test('startup retry skips a replaced pool, unavailable app or already-ready index', async t => {
+  const timers=retryClock(t);
+  for (const condition of ['pool','unavailable','index']) {
+    const {store,state}=fixture({busy:true});
+    assert.equal(await store.startListenerSearchIndexMaintenance(),false);
+    if(condition==='pool') store.pool={};
+    if(condition==='unavailable') store.ready=false;
+    if(condition==='index') store.listenerSearchIndexReady=true;
+    timers.at(-1).callback();
+    assert.equal(state.clients.length,1);
+    assert.equal(store.status().listenerSearchIndexRetryPending,false);
+    assertReleased(state);
+  }
+});
+
+test('close cancels the unref startup retry before closing its pool', async t => {
+  const timers=retryClock(t);
+  const {store,state,pool}=fixture({busy:true});
+  pool.end=async()=>{};
+  assert.equal(await store.startListenerSearchIndexMaintenance(),false);
+  await store.close();
+  assert.equal(timers[0].cancelled,true);
+  assert.equal(store.status().listenerSearchIndexRetryPending,false);
+  timers[0].callback();
+  assert.equal(state.clients.length,1);
+  assertReleased(state);
 });
