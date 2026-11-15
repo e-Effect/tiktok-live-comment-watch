@@ -10,7 +10,8 @@ const htmlSource = await readFile(new URL("../public/listener-manager.html", imp
 test("default listener pages aggregate only the selected hundred listeners", () => {
   assert.match(eventStoreSource, /fastSortColumns/);
   assert.match(eventStoreSource, /page AS MATERIALIZED/);
-  assert.match(eventStoreSource, /JOIN page p ON p\.user_id = s\.user_id/);
+  assert.match(eventStoreSource, /FROM page p LEFT JOIN LATERAL/);
+  assert.match(eventStoreSource, /WHERE s\.user_id = p\.user_id/);
   assert.match(eventStoreSource, /return listenerPageResult\(fastResult.rows, boundedLimit, boundedOffset\)/);
   const fastPath = eventStoreSource.match(/if \(fastOrderBy\) \{([\s\S]*?)\n    const result = await this\.pool\.query/);
   assert.ok(fastPath, "default listener fast path should exist");

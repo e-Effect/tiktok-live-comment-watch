@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import {EventStore} from '../lib/event-store.js';
 
 const indexName = 'listeners_search_nfkc_trgm_idx';
+const coverName = 'listener_stats_scope_coins_cover_idx';
 
-function fixture({valid, busy = false, failCreate, beforeCreate, onQuery} = {}) {
-  const state = {valid, busy, failCreate, owner:null, calls:[], clients:[]};
+function fixture({valid, coverValid, busy = false, failCreate, failCoverCreate, beforeCreate, beforeCoverCreate, onQuery} = {}) {
+  const state = {valid, coverValid, busy, failCreate, failCoverCreate, owner:null, calls:[], clients:[]};
   const pool = {
     query() {assert.fail('index maintenance must use its checked-out client');},
     async connect() {
@@ -20,9 +21,11 @@ function fixture({valid, busy = false, failCreate, beforeCreate, onQuery} = {}) 
           if (/^SET |^SELECT set_config/.test(sql)) return {rows:[]};
           if (sql === 'SELECT pg_backend_pid() AS pid') return {rows:[{pid:7000+state.clients.length}]};
           if (sql.includes('SELECT indisvalid')) {
-            assert.deepEqual(args,[indexName]);
-            assert.match(sql,/indrelid = 'listeners'::regclass/);
-            return {rows:state.valid === undefined ? [] : [{indisvalid:state.valid}]};
+            const cover=args[0]===coverName;
+            assert.deepEqual(args,[cover?coverName:indexName]);
+            assert.ok(sql.includes(`indrelid = '${cover?'listener_stream_stats':'listeners'}'::regclass`));
+            const valid=cover?state.coverValid:state.valid;
+            return {rows:valid === undefined ? [] : [{indisvalid:valid}]};
           }
           if (sql.includes('pg_try_advisory_lock')) {
             assert.deepEqual(args,[indexName]);
@@ -31,19 +34,22 @@ function fixture({valid, busy = false, failCreate, beforeCreate, onQuery} = {}) 
             return {rows:[{acquired:true}]};
           }
           if (sql.startsWith('DROP INDEX')) {
+            const cover=sql.includes(coverName), key=cover?'coverValid':'valid';
             assert.equal(state.owner,client);
-            assert.equal(sql,`DROP INDEX CONCURRENTLY IF EXISTS ${indexName}`);
-            assert.equal(state.valid,false,'only an existing invalid new index can be dropped');
-            state.valid = undefined;
+            assert.equal(sql,`DROP INDEX CONCURRENTLY IF EXISTS ${cover?coverName:indexName}`);
+            assert.equal(state[key],false,'only an existing invalid new index can be dropped');
+            state[key] = undefined;
             return {rows:[]};
           }
           if (sql.startsWith('CREATE INDEX')) {
+            const cover=sql.includes(coverName), key=cover?'coverValid':'valid';
             assert.equal(state.owner,client);
-            assert.match(sql,new RegExp(`^CREATE INDEX CONCURRENTLY IF NOT EXISTS ${indexName}`));
-            state.valid = false;
-            await beforeCreate?.();
-            if (state.failCreate) throw Object.assign(new Error('synthetic failure'),{code:state.failCreate});
-            state.valid = true;
+            assert.match(sql,new RegExp(`^CREATE INDEX CONCURRENTLY IF NOT EXISTS ${cover?coverName:indexName}`));
+            state[key] = false;
+            await (cover?beforeCoverCreate:beforeCreate)?.();
+            const error=cover?state.failCoverCreate:state.failCreate;
+            if (error) throw Object.assign(new Error('synthetic failure'),{code:error});
+            state[key] = true;
             return {rows:[]};
           }
           assert.fail(`unexpected SQL: ${sql}`);
@@ -257,11 +263,12 @@ for (const reason of ['55P03','BUILD_BUSY']) test(`startup retries ${reason} onc
   state.busy=false;state.failCreate=null;
   timers[0].callback();
   assert.equal(await store.listenerSearchIndexPromise,true);
+  await store.scopedCoinsIndexPromise;
   assert.equal(store.status().listenerSearchIndexStage,'ready');
   assert.equal(store.status().listenerSearchIndexFailedStage,'');
   assert.equal(store.status().listenerSearchIndexRetryPending,false);
   assert.equal(timers.length,1);
-  assert.equal(state.clients.length,2);
+  assert.equal(state.clients.length,3);
   assertReleased(state);
 });
 
@@ -341,11 +348,11 @@ test('explicit progress reads only the captured maintenance backend and exposes 
   assert.equal(reads,0,'health must never poll progress');
   assert.deepEqual(await store.listenerSearchIndexProgress('ignored arbitrary argument'),{
     phase:'waiting for old snapshots',blocksDoneTotal:{done:12,total:40},tuplesDoneTotal:{done:3,total:9},
-    waitEventType:'Lock',waitEvent:'virtualxid',indexStage:'building'
+    waitEventType:'Lock',waitEvent:'virtualxid',indexStage:'building',indexTarget:'search'
   });
   pool.query=async()=>({rows:[{phase:{secret:true},blocks_done:-1,blocks_total:Infinity,tuples_done:'NaN',tuples_total:'4',wait_event:123}]});
   assert.deepEqual(await store.listenerSearchIndexProgress(),{
-    phase:'',blocksDoneTotal:{done:0,total:0},tuplesDoneTotal:{done:0,total:4},waitEventType:'',waitEvent:'',indexStage:'building'
+    phase:'',blocksDoneTotal:{done:0,total:0},tuplesDoneTotal:{done:0,total:4},waitEventType:'',waitEvent:'',indexStage:'building',indexTarget:'search'
   });
   pool.query=async()=>{throw new Error('PRIVATE SQL and connection details');};
   const failed=await store.listenerSearchIndexProgress();
@@ -384,5 +391,104 @@ test('failed maintenance clears its private backend identity', async () => {
   assert.equal(store.listenerSearchIndexBackendPid,null);
   assert.equal(store.listenerSearchIndexBackendPool,null);
   assert.ok(!Object.keys(store.status()).some(key=>/pid|backendpool/i.test(key)));
+  assertReleased(state);
+});
+
+test('startup builds GIN then covering index sequentially and deduplicates queued cover attempts', async () => {
+  let unblock,started;
+  const gate=new Promise(resolve=>{unblock=resolve;});
+  const building=new Promise(resolve=>{started=resolve;});
+  const {store,state}=fixture({beforeCreate:async()=>{started();await gate;},beforeCoverCreate:async()=>{
+    assert.equal(store.listenerSearchIndexReady,true);
+    assert.equal(store.listenerSearchIndexPromise,null);
+    assert.equal(state.clients[0].released,true,'GIN client released before cover build');
+  }});
+  const startup=store.startListenerSearchIndexMaintenance();
+  await building;
+  const queued=store.initializeScopedCoinsIndex();
+  assert.equal(store.scopedCoinsIndexPromise,null);
+  assert.equal(state.clients.length,1);
+  unblock();
+  assert.equal(await startup,true);
+  assert.equal(await queued,true);
+  await store.scopedCoinsIndexPromise;
+  assert.equal(store.status().listenerSearchIndexReady,true);
+  assert.equal(store.status().scopedCoinsIndexReady,true);
+  assert.equal(store.status().scopedCoinsIndexError,'');
+  assert.equal(state.clients.length,2);
+  assert.equal(state.calls.filter(({sql})=>sql.startsWith('CREATE INDEX')).length,2);
+  const cover=state.calls.find(({sql})=>sql.startsWith('CREATE INDEX') && sql.includes(coverName));
+  assert.ok(cover.sql.includes('INCLUDE (stream_username, gift_coins, last_seen_at)'));
+  assertReleased(state);
+});
+
+test('cover failure and invalid-cover cleanup cannot change valid GIN or application readiness', async () => {
+  const {store,state}=fixture({valid:true,coverValid:false,failCoverCreate:'57014'});
+  assert.equal(await store.initializeListenerSearchIndex(),true);
+  assert.equal(await store.initializeScopedCoinsIndex(),false);
+  assert.equal(store.ready,true);
+  assert.equal(store.status().listenerSearchIndexReady,true);
+  assert.equal(store.status().listenerSearchIndexError,'');
+  assert.equal(store.status().listenerSearchIndexStage,'ready');
+  assert.equal(store.status().scopedCoinsIndexReady,false);
+  assert.equal(store.status().scopedCoinsIndexError,'57014');
+  assert.equal(store.status().scopedCoinsIndexPending,false);
+  assert.equal(store.status().scopedCoinsIndexFailedStage,'building');
+  assert.deepEqual(state.calls.filter(({sql})=>sql.startsWith('DROP INDEX')).map(({sql})=>sql),[
+    `DROP INDEX CONCURRENTLY IF EXISTS ${coverName}`
+  ]);
+  state.failCoverCreate=null;
+  assert.equal(await store.initializeScopedCoinsIndex(),true);
+  assert.equal(store.status().scopedCoinsIndexError,'');
+  assert.equal(store.status().listenerSearchIndexReady,true);
+  assertReleased(state);
+});
+
+test('a failed GIN build never starts the covering build', async () => {
+  const {store,state}=fixture({failCreate:'57014'});
+  assert.equal(await store.startListenerSearchIndexMaintenance(),false);
+  assert.equal(await store.initializeScopedCoinsIndex(),false);
+  assert.equal(state.clients.length,1);
+  assert.ok(!state.calls.some(({sql,args})=>sql.includes(coverName)||args?.includes(coverName)));
+  assert.equal(store.status().scopedCoinsIndexStage,'idle');
+  assertReleased(state);
+});
+
+test('cover progress uses its own active promise and PID while GIN readiness remains true', async () => {
+  let unblock,started;
+  const gate=new Promise(resolve=>{unblock=resolve;});
+  const building=new Promise(resolve=>{started=resolve;});
+  const {store,state,pool}=fixture({valid:true,beforeCoverCreate:async()=>{started();await gate;}});
+  assert.equal(await store.initializeListenerSearchIndex(),true);
+  const cover=store.initializeScopedCoinsIndex();
+  assert.equal(store.initializeScopedCoinsIndex(),cover);
+  await building;
+  assert.equal(store.listenerSearchIndexPromise,null);
+  assert.equal(store.status().listenerSearchIndexReady,true);
+  assert.equal(store.status().scopedCoinsIndexPending,true);
+  pool.query=async config=>{
+    assert.deepEqual(config.values,[7002]);
+    assert.equal(config.query_timeout,5000);
+    return {rows:[{phase:'building index',blocks_done:2,blocks_total:8,wait_event_type:'IO',wait_event:'DataFileRead'}]};
+  };
+  const progress=await store.listenerSearchIndexProgress();
+  assert.equal(progress.indexTarget,'scoped-coins');
+  assert.equal(progress.indexStage,'building');
+  assert.deepEqual(progress.blocksDoneTotal,{done:2,total:8});
+  const gin=store.initializeListenerSearchIndex();
+  assert.equal(state.clients.length,2,'GIN recheck cannot overlap active cover maintenance');
+  unblock();assert.equal(await cover,true);assert.equal(await gin,true);
+  assert.equal(store.status().scopedCoinsIndexReady,true);
+  assert.equal(store.listenerSearchIndexBackendPid,null);
+  assertReleased(state);
+});
+
+test('valid covering index needs metadata only and never recreates existing indexes', async () => {
+  const {store,state}=fixture({valid:true,coverValid:true});
+  assert.equal(await store.initializeListenerSearchIndex(),true);
+  assert.equal(await store.initializeScopedCoinsIndex(),true);
+  assert.ok(!state.calls.some(({sql})=>/^(CREATE|DROP)/.test(sql)));
+  assert.equal(store.status().listenerSearchIndexReady,true);
+  assert.equal(store.status().scopedCoinsIndexReady,true);
   assertReleased(state);
 });
