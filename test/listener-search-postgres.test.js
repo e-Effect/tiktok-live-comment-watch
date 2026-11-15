@@ -246,7 +246,7 @@ test('normalized trigram index builds concurrently and serves literal global/sco
   const calls=[];
   store.pool={
     query(sql,args){calls.push({sql,args});return db.query(sql,args);},
-    async connect(){return {query:(sql,args)=>db.query(sql,args),release(destroy){assert.equal(destroy,true);}};}
+    async connect(){return {query:({text,values})=>db.query(text,values),release(destroy){assert.equal(destroy,true);}};}
   };
   assert.equal(await store.initializeListenerSearchIndex(),true);
   assert.equal(store.status().listenerSearchIndexReady,true);

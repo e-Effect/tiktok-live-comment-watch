@@ -11,9 +11,12 @@ function fixture({valid, busy = false, failCreate, beforeCreate, onQuery} = {}) 
     async connect() {
       const client = {
         released:false,
-        async query(sql, args) {
-          state.calls.push({sql,args,client});
-          onQuery?.(sql,args);
+        async query(config) {
+          assert.equal(typeof config,'object','maintenance must override the pool driver timeout per query');
+          const {text:sql,values:args,query_timeout}=config;
+          assert.ok(query_timeout>1000 && query_timeout<=121000);
+          state.calls.push({sql,args,client,query_timeout});
+          onQuery?.(sql,args,config);
           if (/^SET |^SELECT set_config/.test(sql)) return {rows:[]};
           if (sql.includes('SELECT indisvalid')) {
             assert.deepEqual(args,[indexName]);
@@ -73,6 +76,7 @@ test('valid normalized index is metadata-only and health never polls the databas
   assert.equal(status.listenerSearchIndexReady,true);
   assert.equal(status.listenerSearchIndexError,'');
   assert.equal(status.listenerSearchIndexPending,false);
+  assert.equal(status.listenerSearchIndexBudgetMs,120000);
   assert.equal(state.calls.length,before);
   assert.ok(!state.calls.some(({sql})=>/CREATE|DROP|pg_try_advisory_lock/.test(sql)));
   assertReleased(state);
@@ -82,10 +86,10 @@ test('missing normalized index builds concurrently with bounded session timeouts
   const {store,state,pool}=fixture();
   assert.equal(await store.initializeListenerSearchIndex(),true);
   assert.ok(state.calls.some(({sql})=>sql === "SET lock_timeout = '1s'"));
-  assert.ok(state.calls.some(({sql})=>sql === "SET statement_timeout = '20s'"));
+  assert.ok(state.calls.some(({sql})=>sql === "SET statement_timeout = '120s'"));
   for (const {args} of state.calls.filter(({sql})=>sql.startsWith('SELECT set_config'))) {
     assert.match(args[0],/^\d+ms$/);
-    assert.ok(parseInt(args[0])>0 && parseInt(args[0])<=20000);
+    assert.ok(parseInt(args[0])>0 && parseInt(args[0])<=120000);
   }
   const ddl=state.calls.find(({sql})=>sql.startsWith('CREATE INDEX')).sql;
   const expression="LOWER(normalize(user_id || ' ' || latest_unique_id || ' ' || latest_nickname || ' ' || notes, NFKC))";
@@ -144,6 +148,7 @@ test('same-store attempts deduplicate and a second store cannot build concurrent
   assert.equal(store.initializeListenerSearchIndex(),first);
   await building;
   assert.equal(store.status().listenerSearchIndexPending,true);
+  assert.equal(await store.ensureReady(),true,'pending maintenance must not block application readiness');
   const other=new EventStore();other.pool=pool;other.ready=true;
   assert.equal(await other.initializeListenerSearchIndex(),false);
   assert.equal(other.status().listenerSearchIndexError,'BUILD_BUSY');
@@ -160,11 +165,34 @@ test('same-store attempts deduplicate and a second store cannot build concurrent
 test('total maintenance budget expires before another DDL attempt', async t => {
   let now=1000;
   t.mock.method(Date,'now',()=>now);
-  const {store,state}=fixture({onQuery(sql){if (sql.includes('SELECT indisvalid')) now=21001;}});
+  const {store,state}=fixture({onQuery(sql){if (sql.includes('SELECT indisvalid')) now=121001;}});
   assert.equal(await store.initializeListenerSearchIndex(),false);
   assert.equal(store.status().listenerSearchIndexError,'57014');
   assert.ok(!state.calls.some(({sql})=>/pg_try_advisory_lock|CREATE|DROP/.test(sql)));
   assertReleased(state);
+});
+
+test('maintenance exceeding the general 35s timeout retains a bounded per-query override', async t => {
+  let now=1000;
+  t.mock.method(Date,'now',()=>now);
+  const {store,state}=fixture({onQuery(sql,args,config){
+    if (sql.startsWith('CREATE INDEX')) {
+      assert.equal(config.query_timeout,121000);
+      now+=40000;
+    }
+  }});
+  assert.equal(await store.initializeListenerSearchIndex(),true);
+  const last=state.calls.at(-1);
+  assert.ok(last.sql.includes('SELECT indisvalid'));
+  assert.equal(last.query_timeout,81000,'driver timeout tracks remaining budget, not the general pool 35s');
+  assert.ok(state.calls.some(({args,sql})=>sql.startsWith('SELECT set_config') && args[0]==='80000ms'));
+  assertReleased(state);
+});
+
+test('startup schedules optional index maintenance only after readiness without awaiting it', () => {
+  const initialize=EventStore.prototype.initialize.toString();
+  assert.match(initialize,/this\.schemaReady = true;\s*this\.ready = true;\s*this\.lastError = "";[\s\S]*?void this\.initializeListenerSearchIndex\(pool\)\.catch\(\(\) => \{\}\);\s*return true;/);
+  assert.doesNotMatch(initialize,/await this\.initializeListenerSearchIndex/);
 });
 
 test('connection and unsupported-index failures do not make the application unavailable', async () => {
