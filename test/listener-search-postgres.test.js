@@ -193,29 +193,35 @@ test('default recent page uses the existing DESC index and preserves page-first 
   const store=new EventStore();store.ready=true;
   let captured, calls=0;
   store.pool={query(sql,args){calls++;captured={sql,args};return db.query(sql,args);}};
-  for (const offset of [0,100]) {
-    const result=await store.listeners({limit:100,offset});
+  for (const offset of [0,20]) {
+    const result=await store.listeners({limit:20,offset});
     assert.equal(calls,offset===0?1:2,'exactly one page query without a full count');
     const {sql,args}=captured;
     assert.match(sql,/ORDER BY last_seen_at DESC, last_seen_at DESC, user_id/);
     assert.match(sql,/ORDER BY p\.last_seen_at DESC, p\.last_seen_at DESC, p\.user_id/);
-    assert.match(sql,/JOIN page p ON p\.user_id = s\.user_id/);
+    assert.match(sql,/FROM page p LEFT JOIN LATERAL/);
+    assert.match(sql,/WHERE s\.user_id = p\.user_id/);
     assert.doesNotMatch(sql,/NULLS LAST|COUNT\(\*\) OVER/);
     const oldSql=sql.replace('ORDER BY last_seen_at DESC,','ORDER BY last_seen_at DESC NULLS LAST,')
       .replace('ORDER BY p.last_seen_at DESC,','ORDER BY p.last_seen_at DESC NULLS LAST,');
     const previous=(await db.query(oldSql,args)).rows;
-    assert.deepEqual(result.items.map(row=>row.userId),previous.slice(0,100).map(row=>row.user_id));
+    assert.deepEqual(result.items.map(row=>row.userId),previous.slice(0,20).map(row=>row.user_id));
     assert.ok(result.items.every(row=>row.visits===3));
     assert.equal(result.hasMore,true);
     if (!offset) {
-      const explained=(await db.query(`EXPLAIN (FORMAT JSON) ${sql}`,args)).rows[0]['QUERY PLAN'][0].Plan;
+      const explained=(await db.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`,args)).rows[0]['QUERY PLAN'][0].Plan;
       const nodes=[];
       const visit=plan=>{nodes.push(plan);for (const child of plan.Plans || []) visit(child);};
       visit(explained);
       assert.ok(nodes.some(node=>node['Index Name']==='listeners_last_seen_idx'),JSON.stringify(explained));
       assert.ok(nodes.some(node=>node['Node Type']==='Incremental Sort'),JSON.stringify(explained));
       assert.ok(!nodes.some(node=>node['Node Type']==='Seq Scan' && node['Relation Name']==='listeners'));
-      t.diagnostic('12,000 profiles / 36,000 stats: existing listeners_last_seen_idx + Incremental Sort; no listeners Seq Scan');
+      const statsProbe=nodes.find(node=>node['Index Name']==='listener_stream_stats_user_idx');
+      assert.ok(statsProbe,JSON.stringify(explained));
+      assert.equal(statsProbe['Actual Loops'],21,'one indexed stats lookup per selected profile');
+      assert.equal(statsProbe['Actual Rows'],3);
+      assert.ok(!nodes.some(node=>node['Node Type']==='Seq Scan' && node['Relation Name']==='listener_stream_stats'));
+      t.diagnostic('12,000 profiles / 36,000 stats: page-first DESC index + 21 lateral user-index stats probes; no full stats scan');
     }
   }
   for (const options of [{sort:'last_seen',direction:'asc'},{sort:'first_seen'},{sort:'name'}]) {

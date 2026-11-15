@@ -2982,8 +2982,12 @@ const server = createServer(async (request, response) => {
           sendJson(response, 503, {error:"データベースに接続できません。索引の再開は未実行です"});
           return;
         }
-        const started = !eventStore.listenerSearchIndexReady && !eventStore.listenerSearchIndexPromise;
-        if (started) void eventStore.initializeListenerSearchIndex().catch(() => {});
+        const started = !eventStore.listenerSearchIndexPromise && !eventStore.scopedCoinsIndexPromise
+          && (!eventStore.listenerSearchIndexReady || !eventStore.scopedCoinsIndexReady);
+        if (started) void (async () => {
+          const searchReady = eventStore.listenerSearchIndexReady || await eventStore.initializeListenerSearchIndex();
+          if (searchReady) await eventStore.initializeScopedCoinsIndex();
+        })().catch(() => {});
         sendJson(response, started ? 202 : 200, {started, ...(await eventStore.listenerSearchIndexProgress())});
       } else {
         sendJson(response, 200, await eventStore.listenerSearchIndexProgress());

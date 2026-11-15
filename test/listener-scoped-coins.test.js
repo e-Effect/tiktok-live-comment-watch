@@ -108,6 +108,17 @@ async function database(t, size = 87) {
   return db;
 }
 
+async function coveringIndex(db) {
+  const store=storeWithPool({
+    query:(sql,args)=>db.query(sql,args),
+    async connect(){return {query:({text,values})=>db.query(text,values),release(destroy){assert.equal(destroy,true);}};}
+  });
+  store.listenerSearchIndexReady=true;
+  assert.equal(await store.initializeScopedCoinsIndex(),true);
+  assert.equal(store.listenerSearchIndexReady,true);
+  assert.equal(store.scopedCoinsIndexReady,true);
+}
+
 test('scoped coins fast path is gated and applies pagination exactly once', async () => {
   for (const direction of ['asc','desc']) {
     const {sql,args} = await capture({username:'hOsT',sort:'coins',direction,limit:20,offset:40});
@@ -134,6 +145,14 @@ test('scoped coins fast path is gated and applies pagination exactly once', asyn
 
 test('actual scoped coins pages match every legacy serialized field across scopes and pages', async t => {
   const db = await database(t);
+  const records=()=>db.query(`SELECT (SELECT jsonb_agg(l ORDER BY user_id) FROM listeners l) AS profiles,
+    (SELECT jsonb_agg(s ORDER BY stream_username,user_id) FROM listener_stream_stats s) AS stats`);
+  const before=await records();
+  const oldIndexes=await db.query("SELECT indexname,indexdef FROM pg_indexes WHERE tablename IN ('listeners','listener_stream_stats') ORDER BY indexname");
+  await coveringIndex(db);
+  assert.deepEqual(await records(),before,'concurrent covering build must not change any record');
+  const afterIndexes=(await db.query("SELECT indexname,indexdef FROM pg_indexes WHERE tablename IN ('listeners','listener_stream_stats') ORDER BY indexname")).rows;
+  for (const original of oldIndexes.rows) assert.ok(afterIndexes.some(index=>index.indexname===original.indexname && index.indexdef===original.indexdef),'existing index retained');
   let comparisons = 0;
   for (const username of ['host','HOST','hOsT','other','sparse','missing']) {
     for (const direction of ['asc','desc']) {
@@ -180,6 +199,25 @@ test('actual scoped coins pages match every legacy serialized field across scope
 function planNodes(plan) {
   return [plan,...(plan.Plans||[]).flatMap(planNodes)];
 }
+
+test('actual scoped coins fast query uses covering Index Only Scan with zero heap fetches', async t => {
+  const db=await database(t,12000);
+  await coveringIndex(db);
+  await db.query('VACUUM ANALYZE listener_stream_stats');
+  for (const direction of ['asc','desc']) {
+    const query=await capture({username:'hOsT',sort:'coins',direction,limit:20});
+    const plan=(await db.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) '+query.sql,query.args)).rows[0]['QUERY PLAN'][0];
+    const nodes=planNodes(plan.Plan);
+    const pageIds=nodes.find(node=>node['Subplan Name']==='CTE page_ids');
+    assert.ok(pageIds);
+    const scans=planNodes(pageIds).filter(node=>node['Index Name']==='listener_stats_scope_coins_cover_idx');
+    assert.ok(scans.length>0,JSON.stringify(plan.Plan));
+    assert.ok(scans.every(node=>node['Node Type']==='Index Only Scan' && node['Heap Fetches']===0),JSON.stringify(scans));
+    assert.equal(pageIds['Actual Rows'],21);
+    assert.deepEqual((await db.query(query.sql,query.args)).rows,(await db.query(legacySql(direction),query.args)).rows);
+    t.diagnostic(direction+': scope order_totals uses listener_stats_scope_coins_cover_idx, Index Only Scan, Heap Fetches 0');
+  }
+});
 
 const median = values => [...values].sort((a,b)=>a-b)[Math.floor(values.length/2)];
 
