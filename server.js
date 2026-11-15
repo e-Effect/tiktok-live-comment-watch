@@ -2974,6 +2974,26 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/listeners/search-index" && ["GET", "POST"].includes(request.method)) {
+    if (!requireListenerAdmin(request, response)) return;
+    try {
+      if (request.method === "POST") {
+        if (!eventStore.ready) {
+          sendJson(response, 503, {error:"データベースに接続できません。索引の再開は未実行です"});
+          return;
+        }
+        const started = !eventStore.listenerSearchIndexReady && !eventStore.listenerSearchIndexPromise;
+        if (started) void eventStore.initializeListenerSearchIndex().catch(() => {});
+        sendJson(response, started ? 202 : 200, {started, ...(await eventStore.listenerSearchIndexProgress())});
+      } else {
+        sendJson(response, 200, await eventStore.listenerSearchIndexProgress());
+      }
+    } catch {
+      sendJson(response, 503, {error:"索引の進行状況を取得できません。記録は変更していません"});
+    }
+    return;
+  }
+
   if (url.pathname === "/api/listeners/count" && request.method === "GET") {
     if (!requireListenerAdmin(request, response)) return;
     sendJson(response, 200, eventStore.listenerPageCount(listenerSearchOptions(url)));

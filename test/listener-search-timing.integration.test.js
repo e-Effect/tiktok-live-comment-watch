@@ -21,6 +21,11 @@ test('search timings stay authenticated, metadata-only and distinguish a cached 
   const denied=await fetch(base+path);assert.equal(denied.status,401);
   assert.equal(denied.headers.get('Server-Timing'),null);
   const options={headers:{Authorization:'Bearer timing-fixture-only'}};
+  for(const method of ['GET','POST']) {
+    assert.equal((await fetch(base+'/api/listeners/search-index',{method})).status,401);
+  }
+  const maintenance=await fetch(base+'/api/listeners/search-index',{...options,method:'POST'});
+  assert.equal(maintenance.status,503,'maintenance cannot run without a ready database');
   const first=await fetch(base+path,options);assert.equal(first.status,200);
   const body=await first.json();
   assert.deepEqual(Object.keys(body.searchTimings).sort(),['pageMs','savedRankMs']);

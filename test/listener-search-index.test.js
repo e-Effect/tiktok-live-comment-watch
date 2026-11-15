@@ -14,10 +14,11 @@ function fixture({valid, busy = false, failCreate, beforeCreate, onQuery} = {}) 
         async query(config) {
           assert.equal(typeof config,'object','maintenance must override the pool driver timeout per query');
           const {text:sql,values:args,query_timeout}=config;
-          assert.ok(query_timeout>1000 && query_timeout<=121000);
+          assert.ok(query_timeout>1000 && query_timeout<=601000);
           state.calls.push({sql,args,client,query_timeout});
           onQuery?.(sql,args,config);
           if (/^SET |^SELECT set_config/.test(sql)) return {rows:[]};
+          if (sql === 'SELECT pg_backend_pid() AS pid') return {rows:[{pid:7000+state.clients.length}]};
           if (sql.includes('SELECT indisvalid')) {
             assert.deepEqual(args,[indexName]);
             assert.match(sql,/indrelid = 'listeners'::regclass/);
@@ -76,7 +77,7 @@ test('valid normalized index is metadata-only and health never polls the databas
   assert.equal(status.listenerSearchIndexReady,true);
   assert.equal(status.listenerSearchIndexError,'');
   assert.equal(status.listenerSearchIndexPending,false);
-  assert.equal(status.listenerSearchIndexBudgetMs,120000);
+  assert.equal(status.listenerSearchIndexBudgetMs,600000);
   assert.equal(state.calls.length,before);
   assert.ok(!state.calls.some(({sql})=>/CREATE|DROP|pg_try_advisory_lock/.test(sql)));
   assertReleased(state);
@@ -86,10 +87,10 @@ test('missing normalized index builds concurrently with bounded session timeouts
   const {store,state,pool}=fixture();
   assert.equal(await store.initializeListenerSearchIndex(),true);
   assert.ok(state.calls.some(({sql})=>sql === "SET lock_timeout = '30s'"));
-  assert.ok(state.calls.some(({sql})=>sql === "SET statement_timeout = '120s'"));
+  assert.ok(state.calls.some(({sql})=>sql === "SET statement_timeout = '600s'"));
   for (const {args} of state.calls.filter(({sql})=>sql.startsWith('SELECT set_config'))) {
     assert.match(args[0],/^\d+ms$/);
-    assert.ok(parseInt(args[0])>0 && parseInt(args[0])<=120000);
+    assert.ok(parseInt(args[0])>0 && parseInt(args[0])<=600000);
   }
   const ddl=state.calls.find(({sql})=>sql.startsWith('CREATE INDEX')).sql;
   const expression="LOWER(normalize(user_id || ' ' || latest_unique_id || ' ' || latest_nickname || ' ' || notes, NFKC))";
@@ -165,7 +166,7 @@ test('same-store attempts deduplicate and a second store cannot build concurrent
 test('total maintenance budget expires before another DDL attempt', async t => {
   let now=1000;
   t.mock.method(Date,'now',()=>now);
-  const {store,state}=fixture({onQuery(sql){if (sql.includes('SELECT indisvalid')) now=121001;}});
+  const {store,state}=fixture({onQuery(sql){if (sql.includes('SELECT indisvalid')) now=601001;}});
   assert.equal(await store.initializeListenerSearchIndex(),false);
   assert.equal(store.status().listenerSearchIndexError,'57014');
   assert.ok(!state.calls.some(({sql})=>/pg_try_advisory_lock|CREATE|DROP/.test(sql)));
@@ -177,15 +178,15 @@ test('maintenance exceeding the general 35s timeout retains a bounded per-query 
   t.mock.method(Date,'now',()=>now);
   const {store,state}=fixture({onQuery(sql,args,config){
     if (sql.startsWith('CREATE INDEX')) {
-      assert.equal(config.query_timeout,121000);
+      assert.equal(config.query_timeout,601000);
       now+=40000;
     }
   }});
   assert.equal(await store.initializeListenerSearchIndex(),true);
   const last=state.calls.at(-1);
   assert.ok(last.sql.includes('SELECT indisvalid'));
-  assert.equal(last.query_timeout,81000,'driver timeout tracks remaining budget, not the general pool 35s');
-  assert.ok(state.calls.some(({args,sql})=>sql.startsWith('SELECT set_config') && args[0]==='80000ms'));
+  assert.equal(last.query_timeout,561000,'driver timeout tracks remaining budget, not the general pool 35s');
+  assert.ok(state.calls.some(({args,sql})=>sql.startsWith('SELECT set_config') && args[0]==='560000ms'));
   assertReleased(state);
 });
 
@@ -315,5 +316,73 @@ test('close cancels the unref startup retry before closing its pool', async t =>
   assert.equal(store.status().listenerSearchIndexRetryPending,false);
   timers[0].callback();
   assert.equal(state.clients.length,1);
+  assertReleased(state);
+});
+
+test('explicit progress reads only the captured maintenance backend and exposes sanitized counters/waits', async () => {
+  let unblock,started;
+  const building=new Promise(resolve=>{started=resolve;});
+  const gate=new Promise(resolve=>{unblock=resolve;});
+  const {store,state,pool}=fixture({beforeCreate:async()=>{started();await gate;}});
+  const attempt=store.initializeListenerSearchIndex();
+  await building;
+  assert.equal(store.listenerSearchIndexBackendPid,7001);
+  let reads=0;
+  pool.query=async config=>{
+    reads++;
+    assert.equal(config.query_timeout,5000);
+    assert.deepEqual(config.values,[7001]);
+    assert.match(config.text,/WHERE a\.pid = \$1/);
+    assert.doesNotMatch(config.text,/a\.query\b|SELECT \*|INSERT|UPDATE|DELETE|set_config/i);
+    return {rows:[{phase:'waiting for old snapshots',blocks_done:'12',blocks_total:'40',tuples_done:'3',tuples_total:'9',
+      wait_event_type:'Lock',wait_event:'virtualxid',pid:7001,query:'PRIVATE SQL',args:['SECRET'],client_addr:'PRIVATE'}]};
+  };
+  store.status();store.status();
+  assert.equal(reads,0,'health must never poll progress');
+  assert.deepEqual(await store.listenerSearchIndexProgress('ignored arbitrary argument'),{
+    phase:'waiting for old snapshots',blocksDoneTotal:{done:12,total:40},tuplesDoneTotal:{done:3,total:9},
+    waitEventType:'Lock',waitEvent:'virtualxid',indexStage:'building'
+  });
+  pool.query=async()=>({rows:[{phase:{secret:true},blocks_done:-1,blocks_total:Infinity,tuples_done:'NaN',tuples_total:'4',wait_event:123}]});
+  assert.deepEqual(await store.listenerSearchIndexProgress(),{
+    phase:'',blocksDoneTotal:{done:0,total:0},tuplesDoneTotal:{done:0,total:4},waitEventType:'',waitEvent:'',indexStage:'building'
+  });
+  pool.query=async()=>{throw new Error('PRIVATE SQL and connection details');};
+  const failed=await store.listenerSearchIndexProgress();
+  assert.equal(JSON.stringify(failed).includes('PRIVATE'),false);
+  unblock();assert.equal(await attempt,true);
+  assert.equal(store.listenerSearchIndexBackendPid,null);
+  assert.equal(store.listenerSearchIndexBackendPool,null);
+  pool.query=()=>assert.fail('completed maintenance must not query progress');
+  assert.equal((await store.listenerSearchIndexProgress()).indexStage,'ready');
+  assertReleased(state);
+});
+
+test('progress skips unavailable or stale pools and discards a result after the maintenance attempt finishes', async () => {
+  const {store,pool}=fixture();
+  await store.listenerSearchIndexProgress();
+  store.listenerSearchIndexBackendPid=7001;
+  store.listenerSearchIndexBackendPool=pool;
+  store.listenerSearchIndexPromise=Promise.resolve(false);
+  store.ready=false;
+  await store.listenerSearchIndexProgress();
+  store.ready=true;
+  store.listenerSearchIndexBackendPool={};
+  await store.listenerSearchIndexProgress();
+  store.listenerSearchIndexBackendPool=pool;
+  pool.query=async()=>{
+    store.listenerSearchIndexBackendPid=null;
+    return {rows:[{phase:'stale',wait_event:'PRIVATE'}]};
+  };
+  const result=await store.listenerSearchIndexProgress();
+  assert.equal(result.phase,'');assert.equal(result.waitEvent,'');
+});
+
+test('failed maintenance clears its private backend identity', async () => {
+  const {store,state}=fixture({failCreate:'57014'});
+  assert.equal(await store.initializeListenerSearchIndex(),false);
+  assert.equal(store.listenerSearchIndexBackendPid,null);
+  assert.equal(store.listenerSearchIndexBackendPool,null);
+  assert.ok(!Object.keys(store.status()).some(key=>/pid|backendpool/i.test(key)));
   assertReleased(state);
 });
