@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>コメントAI分析 | TikTok LIVE</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: #111827; color: #f8fafc; max-width: 880px; padding: 24px 16px 64px; margin: auto; line-height: 1.65; }
+    a { color: #93c5fd; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    h1 { font-size: 1.65rem; margin-bottom: 8px; }
+    .panel { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 20px; margin: 18px 0; }
+    form { display: grid; gap: 14px; }
+    label { display: grid; gap: 5px; }
+    input { min-width: 0; border-radius: 8px; padding: 11px 12px; border: 1px solid #64748b; background: #111827; color: #fff; font: inherit; }
+    button { border: 0; border-radius: 8px; background: #60a5fa; color: #0f172a; padding: 12px 16px; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .muted { color: #cbd5e1; font-size: .9rem; }
+    #status { min-height: 1.7em; }
+    #report { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 0; }
+    .error { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>配信コメントのAI分析</h1>
+      <p class="muted">保存済みのコメントから、話題・質問・反応・改善点を日本語で要約します。</p>
+    </div>
+    <nav><a href="/listener-manager.html">リスナー台帳へ</a>　<a href="/">配信計測へ</a></nav>
+  </header>
+  <section class="panel">
+    <form id="analysisForm">
+      <label>配信者ID <input id="username" value="mentalist_k" autocomplete="off" required maxlength="40"></label>
+      <label>配信日（日本時間） <input id="day" type="date" required></label>
+      <label>リスナー台帳の管理キー <input id="adminKey" type="password" autocomplete="current-password" required></label>
+      <button id="analyzeButton" type="submit">この日のコメントをAI分析する</button>
+    </form>
+    <p class="muted">ボタンを押した時だけ、最大3,000件のコメント本文をOpenAI APIへ送信します。視聴者ID・表示名は送信しません。電話番号、メール、URLは一部マスクしますが、完全な匿名化は保証できません。結果はサーバーには保存されません。</p>
+    <p class="muted">コメントが3,000件を超える日は新しい3,000件のみ分析します。費用はAPIの実際の使用量により変わります。</p>
+  </section>
+  <section class="panel" aria-live="polite">
+    <p id="status">日付を選んで分析を開始してください。</p>
+    <p class="muted" id="metadata"></p>
+    <pre id="report"></pre>
+  </section>
+  <script type="module">
+    const form = document.querySelector("#analysisForm");
+    const keyField = document.querySelector("#adminKey");
+    const dayField = document.querySelector("#day");
+    const status = document.querySelector("#status");
+    const report = document.querySelector("#report");
+    const metadata = document.querySelector("#metadata");
+    const button = document.querySelector("#analyzeButton");
+    keyField.value = localStorage.getItem("tiktok-listener-admin-key") || "";
+    dayField.value = new Intl.DateTimeFormat("sv-SE", {timeZone:"Asia/Tokyo",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      button.disabled = true;
+      status.className = "";
+      status.textContent = "コメントを取得してAI分析を実行しています…";
+      report.textContent = "";
+      metadata.textContent = "";
+      try {
+        const response = await fetch("/api/listeners/ai-report", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Authorization": "Bearer " + keyField.value.trim(), "Content-Type": "application/json" },
+          body: JSON.stringify({username:document.querySelector("#username").value.trim(), day:dayField.value})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "分析に失敗しました");
+        report.textContent = result.text || "分析文がありません";
+        const usd = typeof result.estimatedUsd === "number" ? result.estimatedUsd.toFixed(5) + "ドル（参考値）" : "取得不可";
+        metadata.textContent = "対象: " + result.analyzedComments.toLocaleString("ja-JP") + "件"
+          + (result.truncated ? "（3,000件の上限で一部を省略）" : "")
+          + " / モデル: " + result.model + " / 推定API料金: " + usd;
+        status.textContent = "分析が完了しました。";
+      } catch (error) {
+        status.className = "error";
+        status.textContent = String(error.message || error);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
