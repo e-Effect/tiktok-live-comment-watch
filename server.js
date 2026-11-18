@@ -13,6 +13,7 @@ import { ViewerLeagues } from "./lib/viewer-leagues.js";
 import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
+import { createDailyCommentReport } from "./lib/comment-ai-report.js";
 import { dailyGiftRewards, rewardStreams, updateGiftReward, RewardError } from "./lib/gift-rewards.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { WelcomeAlerts } from "./lib/welcome-alerts.js";
@@ -72,6 +73,8 @@ const realtimeIntegrationReplay = [];
 const realtimeIntegrationTickets = new Map();
 let connectionPauseUntil = 0;
 let databaseRecoveryPending = false;
+let commentAiInFlight = false;
+let lastCommentAiRequestAt = 0;
 const LISTENER_ADMIN_KEY = String(globalThis.process?.env?.LISTENER_ADMIN_KEY || "").trim();
 const COLLECTOR_INGEST_KEY = String(globalThis.process?.env?.COLLECTOR_INGEST_KEY || "").trim();
 const EXTERNAL_COLLECTOR_ENABLED = String(globalThis.process?.env?.LIVE_SOURCE || "").toLowerCase() === "collector"
@@ -3119,6 +3122,36 @@ const server = createServer(async (request, response) => {
     }
     try { sendJson(response,200,await eventStore.listenerTrialMetrics(options)); }
     catch (error) { sendJson(response,503,{error:shortError(error)}); }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/ai-report" && request.method === "POST") {
+    if (!requireListenerAdmin(request, response)) return;
+    if (!eventStore.ready) { sendJson(response, 503, { error: "データベースの準備中です" }); return; }
+    if (!globalThis.process?.env?.OPENAI_API_KEY) { sendJson(response, 503, { error: "RenderにOPENAI_API_KEYを設定してください" }); return; }
+    if (commentAiInFlight || Date.now() - lastCommentAiRequestAt < 25000) {
+      sendJson(response, 429, { error: "AI分析は25秒以上の間隔を空けて実行してください" }); return;
+    }
+    commentAiInFlight = true;
+    lastCommentAiRequestAt = Date.now();
+    try {
+      const body = await readBody(request);
+      const report = await createDailyCommentReport({
+        pool: eventStore.pool,
+        username: normalizeTikTokUsername(body.username || "mentalist_k"),
+        day: String(body.day || ""),
+        apiKey: globalThis.process.env.OPENAI_API_KEY,
+        model: globalThis.process.env.OPENAI_COMMENT_MODEL || "gpt-6-luna"
+      });
+      sendJson(response, 200, report);
+    } catch (error) {
+      const message = String(error?.message || "AI分析に失敗しました");
+      const status = /日付|配信者ID|未来|利用できない/.test(message) ? 400
+        : /OPENAI_API_KEY/.test(message) ? 503 : 502;
+      sendJson(response, status, { error: message });
+    } finally {
+      commentAiInFlight = false;
+    }
     return;
   }
 
