@@ -25,6 +25,22 @@ export function setupCommentHistory(list,getContext) {
   const profile=document.getElementById('viewerCommentHistoryProfile');
   const profileStatus=document.getElementById('viewerCommentHistoryProfileStatus');
   const storageKey='tiktok-listener-admin-key';
+  const topic=document.getElementById('viewerPreviousTopic');
+  async function loadTopic(key,ticket,signal) {
+    if(!topic || !target.sessionId)return;
+    const text=document.getElementById('viewerPreviousText'),date=document.getElementById('viewerPreviousDate');
+    topic.hidden=false;date.textContent='';text.textContent='確認中…';
+    try {
+      const r=await fetch('/api/listeners/previous-comment-note',{method:'POST',
+        headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
+        body:JSON.stringify({sessionId:target.sessionId,userId:target.userId}),signal,cache:'no-store'});
+      if(!r.ok)throw Error();
+      const data=await r.json();
+      if(ticket!==revision||!dialog.open)return;
+      date.textContent=data.at?new Date(data.at).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):'';
+      text.textContent=data.note||(data.at?'まとめられる話題はありません。':'以前の配信でのコメント記録はありません。');
+    } catch {if(ticket===revision&&dialog.open)text.textContent='現在、要約を表示できません。';}
+  }
   let target=null,controller=null,revision=0;
   const cancel=()=>{revision++;controller?.abort();controller=null;};
   const clearVisits=()=>{visits.hidden=true;visitStatus.textContent='';visitResults.replaceChildren();};
@@ -70,6 +86,7 @@ export function setupCommentHistory(list,getContext) {
   async function load(key) {
     cancel();const ticket=revision;controller=new AbortController();
     results.replaceChildren();clearVisits();retry.hidden=true;
+    if(topic)topic.hidden=true;
     if(!key){keyForm.hidden=false;status.textContent='履歴を見るには台帳の管理キーを入力してください。';keyInput.focus();return;}
     keyForm.hidden=true;status.textContent='履歴を読み込んでいます…';
     loadProfile(key,ticket,controller.signal);
@@ -82,6 +99,7 @@ export function setupCommentHistory(list,getContext) {
       if(ticket!==revision || !dialog.open)return;
       localStorage.setItem(storageKey,key);keyInput.value='';
       showVisits(data.recentVisits);
+      void loadTopic(key,ticket,controller.signal);
       const items=(data.items||[]).slice(0,commentHistoryLimit);
       status.textContent=items.length?`保存済みの最新${items.length}件です。直前のコメントは保存待ちの場合があります。`:'保存済みのコメントはまだありません。';
       for(const item of items){
@@ -97,7 +115,8 @@ export function setupCommentHistory(list,getContext) {
   const open=row=>{
     const context=getContext();
     if(!row?.dataset.userId || !context?.username)return;
-    cancel();target={userId:row.dataset.userId,username:context.username,uniqueId:row.dataset.uniqueId||''};
+    cancel();target={userId:row.dataset.userId,username:context.username,sessionId:context.sessionId,uniqueId:row.dataset.uniqueId||''};
+    if(topic)topic.hidden=true;
     showProfile(context.preview?'':target.uniqueId);
     title.textContent=`${row.dataset.userName||target.userId}さんの履歴`;
     if(!dialog.open)dialog.showModal();

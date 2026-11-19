@@ -1,4 +1,4 @@
-import { setupCommentHistory } from './viewer-comment-history.js?v=20261114-history30';
+import { setupCommentHistory } from './viewer-comment-history.js?v=20261119-prior-note';
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 import {createSnapshotGuard, patchCommentRows} from './viewer-updates.js?v=20261024-stability1';
 import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records1';
@@ -1778,7 +1778,7 @@ function renderMetrics(snapshot) {
   if (visitorCount) visitorCount.textContent = formatNumber(snapshot.viewerStats?.knownJoins || 0);
 }
 
-setupCommentHistory([commentList, visitorHistory, giftHistory, shareHistory],()=>({username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
+setupCommentHistory([commentList, visitorHistory, giftHistory, shareHistory],()=>({sessionId:selectedSessionId,username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
 
 function renderComments(comments) {
   const context = `${selectedSessionId}:${visitorDemoActive}`;
