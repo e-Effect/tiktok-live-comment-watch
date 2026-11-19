@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TikTok LIVE 配信計測</title>
-    <link rel="stylesheet" href="/styles.css?v=20261110-watch1">
+    <link rel="stylesheet" href="/styles.css?v=20261119-live-ai1">
+    <link rel="stylesheet" href="/live-workspace.css?v=20261119-live-ai1">
   </head>
   <body>
     <header class="app-topbar">
@@ -111,14 +112,19 @@
             </div>
             <h2>表示項目</h2>
             <label><input id="singleModeToggle" type="checkbox"> 1配信モード</label>
-            <label><input type="checkbox" data-panel-toggle="metrics" checked> 上部集計（コメント数～確認来訪）</label>
-            <label><input type="checkbox" data-panel-toggle="report" checked> 集計レポート</label>
+            <label><input type="checkbox" data-panel-toggle="metrics"> 上部集計（コメント数～確認来訪）</label>
+            <label><input type="checkbox" data-panel-toggle="report"> 集計レポート</label>
             <label><input type="checkbox" data-panel-toggle="visitors" checked> 入室履歴</label>
             <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
+            <label><input type="checkbox" data-panel-toggle="aiAssist" checked> AI補足</label>
             <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
-            <label><input type="checkbox" data-panel-toggle="users" checked> ユーザー別コメント数</label>
+            <label><input type="checkbox" data-panel-toggle="users"> ユーザー別コメント数</label>
             <label><input type="checkbox" data-panel-toggle="giftHistory" checked> ギフト履歴</label>
-            <label><input type="checkbox" data-panel-toggle="screenshotRecords" checked> スクショ記録ID</label>
+            <label><input type="checkbox" data-panel-toggle="screenshotRecords"> スクショ記録ID</label>
+            <fieldset class="workspace-mode"><legend>画面配置</legend>
+              <label><input type="radio" name="workspaceMode" value="live" checked> 配信向け</label>
+              <label><input type="radio" name="workspaceMode" value="custom"> 自由配置（従来）</label>
+            </fieldset>
             <div class="layout-tools">
               <label><input id="layoutEditToggle" type="checkbox"> レイアウト編集</label>
               <button id="resetLayoutBtn" type="button">初期配置</button>
@@ -187,6 +193,15 @@
             <div id="commentList" class="list">
               <p class="empty">接続するとコメントがここに流れます。</p>
             </div>
+          </section>
+
+          <section data-panel="aiAssist" aria-labelledby="aiAssistHeading">
+            <div class="ai-assist-heading"><h2 id="aiAssistHeading">AI補足</h2>
+              <label class="ai-switch"><input id="aiAssistEnabled" type="checkbox" role="switch" checked aria-label="AI補足の自動取得"><span aria-hidden="true"></span></label>
+            </div>
+            <div class="ai-assist-state"><span id="aiAssistStatus" role="status">配信を選択してください</span><small id="aiAssistUsage"></small></div>
+            <form id="aiAssistKeyForm" hidden><label>台帳の管理キー<input id="aiAssistKey" type="password" autocomplete="current-password" required></label><button type="submit">接続</button></form>
+            <div id="aiAssistList" class="list ai-assist-list" aria-live="polite"><p class="empty">補足が必要なコメントを待っています。</p></div>
           </section>
 
           <section data-panel="visitors">
@@ -272,6 +287,6 @@
       <form id="viewerCommentHistoryKeyForm" hidden><label>台帳の管理キー<input id="viewerCommentHistoryKey" type="password" autocomplete="current-password" required></label><button type="submit">履歴を開く</button></form>
       <ol id="viewerCommentHistoryItems"></ol><button id="viewerCommentHistoryRetry" type="button" hidden>再取得</button>
     </dialog>
-    <script src="/app.js?v=20261114-history30" type="module"></script>
+    <script src="/app.js?v=20261119-live-ai1" type="module"></script>
   </body>
 </html>
