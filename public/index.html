@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TikTok LIVE 配信計測</title>
     <link rel="stylesheet" href="/styles.css?v=20261119-live-ai1">
-    <link rel="stylesheet" href="/live-workspace.css?v=20261119-live-ai2">
+    <link rel="stylesheet" href="/live-workspace.css?v=20261119-ai-quality1">
   </head>
   <body>
     <header class="app-topbar">
@@ -71,6 +71,7 @@
         <nav class="settings-tabs" aria-label="設定項目">
           <button type="button" data-settings-tab="accounts" class="active">アカウント</button>
           <button type="button" data-settings-tab="display">表示</button>
+          <button type="button" data-settings-tab="ai">AI補足</button>
         </nav>
 
         <div class="settings-page active" data-settings-page="accounts">
@@ -132,6 +133,17 @@
           </section>
         </div>
 
+        <div class="settings-page" data-settings-page="ai" hidden>
+          <section class="ai-quality-settings" aria-labelledby="aiQualityTitle">
+            <h2 id="aiQualityTitle">AIの賢さ</h2>
+            <fieldset class="ai-quality-options"><legend class="sr-only">AIの賢さ</legend>
+              <label><input type="radio" name="aiQuality" value="fast" checked><span><strong>速さ優先</strong><small>GPT-6 Luna · 消費 少</small></span></label>
+              <label><input type="radio" name="aiQuality" value="balanced"><span><strong>標準</strong><small>GPT-6.1 Terra · 消費 中</small></span></label>
+              <label><input type="radio" name="aiQuality" value="smart"><span><strong>賢さ優先</strong><small>GPT-6.2 Sol · 消費 多</small></span></label>
+            </fieldset>
+            <p id="aiQualityStatus" class="ai-quality-status" role="status">保存済み</p>
+          </section>
+        </div>
       </aside>
 
       <section class="dashboard" aria-live="polite">
@@ -287,6 +299,6 @@
       <form id="viewerCommentHistoryKeyForm" hidden><label>台帳の管理キー<input id="viewerCommentHistoryKey" type="password" autocomplete="current-password" required></label><button type="submit">履歴を開く</button></form>
       <ol id="viewerCommentHistoryItems"></ol><button id="viewerCommentHistoryRetry" type="button" hidden>再取得</button>
     </dialog>
-    <script src="/app.js?v=20261119-live-ai1" type="module"></script>
+    <script src="/app.js?v=20261119-ai-quality1" type="module"></script>
   </body>
 </html>
