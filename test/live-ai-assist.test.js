@@ -8,6 +8,28 @@ const item = { index: 0, kind: 'word', title: '系統的脱感作法', reading: 
 const response = (items = [item]) => ({ ok: true, json: async () => ({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ items }) }] }] }) });
 const comment = (text, extra = {}) => ({ id: 'message', text, nickname: 'DO-NOT-SEND-NAME', userId: 'DO-NOT-SEND-ID', at: Date.now(), ...extra });
 
+test('four busy hours fit the budget; greetings are free and new questions outrank chatter', async t => {
+  let now = Date.now(), calls = 0, latest;
+  const ai = new LiveAiAssist({apiKey:'fixture', now:()=>now, fetchImpl:async (_,options)=>{
+    calls++; latest = JSON.parse(JSON.parse(options.body).input); return response([]);
+  }});
+  t.after(()=>ai.dispose());
+  const submit = text => ai.submit('s',comment(text,{at:now}));
+  ai.configure('s',true);
+  for (const s of ['こんにちは！','ありがとう😊','うんうん','すごーい！']) submit(s);
+  await ai.run(); assert.equal(calls,0);
+  submit('イングリッシュマフィン'); await ai.run(); assert.equal(calls,1);
+  submit('最初の質問？'); await ai.run(); assert.equal(calls,2);
+  for(let i=0;i<20;i++) submit('雑談ですよ'+i);
+  submit('次の質問は？'); await ai.run(); assert.equal(calls,2);
+  now+=72000; await ai.run(); assert.equal(latest[0].comment,'次の質問は?');
+  const start=now-72000;
+  for(;now<start+4*3600000;now+=2000) {
+    ai.snapshot('s',{renew:true}); submit('問題'+((now-start)/2000).toString(36)+'？'); await ai.run();
+  }
+  assert.equal(calls,400);
+});
+
 test('AI is opt-in, ignores initial history and stale events, and never sends viewer identity', async t => {
   let body;
   const assist = new LiveAiAssist({ apiKey: 'test-key', fetchImpl: async (_, options) => { body = JSON.parse(options.body); return response(); } });
