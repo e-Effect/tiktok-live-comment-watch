@@ -42,6 +42,7 @@ gift, visit, stamp, or receipt records. The daily AI analysis feature remains.
   by this release.
 - Viewer activation expires after two minutes without authenticated viewer
   polling. Closing the browser cannot leave AI billing active indefinitely.
+- Unchanged viewer polls return metadata only, not the full 60-note history.
 - Old/initial comments are not backfilled. Repeated identical text is suppressed
   for two minutes. Overflow or API failure skips AI only, never original events.
 - Pi digit questions use decimal.js for up to 1000 decimal places, explaining

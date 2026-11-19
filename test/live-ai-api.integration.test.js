@@ -31,6 +31,9 @@ test('live AI endpoint requires admin, only follows opt-in fresh comments and le
   const feed = await (await fetch(base + path, { headers: admin })).json();
   assert.equal(feed.items.length, 1);
   assert.equal(feed.items[0].confidence, 'verified');
+  const unchanged = await (await fetch(base + path + `?version=${feed.version}`, { headers: admin })).json();
+  assert.equal(unchanged.unchanged, true);
+  assert.equal(unchanged.items, undefined, 'idle polls do not retransmit the full AI feed');
   const snapshot = await (await fetch(base + `/api/session/${session.id}/snapshot`)).json();
   assert.equal(snapshot.commentCount, 1);
   assert.equal(snapshot.comments[0].text, '円周率の10桁目は？');

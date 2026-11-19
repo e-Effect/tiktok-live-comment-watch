@@ -66,7 +66,8 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   async function request(method, body, signal) {
     const key = storage.getItem(ADMIN) || '';
     if (!key) throw new Error('auth');
-    const response = await fetchImpl(`/api/session/${encodeURIComponent(session.id)}/ai-assist`, {
+    const since = method === 'GET' && lastVersion !== null ? `?version=${encodeURIComponent(lastVersion)}` : '';
+    const response = await fetchImpl(`/api/session/${encodeURIComponent(session.id)}/ai-assist${since}`, {
       method, headers: { Authorization: `Bearer ${key}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}), cache: 'no-store', signal
     });

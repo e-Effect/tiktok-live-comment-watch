@@ -3283,7 +3283,11 @@ const server = createServer(async (request, response) => {
     if (action === 'ai-assist' && ['GET', 'POST'].includes(request.method)) {
       if (!requireListenerAdmin(request, response)) return;
       if (request.method === 'GET') {
-        sendJson(response, 200, liveAi.snapshot(session.id, { renew: true }));
+        const result = liveAi.snapshot(session.id, { renew: true });
+        if (url.searchParams.get('version') === String(result.version)) {
+          const { items, ...status } = result;
+          sendJson(response, 200, { ...status, unchanged: true });
+        } else sendJson(response, 200, result);
       } else {
         try {
           const body = await readBody(request);
