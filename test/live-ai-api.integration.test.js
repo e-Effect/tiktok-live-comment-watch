@@ -24,6 +24,13 @@ test('live AI endpoint requires admin, only follows opt-in fresh comments and le
   assert.equal((await post(path, { enabled: 'true' })).status, 400);
   assert.equal((await (await fetch(base + path, { headers: admin })).json()).enabled, false);
   assert.equal((await post(path, { enabled: true })).status, 200);
+  assert.equal((await (await post(path, { enabled: true, mode: 'smart' })).json()).mode, 'smart');
+  for (const mode of ['invalid', '__proto__', 'gpt-6.2-astra', null, 1]) {
+    assert.equal((await post(path, { enabled: false, mode })).status, 400);
+  }
+  const unchangedSettings = await (await fetch(base + path, { headers: admin })).json();
+  assert.equal(unchangedSettings.enabled, true);
+  assert.equal(unchangedSettings.mode, 'smart');
   const ingest = await post('/api/collector/events', { streamUsername: 'ai_test_host', events: [
     { event: 'chat', data: { msgId: 'pi-unique-fixture', comment: '円周率の10桁目は？', user: { id: 'pi-viewer', uniqueId: 'pi_viewer', nickname: 'viewer' } } }
   ] }, { Authorization: 'Bearer ai-collector-fixture' });
@@ -31,6 +38,8 @@ test('live AI endpoint requires admin, only follows opt-in fresh comments and le
   const feed = await (await fetch(base + path, { headers: admin })).json();
   assert.equal(feed.items.length, 1);
   assert.equal(feed.items[0].confidence, 'verified');
+  assert.equal(feed.mode, 'smart');
+  assert.equal(feed.model, 'gpt-6.2-sol');
   const unchanged = await (await fetch(base + path + `?version=${feed.version}`, { headers: admin })).json();
   assert.equal(unchanged.unchanged, true);
   assert.equal(unchanged.items, undefined, 'idle polls do not retransmit the full AI feed');

@@ -1,6 +1,8 @@
 const PREF = 'tiktok-live-ai-assist-enabled';
 const ADMIN = 'tiktok-listener-admin-key';
 const LABELS = { answer: '回答候補', word: 'ことば', reading: '読み方', quiz: 'なぞなぞ', check: '要確認' };
+const AI_MODE_PREF = 'tiktok-live-ai-quality-v1';
+const AI_MODE_LABELS = { fast: '速さ優先', balanced: '標準', smart: '賢さ優先' };
 
 export function renderAssistItems(root, items, document = root.ownerDocument) {
   const fragment = document.createDocumentFragment();
@@ -11,6 +13,7 @@ export function renderAssistItems(root, items, document = root.ownerDocument) {
     const type = document.createElement('span');
     type.className = 'ai-kind';
     type.textContent = item.confidence === 'verified' ? '計算確認済み' : LABELS[item.kind] || '補足';
+    if (item.confidence !== 'verified' && Object.hasOwn(AI_MODE_LABELS, item.mode)) type.textContent += ` · ${AI_MODE_LABELS[item.mode]}`;
     const time = document.createElement('time');
     time.textContent = new Date(item.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     header.append(type, time);
@@ -55,6 +58,9 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   const keyForm = root.querySelector('#aiAssistKeyForm');
   const keyInput = root.querySelector('#aiAssistKey');
   const usage = root.querySelector('#aiAssistUsage');
+  const modeInputs = [...root.ownerDocument.querySelectorAll('[name="aiQuality"]')];
+  const modeStatus = root.ownerDocument.querySelector('#aiQualityStatus');
+  let selectedMode = Object.hasOwn(AI_MODE_LABELS, storage.getItem(AI_MODE_PREF)) ? storage.getItem(AI_MODE_PREF) : 'fast';
   let session = null;
   let generation = 0;
   let timer = null;
@@ -62,6 +68,10 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   let lastVersion = null;
   let configuredGeneration = -1;
   toggle.checked = storage.getItem(PREF) !== 'false';
+  const syncMode = () => modeInputs.forEach(input => { input.checked = input.value === selectedMode; });
+  const setModeStatus = text => { if (modeStatus) modeStatus.textContent = text; };
+  syncMode();
+  setModeStatus('保存済み');
 
   async function request(method, body, signal) {
     const key = storage.getItem(ADMIN) || '';
@@ -86,10 +96,11 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   async function refresh() {
     const current = generation;
     clearTimeout(timer);
-    if (!session?.id) { status.textContent = '配信を選択してください'; keyForm.hidden = true; return; }
+    if (!session?.id) { status.textContent = '配信を選択してください'; keyForm.hidden = true; setModeStatus('次の配信に適用'); return; }
     if (!storage.getItem(ADMIN)) {
       status.textContent = toggle.checked ? '管理キーで接続' : '停止中';
       keyForm.hidden = !toggle.checked;
+      setModeStatus('管理キーで接続');
       return;
     }
     const activeController = new AbortController();
@@ -99,11 +110,19 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
     try {
       const ended = Boolean(session.stoppedAt) || ['stopped', 'ended'].includes(session.status);
       const data = await request(configuredGeneration === current || ended ? 'GET' : 'POST',
-        configuredGeneration === current || ended ? null : { enabled: toggle.checked }, activeController.signal);
+        configuredGeneration === current || ended ? null : { enabled: toggle.checked, mode: selectedMode }, activeController.signal);
       if (current !== generation) return;
       configuredGeneration = current;
       keyForm.hidden = true;
-      status.textContent = !data.configured ? 'APIキー未設定' : data.error || (ended ? '配信終了' : !data.enabled ? '停止中' : data.pending ? `補足を確認中 · ${data.pending}件` : '自動補足 ON');
+      if (!ended && Object.hasOwn(AI_MODE_LABELS, data.mode) && selectedMode !== data.mode) {
+        selectedMode = data.mode;
+        storage.setItem(AI_MODE_PREF, selectedMode);
+        syncMode();
+      }
+      setModeStatus(ended ? '次の配信に適用' : data.configured ? '適用済み' : 'APIキー未設定');
+      const stateText = ended ? '配信終了' : !data.enabled ? '停止中' : data.pending ? `補足を確認中 · ${data.pending}件` : '自動補足 ON';
+      const appliedLabel = AI_MODE_LABELS[data.mode] || '';
+      status.textContent = !data.configured ? 'APIキー未設定' : data.error || `${stateText}${appliedLabel ? ` · ${appliedLabel}` : ''}`;
       usage.textContent = `直近24h ${data.dailyCalls} / ${data.dailyLimit} 回${data.skipped ? ` · 省略 ${data.skipped}件` : ''}`;
       if (lastVersion !== data.version) {
         lastVersion = data.version;
@@ -117,6 +136,7 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
       retry = error.message !== 'auth';
       keyForm.hidden = error.message !== 'auth' || !toggle.checked;
       status.textContent = error.message === 'auth' ? '管理キーで接続' : 'AI補足は再接続待ち';
+      setModeStatus(error.message === 'auth' ? '管理キーで接続' : '未反映・再接続待ち');
     } finally {
       clearTimeout(timeout);
       if (retry && current === generation && session?.id) timer = setTimeout(refresh, document.hidden ? 15000 : 2500);
@@ -125,6 +145,22 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
 
   toggle.addEventListener('change', () => {
     storage.setItem(PREF, String(toggle.checked));
+    cancel();
+    void refresh();
+  });
+  modeInputs.forEach(input => input.addEventListener('change', () => {
+    if (!input.checked || !Object.hasOwn(AI_MODE_LABELS, input.value)) return;
+    selectedMode = input.value;
+    storage.setItem(AI_MODE_PREF, selectedMode);
+    syncMode();
+    setModeStatus('反映中…');
+    cancel();
+    void refresh();
+  }));
+  window.addEventListener('storage', event => {
+    if (event.key !== AI_MODE_PREF || !Object.hasOwn(AI_MODE_LABELS, event.newValue)) return;
+    selectedMode = event.newValue;
+    syncMode();
     cancel();
     void refresh();
   });

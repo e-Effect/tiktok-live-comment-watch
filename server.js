@@ -14,7 +14,7 @@ import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
 import { createDailyCommentReport } from "./lib/comment-ai-report.js";
-import { LiveAiAssist } from './lib/live-ai-assist.js';
+import { LiveAiAssist, isAiMode } from './lib/live-ai-assist.js';
 import { dailyGiftRewards, rewardStreams, updateGiftReward, RewardError } from "./lib/gift-rewards.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { WelcomeAlerts } from "./lib/welcome-alerts.js";
@@ -3293,10 +3293,12 @@ const server = createServer(async (request, response) => {
           const body = await readBody(request);
           if (typeof body.enabled !== 'boolean') {
             sendJson(response, 400, { error: 'enabledは真偽値で指定してください。' });
+          } else if (body.mode !== undefined && !isAiMode(body.mode)) {
+            sendJson(response, 400, { error: 'AIの賢さは速さ優先・標準・賢さ優先から選択してください。' });
           } else if (body.enabled && session.stoppedAt) {
             sendJson(response, 409, { error: '次の配信でAI補足を開始します。' });
           } else {
-            sendJson(response, 200, liveAi.configure(session.id, body.enabled));
+            sendJson(response, 200, liveAi.configure(session.id, body.enabled, body.mode));
           }
         } catch {
           sendJson(response, 400, { error: 'AI補足の設定を読み取れませんでした。' });
