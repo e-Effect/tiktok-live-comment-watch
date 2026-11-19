@@ -136,6 +136,7 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { cancel(); void refresh(); } });
   window.addEventListener('pagehide', cancel);
+  for (const event of ['pageshow', 'online']) window.addEventListener(event, () => { cancel(); void refresh(); });
   return { setSession(next) {
     if (session?.id === next?.id && session?.status === next?.status && session?.stoppedAt === next?.stoppedAt) return;
     const changedId = session?.id !== next?.id;
