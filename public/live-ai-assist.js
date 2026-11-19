@@ -1,8 +1,8 @@
 const PREF = 'tiktok-live-ai-assist-enabled';
 const ADMIN = 'tiktok-listener-admin-key';
 const LABELS = { answer: '回答候補', word: 'ことば', reading: '読み方', quiz: 'なぞなぞ', check: '要確認' };
-const AI_MODE_PREF = 'tiktok-live-ai-quality-v1';
-const AI_MODE_LABELS = { fast: '速さ優先', balanced: '標準', smart: '賢さ優先' };
+const AI_MODE_PREF = 'tiktok-live-ai-quality-v2';
+const AI_MODE_LABELS = { fast: '1. 即答', light: '2. 軽く考える', thoughtful: '3. しっかり考える', balanced: '4. Terra標準', smart: '5. Terra熟考' };
 
 export function renderAssistItems(root, items, document = root.ownerDocument) {
   const fragment = document.createDocumentFragment();

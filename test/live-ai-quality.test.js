@@ -6,7 +6,7 @@ const sample = (text, extra = {}) => ({ id: text, text, at: Date.now(), ...extra
 const answer = { index: 0, kind: 'word', title: '用語', reading: 'ようご', answer: '説明', detail: '', confidence: 'candidate' };
 const reply = () => ({ ok: true, json: async () => ({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ items: [answer] }) }] }] }) });
 
-test('all three profiles send their actual model, effort and output budget; fast retains previous behavior', async t => {
+test('all five profiles send their actual model, effort and output budget; fast retains previous behavior', async t => {
   const requests = [];
   const ai = new LiveAiAssist({ apiKey: 'fixture', fetchImpl: async (_, options) => { requests.push(JSON.parse(options.body)); return reply(); } });
   t.after(() => ai.dispose());
@@ -25,7 +25,7 @@ test('all three profiles send their actual model, effort and output budget; fast
   }
   assert.equal(requests[0].max_output_tokens, 1800);
   assert.equal(requests[0].reasoning.effort, 'none');
-  assert.equal(ai.snapshot('s').items.length, 3, 'switching quality preserves existing supplements');
+  assert.equal(ai.snapshot('s').items.length, 5, 'switching quality preserves existing supplements');
 });
 
 test('invalid or arbitrary model choices cannot change server configuration', t => {

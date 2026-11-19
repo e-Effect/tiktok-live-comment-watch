@@ -6,7 +6,7 @@ import { JSDOM } from 'jsdom';
 
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const source = readFileSync(new URL('../public/live-ai-assist.js', import.meta.url), 'utf8').replace(/^export /gm, '');
-const pref = 'tiktok-live-ai-quality-v1';
+const pref = 'tiktok-live-ai-quality-v2';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture(t, fetchImpl, mode) {
   const dom = new JSDOM(html, { url: 'https://viewer.test/', runScripts: 'outside-only' });
@@ -24,6 +24,25 @@ function choose({ dom, doc }, mode) {
 }
 const reply = (mode = 'fast') => ({ ok: true, status: 200, json: async () => ({ configured: true, enabled: true, mode, version: 1, items: [], dailyCalls: 0, dailyLimit: 600 }) });
 
+test('all five radio buttons apply the requested profile and persist it', async t => {
+  const posted = [];
+  const fx = fixture(t, async (_, options) => {
+    const { mode } = JSON.parse(options.body);
+    posted.push(mode);
+    return reply(mode);
+  });
+  const modes = ['fast', 'light', 'thoughtful', 'balanced', 'smart'];
+  assert.deepEqual([...fx.doc.querySelectorAll('[name="aiQuality"]')].map(r => r.value), modes);
+  fx.ui.setSession({ id: 's', status: 'connected' });
+  await tick();
+  for (const mode of modes.slice(1)) {
+    choose(fx, mode);
+    await tick();
+    assert.equal(fx.storage.getItem(pref), mode);
+  }
+  assert.deepEqual(posted, modes);
+});
+
 test('settings keeps the selected mode without an active stream and applies it after reopening', async t => {
   let requests = 0;
   const first = fixture(t, async () => { requests++; return reply(); });
@@ -38,7 +57,7 @@ test('settings keeps the selected mode without an active stream and applies it a
   await tick();
   assert.equal(body.mode, 'smart');
   assert.equal(reopened.doc.querySelector('[name="aiQuality"]:checked').value, 'smart');
-  assert.match(reopened.doc.querySelector('#aiAssistStatus').textContent, /賢さ優先/);
+  assert.match(reopened.doc.querySelector('#aiAssistStatus').textContent, /Terra熟考/);
 });
 
 test('an older mode response cannot overwrite a newer choice', async t => {
@@ -53,7 +72,7 @@ test('an older mode response cannot overwrite a newer choice', async t => {
   await tick();
   assert.equal(fx.storage.getItem(pref), 'smart');
   assert.equal(fx.doc.querySelector('[name="aiQuality"]:checked').value, 'smart');
-  assert.match(fx.doc.querySelector('#aiAssistStatus').textContent, /賢さ優先/);
+  assert.match(fx.doc.querySelector('#aiAssistStatus').textContent, /Terra熟考/);
 });
 
 test('ended-stream metadata does not erase the quality preference for the next stream', async t => {

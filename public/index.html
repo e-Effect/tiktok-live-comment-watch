@@ -137,9 +137,11 @@
           <section class="ai-quality-settings" aria-labelledby="aiQualityTitle">
             <h2 id="aiQualityTitle">AIの賢さ</h2>
             <fieldset class="ai-quality-options"><legend class="sr-only">AIの賢さ</legend>
-              <label><input type="radio" name="aiQuality" value="fast" checked><span><strong>速さ優先</strong><small>GPT-6 Luna · 消費 少</small></span></label>
-              <label><input type="radio" name="aiQuality" value="balanced"><span><strong>標準</strong><small>GPT-6.1 Terra · 消費 中</small></span></label>
-              <label><input type="radio" name="aiQuality" value="smart"><span><strong>賢さ優先</strong><small>GPT-6.2 Sol · 消費 多</small></span></label>
+              <label><input type="radio" name="aiQuality" value="fast" checked><span><strong>1. 即答（標準）</strong><small>GPT-6 Luna</small></span></label>
+              <label><input type="radio" name="aiQuality" value="light"><span><strong>2. 軽く考える</strong><small>GPT-6 Luna</small></span></label>
+              <label><input type="radio" name="aiQuality" value="thoughtful"><span><strong>3. しっかり考える</strong><small>GPT-6 Luna</small></span></label>
+              <label><input type="radio" name="aiQuality" value="balanced"><span><strong>4. Terra標準</strong><small>GPT-6.1 Terra</small></span></label>
+              <label><input type="radio" name="aiQuality" value="smart"><span><strong>5. Terra熟考</strong><small>GPT-6.1 Terra</small></span></label>
             </fieldset>
             <p id="aiQualityStatus" class="ai-quality-status" role="status">保存済み</p>
           </section>
@@ -299,6 +301,6 @@
       <form id="viewerCommentHistoryKeyForm" hidden><label>台帳の管理キー<input id="viewerCommentHistoryKey" type="password" autocomplete="current-password" required></label><button type="submit">履歴を開く</button></form>
       <ol id="viewerCommentHistoryItems"></ol><button id="viewerCommentHistoryRetry" type="button" hidden>再取得</button>
     </dialog>
-    <script src="/app.js?v=20261119-ai-quality1" type="module"></script>
+    <script src="/app.js?v=20261119-ai-five1" type="module"></script>
   </body>
 </html>
