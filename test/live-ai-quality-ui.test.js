@@ -72,3 +72,28 @@ test('unknown saved values safely default to fast and authentication failure doe
   await tick();
   assert.equal(fx.doc.querySelector('#aiQualityStatus').textContent, '管理キーで接続');
 });
+
+test('fresh server state restores saved quality but an explicit OFF is not undone', async t => {
+  const requests = [];
+  let next = null;
+  const fx = fixture(t, async (url, options) => {
+    requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : null });
+    if (next) { const result = next; next = null; return result; }
+    return reply('smart');
+  }, 'smart');
+  const polls = [];
+  const originalTimeout = fx.dom.window.setTimeout.bind(fx.dom.window);
+  fx.dom.window.setTimeout = (callback, delay, ...args) => [2500, 15000].includes(delay) ? (polls.push(callback), 987654) : originalTimeout(callback, delay, ...args);
+  fx.ui.setSession({ id: 's', status: 'connected' });
+  await tick();
+  next = { ok: true, status: 200, json: async () => ({ configured: true, enabled: false, mode: 'fast', version: 0, items: [], dailyCalls: 0, dailyLimit: 600 }) };
+  await polls.shift()();
+  assert.equal(requests.at(-1).method, 'POST');
+  assert.equal(requests.at(-1).body.mode, 'smart');
+  assert.equal(fx.storage.getItem(pref), 'smart');
+  const priorPosts = requests.filter(row => row.method === 'POST').length;
+  next = { ok: true, status: 200, json: async () => ({ configured: true, enabled: false, mode: 'smart', version: 2, items: [], dailyCalls: 0, dailyLimit: 600 }) };
+  await polls.shift()();
+  assert.equal(requests.filter(row => row.method === 'POST').length, priorPosts);
+  assert.match(fx.doc.querySelector('#aiAssistStatus').textContent, /停止中/);
+});
