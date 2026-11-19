@@ -109,9 +109,14 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
     const timeout = setTimeout(() => activeController.abort(), 10000);
     try {
       const ended = Boolean(session.stoppedAt) || ['stopped', 'ended'].includes(session.status);
-      const data = await request(configuredGeneration === current || ended ? 'GET' : 'POST',
+      let data = await request(configuredGeneration === current || ended ? 'GET' : 'POST',
         configuredGeneration === current || ended ? null : { enabled: toggle.checked, mode: selectedMode }, activeController.signal);
       if (current !== generation) return;
+      // Only version zero is an unconfigured server state, not another viewer's OFF command.
+      if (!ended && data.version === 0 && !data.enabled && (toggle.checked || data.mode !== selectedMode)) {
+        data = await request('POST', { enabled: toggle.checked, mode: selectedMode }, activeController.signal);
+        if (current !== generation) return;
+      }
       configuredGeneration = current;
       keyForm.hidden = true;
       if (!ended && Object.hasOwn(AI_MODE_LABELS, data.mode) && selectedMode !== data.mode) {
