@@ -15,6 +15,7 @@ import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/earl
 import { searchComments } from "./lib/comment-search.js";
 import { createDailyCommentReport } from "./lib/comment-ai-report.js";
 import {createPreviousNoteService} from "./lib/previous-comment-note.js";
+import {listAnswers,importReviewed,scanAnswers} from "./lib/performance-answers.js";
 import { LiveAiAssist, isAiMode } from './lib/live-ai-assist.js';
 import { dailyGiftRewards, rewardStreams, updateGiftReward, RewardError } from "./lib/gift-rewards.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
@@ -3135,6 +3136,18 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/listeners/reviewed-performance-answer" && request.method === "POST") {
+    if (!requireListenerAdmin(request,response)) return;
+    try {
+      const {eventKey,userId,summary}=await readBody(request);
+      if (![eventKey,userId,summary].every(v=>typeof v==="string" && v.trim() && v.length<=600)) {
+        sendJson(response,400,{error:"invalid answer"});return;
+      }
+      const saved=await importReviewed(eventStore.pool,eventKey,userId,summary);
+      sendJson(response,saved?200:404,{saved});
+    }catch{sendJson(response,503,{error:"回答を保存できませんでした。"});}
+    return;
+  }
   if (url.pathname === "/api/listeners/previous-comment-note" && request.method === "POST") {
     if (!requireListenerAdmin(request,response)) return;
     try {
@@ -3219,13 +3232,15 @@ const server = createServer(async (request, response) => {
       const username=normalizeTikTokUsername(url.searchParams.get("username") || "");
       const kind=url.searchParams.get("kind")==="visits"?"visits":"comments";
       const withVisits=kind==="comments"&&url.searchParams.get("includeVisits")==="1";
-      const [history,recentVisits]=await Promise.all([
+      const withAnswers=withVisits && username && url.searchParams.get("includeAnswers")==="1";
+      const [history,recentVisits,performanceAnswers]=await Promise.all([
         eventStore.listenerHistory(userId,{username,kind,
           limit:withVisits?30:Number(url.searchParams.get("limit")||200),
           offset:withVisits?0:Number(url.searchParams.get("offset")||0)}),
         withVisits?eventStore.recentListenerVisits(userId,username).catch(()=>null):undefined,
+        withAnswers?listAnswers(eventStore.pool,username,userId).catch(()=>null):undefined,
       ]);
-      sendJson(response,200,withVisits?{...history,recentVisits}:history);
+      sendJson(response,200,withVisits?{...history,recentVisits,performanceAnswers}:history);
     } catch (error) {
       sendJson(response, 500, { error: shortError(error) });
     }
@@ -3432,6 +3447,16 @@ setInterval(() => {
 }, DATABASE_RETRY_MS).unref?.();
 
 // Independent of recovery: a stuck DB query must not stop diagnostic sampling.
+let performanceScanBusy=false;
+setInterval(async()=>{
+  const key=globalThis.process?.env?.OPENAI_API_KEY;
+  if(performanceScanBusy||!eventStore.ready||!key||globalThis.process.env.LIVE_AI_DISABLED==="true")return;
+  performanceScanBusy=true;
+  try {await scanAnswers(eventStore.pool,key);}
+  catch {console.warn("Performance answer scan deferred");}
+  finally {performanceScanBusy=false;}
+},60000).unref?.();
+
 setInterval(() => {
   const status = eventStore.status();
   const current = [...sessions.values()];

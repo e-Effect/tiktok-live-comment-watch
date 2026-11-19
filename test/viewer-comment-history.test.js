@@ -53,6 +53,18 @@ function harness(t,fetcher,sessionId) {
  return {nodes,roots,row,select:v=>selection=v,preview:v=>preview=v};
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+test('performance answers appear separately with JST date and clear on the next listener',async t=>{
+ const h=harness(t,async url=>({ok:true,json:async()=>({items:[],performanceAnswers:url.includes('/one/history')
+   ?[{at:'2026-10-25T20:05:00Z',summary:'年上で優しい人'}]:[]})}));
+ h.roots[1].handlers.click({target:h.row('one','known')});await tick();
+ assert.equal(h.nodes.get('viewerPerformanceAnswers').hidden,false);
+ const line=h.nodes.get('viewerPerformanceAnswerList').children[0];
+ assert.match(line.children[0].textContent,/2026\/10\/26/);
+ assert.equal(line.children.at(-1),'年上で優しい人');
+ h.roots[2].handlers.click({target:h.row('two','known')});await tick();
+ assert.equal(h.nodes.get('viewerPerformanceAnswers').hidden,true);
+ assert.equal(h.nodes.get('viewerPerformanceAnswerList').children.length,0);
+});
 test('previous note loads after history and late answers cannot replace the next listener',async t=>{
  const finish=[];
  const h=harness(t,async(url,opts)=>{
