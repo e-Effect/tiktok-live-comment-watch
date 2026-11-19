@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TikTok LIVE 配信計測</title>
     <link rel="stylesheet" href="/styles.css?v=20261119-live-ai1">
-    <link rel="stylesheet" href="/live-workspace.css?v=20261119-ai-quality1">
+    <link rel="stylesheet" href="/live-workspace.css?v=20261120-compact">
   </head>
   <body>
     <header class="app-topbar">
@@ -118,7 +118,6 @@
             <label><input type="checkbox" data-panel-toggle="visitors" checked> 入室履歴</label>
             <label><input type="checkbox" data-panel-toggle="comments" checked> コメント</label>
             <label><input type="checkbox" data-panel-toggle="aiAssist" checked> AI補足</label>
-            <label><input type="checkbox" data-panel-toggle="shares" checked> シェア履歴</label>
             <label><input type="checkbox" data-panel-toggle="users"> ユーザー別コメント数</label>
             <label><input type="checkbox" data-panel-toggle="giftHistory" checked> ギフト履歴</label>
             <label><input type="checkbox" data-panel-toggle="screenshotRecords"> スクショ記録ID</label>
@@ -153,23 +152,25 @@
           <strong>保存しない確認モード</strong>
           <span>この間のコメント・入室・ギフトは履歴、集計、印刷連携へ保存されません。確認後は「停止」を押してください。</span>
         </div>
-        <div class="status">
-          <span id="statusDot"></span>
-          <span id="statusText">未接続</span>
-          <strong id="modeText">待機中</strong>
-        </div>
-        <div class="status-details" aria-label="接続状態">
-          <span id="serverState">サーバー確認中</span>
-          <span id="tikTokState">TikTok未接続</span>
-          <span id="lastEventTime">最終イベント -</span>
-          <span id="cooldownTime">制限なし</span>
-        </div>
-        <details class="ingestion-diagnostics">
-          <summary>取得診断</summary>
-          <div id="ingestionDiagnosticsBody" class="ingestion-diagnostics-body">
-            配信開始後に、TikFinity受信数・Render受付数・帳簿保存数を表示します。
+        <div class="connection-strip">
+          <div class="status">
+            <span id="statusDot"></span>
+            <span id="statusText">未接続</span>
+            <strong id="modeText">待機中</strong>
           </div>
-        </details>
+          <details class="ingestion-diagnostics">
+            <summary>取得診断</summary>
+            <div class="status-details" aria-label="接続状態">
+              <span id="serverState">サーバー確認中</span>
+              <span id="tikTokState">TikTok未接続</span>
+              <span id="lastEventTime">最終イベント -</span>
+              <span id="cooldownTime">制限なし</span>
+            </div>
+            <div id="ingestionDiagnosticsBody" class="ingestion-diagnostics-body">
+              配信開始後に、TikFinity受信数・Render受付数・帳簿保存数を表示します。
+            </div>
+          </details>
+        </div>
 
         <div class="metrics" data-panel="metrics">
           <article><span>コメント数</span><strong id="commentCount">0</strong></article>
@@ -226,13 +227,6 @@
             </div>
             <div id="visitorHistory" class="list small">
               <p class="empty">入室を確認したユーザーがここに表示されます。</p>
-            </div>
-          </section>
-
-          <section data-panel="shares">
-            <h2>シェアしたユーザー</h2>
-            <div id="shareHistory" class="list small">
-              <p class="empty">シェアされるとユーザー名と時刻がここに表示されます。</p>
             </div>
           </section>
 
@@ -309,6 +303,6 @@
       <form id="viewerCommentHistoryKeyForm" hidden><label>台帳の管理キー<input id="viewerCommentHistoryKey" type="password" autocomplete="current-password" required></label><button type="submit">履歴を開く</button></form>
       <ol id="viewerCommentHistoryItems"></ol><button id="viewerCommentHistoryRetry" type="button" hidden>再取得</button>
     </dialog>
-    <script src="/app.js?v=20261120-ai-ready" type="module"></script>
+    <script src="/app.js?v=20261120-compact" type="module"></script>
   </body>
 </html>
