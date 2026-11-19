@@ -14,6 +14,7 @@ import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
 import { createDailyCommentReport } from "./lib/comment-ai-report.js";
+import {createPreviousNoteService} from "./lib/previous-comment-note.js";
 import { LiveAiAssist, isAiMode } from './lib/live-ai-assist.js';
 import { dailyGiftRewards, rewardStreams, updateGiftReward, RewardError } from "./lib/gift-rewards.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
@@ -92,6 +93,7 @@ const runAvatarCacheWork = createAvatarWorkCache();
 const attentionAlerts = new AttentionAlerts();
 const welcomeAlerts = new WelcomeAlerts();
 const screenshotWatch = new ScreenshotWatch();
+const previousCommentNote = createPreviousNoteService();
 const lookupCollectorLiveRoom = createCollectorLiveRoomLookup();
 const liveAi = new LiveAiAssist({
   apiKey: globalThis.process?.env?.LIVE_AI_DISABLED === 'true' ? '' : globalThis.process?.env?.OPENAI_API_KEY || ''
@@ -3130,6 +3132,22 @@ const server = createServer(async (request, response) => {
     }
     try { sendJson(response,200,await eventStore.listenerTrialMetrics(options)); }
     catch (error) { sendJson(response,503,{error:shortError(error)}); }
+    return;
+  }
+
+  if (url.pathname === "/api/listeners/previous-comment-note" && request.method === "POST") {
+    if (!requireListenerAdmin(request,response)) return;
+    try {
+      const {sessionId,userId}=await readBody(request);
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)
+          || typeof userId!=="string" || !userId.length || userId.length>200) {
+        sendJson(response,400,{error:"invalid listener or session"});return;
+      }
+      if (!eventStore.ready || process.env.LIVE_AI_DISABLED==="true") throw Error();
+      const result=await previousCommentNote({pool:eventStore.pool,sessionId,userId,apiKey:process.env.OPENAI_API_KEY});
+      response.setHeader("Cache-Control","no-store");
+      sendJson(response,200,result);
+    } catch {sendJson(response,503,{error:"前回の話題を取得できませんでした。"});}
     return;
   }
 

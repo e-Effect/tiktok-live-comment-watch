@@ -41,18 +41,33 @@ test('profile links use handles only and cannot become arbitrary URLs',()=>{
  for(const value of ['', 'unknown', 'javascript:alert(1)', 'https://other.test', '../other', 'a/b', 'a" onclick="bad', '表示名']) assert.equal(tiktokProfileUrl(value),'');
 });
 
-function harness(t,fetcher) {
+function harness(t,fetcher,sessionId) {
  const previous={document:globalThis.document,window:globalThis.window,localStorage:globalThis.localStorage,fetch:globalThis.fetch};
  const node=()=>({handlers:{},children:[],value:'',open:false,dataset:{},removeAttribute(k){delete this[k];},addEventListener(k,fn){this.handlers[k]=fn;},replaceChildren(){this.children=[];},append(...v){this.children.push(...v);},showModal(){this.open=true;},close(){this.open=false;this.handlers.close?.();},focus(){}});
  const nodes=new Map(),roots=[node(),node(),node(),node()];let selection='',preview=false;
  globalThis.document={getElementById(id){if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);},createElement:node};
  globalThis.window={getSelection:()=>({toString:()=>selection})};globalThis.localStorage={getItem:()=> 'test-key',setItem(){}};globalThis.fetch=fetcher;
  t.after(()=>Object.assign(globalThis,previous));
- setupCommentHistory(roots,()=>({username:'host',preview}));
+ setupCommentHistory(roots,()=>({username:'host',preview,sessionId}));
  const row=(userId,uniqueId='')=>({dataset:{userId,userName:userId,uniqueId},closest(selector){return selector.startsWith('[data-')?this:null;}});
  return {nodes,roots,row,select:v=>selection=v,preview:v=>preview=v};
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+test('previous note loads after history and late answers cannot replace the next listener',async t=>{
+ const finish=[];
+ const h=harness(t,async(url,opts)=>{
+   if(url.includes('/history?'))return {ok:true,json:async()=>({items:[{at:1,text:'履歴'}]})};
+   assert.equal(url,'/api/listeners/previous-comment-note');
+   const {userId,sessionId}=JSON.parse(opts.body);assert.equal(sessionId,'session');
+   return new Promise(resolve=>finish.push(()=>resolve({ok:true,json:async()=>({at:'2026-11-10',note:userId})})));
+ },'session');
+ for(const id of ['first','second']){
+   h.roots[0].handlers.click({target:h.row(id,'known')});await tick();
+   assert.equal(h.nodes.get('viewerCommentHistoryItems').children.length,1);
+ }
+ finish[1]();await tick();finish[0]();await tick();
+ assert.equal(h.nodes.get('viewerPreviousText').textContent,'second');
+});
 test('all four lists open history by click or keyboard, but selection and nested controls do not',async t=>{
  const calls=[];const h=harness(t,async(url)=>{calls.push(url);return {ok:true,json:async()=>({items:[]})};});
  for(const [i,root] of h.roots.entries()){
