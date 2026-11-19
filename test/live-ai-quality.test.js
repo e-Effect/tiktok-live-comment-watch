@@ -8,14 +8,16 @@ const reply = () => ({ ok: true, json: async () => ({ status: 'completed', outpu
 
 test('all five profiles send their actual model, effort and output budget; fast retains previous behavior', async t => {
   const requests = [];
-  const ai = new LiveAiAssist({ apiKey: 'fixture', fetchImpl: async (_, options) => { requests.push(JSON.parse(options.body)); return reply(); } });
+  let now = Date.now();
+  const ai = new LiveAiAssist({ now: () => now, apiKey: 'fixture', fetchImpl: async (_, options) => { requests.push(JSON.parse(options.body)); return reply(); } });
   t.after(() => ai.dispose());
   assert.equal(ai.snapshot('s').mode, 'fast');
   for (const [mode, profile] of Object.entries(AI_PROFILES)) {
+    now += 72000;
     const state = ai.configure('s', true, mode);
     assert.equal(state.model, profile.model);
     assert.equal(state.modeLabel, profile.label);
-    ai.submit('s', sample(`専門用語 ${mode}`));
+    ai.submit('s', sample(`専門用語 ${mode}`, {at: now}));
     await ai.run();
     const request = requests.at(-1);
     assert.equal(request.model, profile.model);
