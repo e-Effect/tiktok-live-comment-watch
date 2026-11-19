@@ -94,8 +94,7 @@ const welcomeAlerts = new WelcomeAlerts();
 const screenshotWatch = new ScreenshotWatch();
 const lookupCollectorLiveRoom = createCollectorLiveRoomLookup();
 const liveAi = new LiveAiAssist({
-  apiKey: globalThis.process?.env?.LIVE_AI_DISABLED === 'true' ? '' : globalThis.process?.env?.OPENAI_API_KEY || '',
-  model: globalThis.process?.env?.LIVE_AI_MODEL || 'gpt-6-luna'
+  apiKey: globalThis.process?.env?.LIVE_AI_DISABLED === 'true' ? '' : globalThis.process?.env?.OPENAI_API_KEY || ''
 });
 const viewerLeagues = new ViewerLeagues({
   apiKey: globalThis.process?.env?.VIEWER_LEAGUE_TIKTOOLS_API_KEY,

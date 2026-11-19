@@ -39,7 +39,7 @@ test('live AI endpoint requires admin, only follows opt-in fresh comments and le
   assert.equal(feed.items.length, 1);
   assert.equal(feed.items[0].confidence, 'verified');
   assert.equal(feed.mode, 'smart');
-  assert.equal(feed.model, 'gpt-6.2-sol');
+  assert.equal(feed.model, 'gpt-6.1-terra');
   const unchanged = await (await fetch(base + path + `?version=${feed.version}`, { headers: admin })).json();
   assert.equal(unchanged.unchanged, true);
   assert.equal(unchanged.items, undefined, 'idle polls do not retransmit the full AI feed');
