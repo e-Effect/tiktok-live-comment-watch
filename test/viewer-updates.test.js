@@ -56,7 +56,7 @@ test('the actual viewer boots and renders live comments with incremental updates
   const dom=new JSDOM(html,{url:'https://viewer.test/',runScripts:'outside-only'});
   t.after(()=>dom.window.close());
   dom.window.fetch=async()=>({ok:true,json:async()=>({ok:true,sessions:0,provider:{},collector:{},database:{}})});
-  const files=['listener-history-format.js','viewer-comment-history.js','comment-selection-search.js','viewer-updates.js','screenshot-records-panel.js','app.js'];
+  const files=['listener-history-format.js','viewer-comment-history.js','comment-selection-search.js','viewer-updates.js','screenshot-records-panel.js','live-ai-assist.js','app.js'];
   const sources=await Promise.all(files.map(file=>readFile(new URL('../public/'+file,import.meta.url),'utf8')));
   const script=sources.map(source=>source.replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'')).join('\n');
   vm.runInContext(script+'\n globalThis.auditViewer={renderSnapshot,applyRealtimePayload,sessions};',dom.getInternalVMContext());

@@ -14,6 +14,7 @@ import { ViewerCoins } from "./lib/viewer-coins.js";
 import { entryDetection, earlyEntryComment, withinEntryWindow } from "./lib/early-entry-comment.js";
 import { searchComments } from "./lib/comment-search.js";
 import { createDailyCommentReport } from "./lib/comment-ai-report.js";
+import { LiveAiAssist } from './lib/live-ai-assist.js';
 import { dailyGiftRewards, rewardStreams, updateGiftReward, RewardError } from "./lib/gift-rewards.js";
 import { AttentionAlerts } from "./lib/attention-alerts.js";
 import { WelcomeAlerts } from "./lib/welcome-alerts.js";
@@ -92,6 +93,10 @@ const attentionAlerts = new AttentionAlerts();
 const welcomeAlerts = new WelcomeAlerts();
 const screenshotWatch = new ScreenshotWatch();
 const lookupCollectorLiveRoom = createCollectorLiveRoomLookup();
+const liveAi = new LiveAiAssist({
+  apiKey: globalThis.process?.env?.LIVE_AI_DISABLED === 'true' ? '' : globalThis.process?.env?.OPENAI_API_KEY || '',
+  model: globalThis.process?.env?.LIVE_AI_MODEL || 'gpt-6-luna'
+});
 const viewerLeagues = new ViewerLeagues({
   apiKey: globalThis.process?.env?.VIEWER_LEAGUE_TIKTOOLS_API_KEY,
   onChange(matches) {
@@ -821,6 +826,8 @@ class LiveSession extends EventEmitter {
       summary: this.summary(),
       users: [this.realtimeUser(current)]
     });
+    // AI runs after realtime delivery, without awaiting external services.
+    liveAi.submit(this.id, comment);
     return true;
   }
 
@@ -1550,6 +1557,7 @@ class LiveSession extends EventEmitter {
   }
 
   stop(message = "停止しました。") {
+    if (liveAi.states.has(this.id)) liveAi.configure(this.id, false);
     this.viewerCoins.close();
     if (this.stoppedAt) return;
     this.stoppedAt = Date.now();
@@ -2659,6 +2667,7 @@ const server = createServer(async (request, response) => {
     sendJson(response, 200, {
       ok: true,
       sessions: sessions.size,
+      liveAiAvailable: Boolean(liveAi.apiKey),
       uptimeSeconds: Math.floor(getUptimeSeconds()),
       provider: providerInfo,
       collector: {
@@ -3268,6 +3277,27 @@ const server = createServer(async (request, response) => {
     const action = sessionMatch[2] || "";
     if (!session) {
       sendJson(response, 404, { error: "セッションが見つかりません。" });
+      return;
+    }
+
+    if (action === 'ai-assist' && ['GET', 'POST'].includes(request.method)) {
+      if (!requireListenerAdmin(request, response)) return;
+      if (request.method === 'GET') {
+        sendJson(response, 200, liveAi.snapshot(session.id, { renew: true }));
+      } else {
+        try {
+          const body = await readBody(request);
+          if (typeof body.enabled !== 'boolean') {
+            sendJson(response, 400, { error: 'enabledは真偽値で指定してください。' });
+          } else if (body.enabled && session.stoppedAt) {
+            sendJson(response, 409, { error: '次の配信でAI補足を開始します。' });
+          } else {
+            sendJson(response, 200, liveAi.configure(session.id, body.enabled));
+          }
+        } catch {
+          sendJson(response, 400, { error: 'AI補足の設定を読み取れませんでした。' });
+        }
+      }
       return;
     }
 

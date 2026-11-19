@@ -2,6 +2,7 @@ import { setupCommentHistory } from './viewer-comment-history.js?v=20261114-hist
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 import {createSnapshotGuard, patchCommentRows} from './viewer-updates.js?v=20261024-stability1';
 import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records1';
+import {setupLiveAiAssist} from './live-ai-assist.js?v=20261119-live-ai1';
 const snapshotGuard = createSnapshotGuard();
 const attentionBySession = new Map();
 const welcomeBySession = new Map();
@@ -152,6 +153,8 @@ window.addEventListener("focus", reconnectActiveSessions);
 window.addEventListener("online", reconnectActiveSessions);
 
 const screenshotPanel = setupScreenshotRecords({root:document.getElementById('screenshotRecordsPanel'),getUsername:()=>sessions.get(selectedSessionId)?.username||cleanUsername(usernameInput.value)||readFixedAccount()});
+const aiAssist = setupLiveAiAssist({root:document.querySelector('[data-panel="aiAssist"]')});
+setupWorkspaceMode();
 setupPanelToggles();
 setupLayoutTools();
 setupFontSizeTools();
@@ -951,6 +954,26 @@ function setupPanelToggles() {
   applyPanelPrefs();
 }
 
+function setupWorkspaceMode() {
+  const controls = [...document.querySelectorAll('[name="workspaceMode"]')];
+  const apply = () => {
+    const live = localStorage.getItem('tiktok-live-workspace-mode') !== 'custom';
+    document.body.classList.toggle('live-workspace', live);
+    controls.forEach(control => { control.checked = control.value === (live ? 'live' : 'custom'); });
+    if (layoutEditToggle) layoutEditToggle.disabled = live;
+    if (resetLayoutBtn) resetLayoutBtn.disabled = live;
+  };
+  controls.forEach(control => control.addEventListener('change', () => {
+    localStorage.setItem('tiktok-live-workspace-mode', control.value);
+    if (control.value === 'live' && layoutEditToggle) {
+      layoutEditToggle.checked = false;
+      setLayoutEditing(false);
+    }
+    apply();
+  }));
+  apply();
+}
+
 function readPanelPrefs() {
   try {
     return JSON.parse(localStorage.getItem(PANEL_PREFS_KEY) || "{}") || {};
@@ -1451,6 +1474,7 @@ function renderSelectedSession(options = {}) {
   renderAttentionAlerts();
   const selected = selectedSessionId ? sessions.get(selectedSessionId) : null;
   const snapshot = selected?.snapshot;
+  aiAssist.setSession(snapshot || null);
   const dirtyTypes = options.dirtyTypes instanceof Set ? options.dirtyTypes : null;
   const fullRender = !dirtyTypes;
   const dirty = (...types) => fullRender || types.some((type) => dirtyTypes.has(type));
