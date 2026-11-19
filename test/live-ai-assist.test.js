@@ -26,6 +26,22 @@ test('routine requests never queue, publish a local answer, or use an external r
   assert.deepEqual(sent.sort(),['和紙の原料は?','エッグベネディクト','父が嫌いな食べ物は?'].sort());
 });
 
+test('elementary and broadcast logistics bypass the API while nontrivial explanations still qualify', async t => {
+  let request;
+  const ai = new LiveAiAssist({apiKey:'fixture',fetchImpl:async (_,o)=>{
+    request=JSON.parse(o.body); return response([]);
+  }});
+  t.after(()=>ai.dispose()); ai.configure('s',true);
+  for (const text of ['１＋１は？','12かける3はいくつ？','一週間は何日ですか？','日本の首都はどこ？',
+    'この配信は何時まで？','次のライブはいつから？','この枠のルールは？','何時までやってるの？','どうやって参加するの？']) ai.submit('s',comment(text));
+  await ai.run(); assert.equal(request,undefined); assert.deepEqual(ai.snapshot('s').items,[]);
+  const keep=['この配信で出た系統的脱感作法って何？','なぞなぞ：パンはパンでも食べられないパンは？','イングリッシュマフィン','日本の首都はどうやって決まったの？'];
+  for (const text of keep) ai.submit('s',comment(text));
+  await ai.run();
+  assert.deepEqual(JSON.parse(request.input).map(v=>v.comment).sort(),keep.map(s=>s.normalize('NFKC')).sort());
+  assert.match(request.instructions,/小学生でも普通に分かる/);
+});
+
 test('four busy hours fit the budget; greetings are free and new questions outrank chatter', async t => {
   let now = Date.now(), calls = 0, latest;
   const ai = new LiveAiAssist({apiKey:'fixture', now:()=>now, fetchImpl:async (_,options)=>{
