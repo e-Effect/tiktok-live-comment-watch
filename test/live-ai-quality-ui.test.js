@@ -24,6 +24,27 @@ function choose({ dom, doc }, mode) {
 }
 const reply = (mode = 'fast') => ({ ok: true, status: 200, json: async () => ({ configured: true, enabled: true, mode, version: 1, items: [], dailyCalls: 0, dailyLimit: 600 }) });
 
+test('ready signal coalesces during initial configuration and immediately fetches privately', async t => {
+  const calls = [], jobs = new Map();
+  const fx = fixture(t, (url, opts) => new Promise(resolve => calls.push({url, opts, resolve})));
+  Object.defineProperty(fx.doc, 'hidden', {value:false});
+  let seq = 0;
+  fx.dom.window.setTimeout = (fn, delay) => { jobs.set(++seq,{fn,delay}); return seq; };
+  fx.dom.window.clearTimeout = id => jobs.delete(id);
+  fx.ui.setSession({id:'s',status:'connected'});
+  fx.ui.notifyReady('s'); fx.ui.notifyReady('s');
+  assert.equal(calls.length,1);
+  calls[0].resolve(reply()); await tick();
+  assert.deepEqual([...jobs.values()].map(j=>j.delay),[0]);
+  const [id,job] = [...jobs][0];jobs.delete(id);job.fn();
+  assert.equal(calls[1].opts.method,'GET');
+  assert.equal(calls[1].opts.headers.Authorization,'Bearer fixture-admin');
+  assert.match(calls[1].url,/version=1/);
+  calls[1].resolve(reply()); await tick();
+  fx.ui.notifyReady('unrelated');
+  assert.deepEqual([...jobs.values()].map(j=>j.delay),[2500]);
+});
+
 test('all five radio buttons apply the requested profile and persist it', async t => {
   const posted = [];
   const fx = fixture(t, async (_, options) => {

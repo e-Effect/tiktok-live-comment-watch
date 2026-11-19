@@ -51,7 +51,7 @@ export function renderAssistItems(root, items, document = root.ownerDocument) {
 }
 
 export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStorage }) {
-  if (!root) return { setSession() {} };
+  if (!root) return { setSession() {}, notifyReady() {} };
   const list = root.querySelector('#aiAssistList');
   const status = root.querySelector('#aiAssistStatus');
   const toggle = root.querySelector('#aiAssistEnabled');
@@ -67,6 +67,7 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   let controller = null;
   let lastVersion = null;
   let configuredGeneration = -1;
+  let pendingReady = false;
   toggle.checked = storage.getItem(PREF) !== 'false';
   const syncMode = () => modeInputs.forEach(input => { input.checked = input.value === selectedMode; });
   const setModeStatus = text => { if (modeStatus) modeStatus.textContent = text; };
@@ -91,6 +92,8 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
     generation += 1;
     clearTimeout(timer);
     controller?.abort();
+    controller = null;
+    pendingReady = false;
   }
 
   async function refresh() {
@@ -144,7 +147,11 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
       setModeStatus(error.message === 'auth' ? '管理キーで接続' : '未反映・再接続待ち');
     } finally {
       clearTimeout(timeout);
-      if (retry && current === generation && session?.id) timer = setTimeout(refresh, document.hidden ? 15000 : 2500);
+      if (current === generation) {
+        controller = null;
+        if (retry && session?.id) timer = setTimeout(refresh, pendingReady && !document.hidden ? 0 : document.hidden ? 15000 : 2500);
+        pendingReady = false;
+      }
     }
   }
 
@@ -179,7 +186,13 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { cancel(); void refresh(); } });
   window.addEventListener('pagehide', cancel);
   for (const event of ['pageshow', 'online']) window.addEventListener(event, () => { cancel(); void refresh(); });
-  return { setSession(next) {
+  return { notifyReady(id) {
+    if (session?.id !== id || document.hidden || !toggle.checked || !storage.getItem(ADMIN)) return;
+    if (controller) { pendingReady = true; return; }
+    if (configuredGeneration !== generation) return;
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 0);
+  }, setSession(next) {
     if (session?.id === next?.id && session?.status === next?.status && session?.stoppedAt === next?.stoppedAt) return;
     const changedId = session?.id !== next?.id;
     cancel();

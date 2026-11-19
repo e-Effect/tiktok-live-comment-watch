@@ -97,6 +97,7 @@ const screenshotWatch = new ScreenshotWatch();
 const previousCommentNote = createPreviousNoteService();
 const lookupCollectorLiveRoom = createCollectorLiveRoomLookup();
 const liveAi = new LiveAiAssist({
+  onReady: id => sessions.get(id)?.broadcast('ai_ready', {}),
   apiKey: globalThis.process?.env?.LIVE_AI_DISABLED === 'true' ? '' : globalThis.process?.env?.OPENAI_API_KEY || ''
 });
 const viewerLeagues = new ViewerLeagues({

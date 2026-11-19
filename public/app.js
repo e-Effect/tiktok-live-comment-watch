@@ -2,7 +2,7 @@ import { setupCommentHistory } from './viewer-comment-history.js?v=20261120-perf
 import { setupCommentSelectionSearch } from './comment-selection-search.js?v=20261014-search1';
 import {createSnapshotGuard, patchCommentRows} from './viewer-updates.js?v=20261024-stability1';
 import {setupScreenshotRecords} from './screenshot-records-panel.js?v=20261029-records1';
-import {setupLiveAiAssist} from './live-ai-assist.js?v=20261119-ai-five1';
+import {setupLiveAiAssist} from './live-ai-assist.js?v=20261120-ai-ready';
 const snapshotGuard = createSnapshotGuard();
 const attentionBySession = new Map();
 const welcomeBySession = new Map();
@@ -479,6 +479,7 @@ function openEventStream(sessionId) {
   markEventStreamActivity(sessionId);
   source.onopen = () => markEventStreamActivity(sessionId);
   source.addEventListener("heartbeat", () => markEventStreamActivity(sessionId));
+  source.addEventListener("ai_ready", () => aiAssist.notifyReady(sessionId));
   source.addEventListener("attention_alert", (event) => {
     markEventStreamActivity(sessionId);
     const { alert } = JSON.parse(event.data);
