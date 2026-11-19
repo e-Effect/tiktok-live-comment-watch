@@ -8,6 +8,24 @@ const item = { index: 0, kind: 'word', title: '系統的脱感作法', reading: 
 const response = (items = [item]) => ({ ok: true, json: async () => ({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ items }) }] }] }) });
 const comment = (text, extra = {}) => ({ id: 'message', text, nickname: 'DO-NOT-SEND-NAME', userId: 'DO-NOT-SEND-ID', at: Date.now(), ...extra });
 
+test('routine requests never queue, publish a local answer, or use an external request', async t => {
+  const sent = [];
+  const ai = new LiveAiAssist({apiKey:'fixture',fetchImpl:async (_,o)=>{
+    sent.push(...JSON.parse(JSON.parse(o.body).input).map(row => row.comment)); return response([]);
+  }});
+  t.after(()=>ai.dispose()); ai.configure('s',true);
+  for (const text of ['小銭はいくら？','500円玉が何枚？','なんようび？','木曜です！','失敗したことある？',
+    '紙に書いてできますか？','紙に名前を書いてもらえますか','かみにかいてできますか？',
+    'ﾊｰﾄﾐｰって何？','Heart Me の送り方は？','紙に書いて、円周率の10桁目は？']) ai.submit('s',comment(text));
+  await ai.run();
+  assert.equal(ai.snapshot('s').items.length,0);
+  assert.equal(ai.snapshot('s').pending,0);
+  assert.deepEqual(sent,[]);
+  for (const text of ['和紙の原料は？','エッグベネディクト','父が嫌いな食べ物は？']) ai.submit('s',comment(text));
+  await ai.run();
+  assert.deepEqual(sent.sort(),['和紙の原料は?','エッグベネディクト','父が嫌いな食べ物は?'].sort());
+});
+
 test('four busy hours fit the budget; greetings are free and new questions outrank chatter', async t => {
   let now = Date.now(), calls = 0, latest;
   const ai = new LiveAiAssist({apiKey:'fixture', now:()=>now, fetchImpl:async (_,options)=>{
