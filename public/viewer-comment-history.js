@@ -3,7 +3,7 @@ import {formatObservedWatchTime} from './listener-history-format.js?v=20261110-w
 const commentHistoryLimit=30;
 
 export function historyUrl(userId,username) {
-  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:String(commentHistoryLimit),includeVisits:'1',username})}`;
+  return `/api/listeners/${encodeURIComponent(userId)}/history?${new URLSearchParams({kind:'comments',limit:String(commentHistoryLimit),includeVisits:'1',includeAnswers:'1',username})}`;
 }
 
 export function tiktokProfileUrl(uniqueId) {
@@ -26,6 +26,17 @@ export function setupCommentHistory(list,getContext) {
   const profileStatus=document.getElementById('viewerCommentHistoryProfileStatus');
   const storageKey='tiktok-listener-admin-key';
   const topic=document.getElementById('viewerPreviousTopic');
+  const answerSection=document.getElementById('viewerPerformanceAnswers');
+  function showAnswers(items){
+    if(!answerSection)return;
+    answerSection.hidden=!items?.length;
+    const list=document.getElementById('viewerPerformanceAnswerList');list.replaceChildren();
+    for(const item of items||[]){
+      const line=document.createElement('p'),date=document.createElement('strong');
+      date.textContent=new Date(item.at).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'});
+      line.append(date,'　',item.summary);list.append(line);
+    }
+  }
   async function loadTopic(key,ticket,signal) {
     if(!topic || !target.sessionId)return;
     const text=document.getElementById('viewerPreviousText'),date=document.getElementById('viewerPreviousDate');
@@ -99,6 +110,7 @@ export function setupCommentHistory(list,getContext) {
       if(ticket!==revision || !dialog.open)return;
       localStorage.setItem(storageKey,key);keyInput.value='';
       showVisits(data.recentVisits);
+      showAnswers(data.performanceAnswers);
       void loadTopic(key,ticket,controller.signal);
       const items=(data.items||[]).slice(0,commentHistoryLimit);
       status.textContent=items.length?`保存済みの最新${items.length}件です。直前のコメントは保存待ちの場合があります。`:'保存済みのコメントはまだありません。';
@@ -116,6 +128,7 @@ export function setupCommentHistory(list,getContext) {
     const context=getContext();
     if(!row?.dataset.userId || !context?.username)return;
     cancel();target={userId:row.dataset.userId,username:context.username,sessionId:context.sessionId,uniqueId:row.dataset.uniqueId||''};
+    showAnswers([]);
     if(topic)topic.hidden=true;
     showProfile(context.preview?'':target.uniqueId);
     title.textContent=`${row.dataset.userName||target.userId}さんの履歴`;

@@ -296,6 +296,10 @@
         <h3>前回の話題 <small id="viewerPreviousDate"></small></h3>
         <p id="viewerPreviousText" role="status"></p>
       </section>
+      <section id="viewerPerformanceAnswers" class="viewer-recent-visits" hidden>
+        <h3>好きな男性のタイプ <small>演目での回答</small></h3>
+        <div id="viewerPerformanceAnswerList"></div>
+      </section>
       <section id="viewerRecentVisits" class="viewer-recent-visits" aria-labelledby="viewerRecentVisitsTitle" hidden>
         <h3 id="viewerRecentVisitsTitle">直近の来訪・推定視聴時間</h3>
         <p id="viewerRecentVisitsStatus" role="status"></p>
@@ -305,6 +309,6 @@
       <form id="viewerCommentHistoryKeyForm" hidden><label>台帳の管理キー<input id="viewerCommentHistoryKey" type="password" autocomplete="current-password" required></label><button type="submit">履歴を開く</button></form>
       <ol id="viewerCommentHistoryItems"></ol><button id="viewerCommentHistoryRetry" type="button" hidden>再取得</button>
     </dialog>
-    <script src="/app.js?v=20261119-prior-note" type="module"></script>
+    <script src="/app.js?v=20261120-performance-answer" type="module"></script>
   </body>
 </html>
