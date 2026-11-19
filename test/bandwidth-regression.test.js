@@ -65,7 +65,7 @@ test("event stream subscribes before its initial snapshot so comments cannot fal
 test("busy comment streams throttle expensive secondary panels without delaying the comment list", () => {
   assert.match(clientSource, /const lastHeavyRealtimeRenderAt = new Map\(\)/);
   assert.match(clientSource, /now - lastHeavyAt >= 1000/);
-  assert.match(clientSource, /if \(dirty\("comment", "status"\)\) renderComments/);
+  assert.match(clientSource, /if \(dirty\("comment", "share", "status"\)\) renderComments/);
   assert.doesNotMatch(clientSource, /if \(dirty\("comment", "presence", "status"\)\) renderComments/);
   assert.match(clientSource, /function refreshVisibleCommentRows\(comments, changedUserIds\)/);
   assert.match(clientSource, /data-user-id=/);

@@ -78,4 +78,16 @@ test('the actual viewer boots and renders live comments with incremental updates
   const updated=dom.window.document.querySelector('article.comment');
   assert.equal(updated.querySelector('.viewer-league'),null);
   assert.equal(updated.querySelector('.viewer-rank').textContent,'S');
+  const share={id:'c1',userId:'v',nickname:'花子',at:Date.now()+1000};
+  for(let i=0;i<2;i++) applyRealtimePayload('audit','share',{share,summary:{shareCount:1}});
+  await new Promise(resolve=>setTimeout(resolve,100));
+  const rows=dom.window.document.querySelectorAll('#commentList article');
+  assert.equal(rows.length,2);
+  assert.match(rows[0].querySelector('.share-notice').textContent,/花子さんがシェアしました$/);
+  assert.ok(rows[0].matches('[data-comment-history][data-user-id="v"]'));
+  assert.ok(rows[0].querySelector('.time').textContent);
+  assert.equal(rows[1],updated);
+  assert.equal(dom.window.auditViewer.sessions.get('audit').snapshot.comments.length,1);
+  assert.equal(dom.window.document.querySelector('#commentCount').textContent,'1');
+  assert.equal(dom.window.document.querySelector('[data-panel="shares"]'),null);
 });

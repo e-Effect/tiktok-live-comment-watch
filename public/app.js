@@ -58,7 +58,6 @@ const giftHistoryFilterClear = document.querySelector("#giftHistoryFilterClear")
 const giftHistoryFilterList = document.querySelector("#giftHistoryFilterList");
 const giftHistoryFilterError = document.querySelector("#giftHistoryFilterError");
 const giftHistoryFilterApply = document.querySelector("#giftHistoryFilterApply");
-const shareHistory = document.querySelector("#shareHistory");
 const visitorHistory = document.querySelector("#visitorHistory");
 const visitorDemoBtn = document.querySelector("#visitorDemoBtn");
 const reportList = document.querySelector("#reportList");
@@ -110,7 +109,6 @@ const DEFAULT_PANEL_SIZES = {
   report: "wide",
   visitors: "medium",
   comments: "large",
-  shares: "medium",
   users: "medium",
   giftHistory: "medium"
 };
@@ -1266,7 +1264,6 @@ function applyRealtimePayload(sessionId, type, payload) {
     const leagueChanged = (user.creatorLeague || "") !== (prior?.creatorLeague || "");
     if ((user.coins30d !== prior?.coins30d || leagueChanged) &&
       (next.gifts || []).some(gift => gift.userId === user.userId)) session.giftDetailsChanged = true;
-    if (leagueChanged && (next.shares || []).some(share => share.userId === user.userId)) session.shareLeagueChanged = true;
     upsertRealtimeUser(cache, user);
     const userId = String(user?.userId || "");
     if (userId) session.pendingDisplayUserIds.add(userId);
@@ -1318,14 +1315,12 @@ function scheduleRealtimeListRebuild(sessionId) {
     const session = sessions.get(sessionId);
     if (!session?.snapshot) return;
     rebuildRealtimeLists(session.snapshot, session.userCache || new Map());
-    refreshVisibleCommentRows(session.snapshot.comments || [], session.pendingDisplayUserIds || new Set());
+    if (selectedSessionId === sessionId) refreshVisibleCommentRows(session.snapshot.comments || [], session.pendingDisplayUserIds || new Set());
     if (selectedSessionId === sessionId && (session.giftDetailsChanged || (session.snapshot.gifts || []).some(gift =>
       gift.earlyEntryGiftCandidate === true && session.pendingDisplayUserIds?.has(String(gift.userId || ""))))) {
       renderGiftHistory(session.snapshot.gifts || []);
     }
-    if (selectedSessionId === sessionId && session.shareLeagueChanged) renderShareHistory(session.snapshot.shares || []);
     session.giftDetailsChanged = false;
-    session.shareLeagueChanged = false;
     session.pendingDisplayUserIds?.clear();
     lastRealtimeListRebuildAt.set(sessionId, Date.now());
     if (selectedSessionId === sessionId) {
@@ -1487,10 +1482,9 @@ function renderSelectedSession(options = {}) {
     renderConnectionDetails(null);
     renderMetrics(emptySnapshot());
     renderReport(null);
-    renderComments([]);
+    renderComments([], []);
     renderUsers([]);
     renderGiftHistory([]);
-    renderShareHistory([]);
     renderVisitorHistory([]);
     return;
   }
@@ -1508,7 +1502,7 @@ function renderSelectedSession(options = {}) {
   if (fullRender || dirty("status", "presence")) renderConnectionDetails(snapshot);
   if (fullRender || dirty("comment", "gift", "share", "presence", "status")) renderMetrics(snapshot);
   if (heavyDue) renderReport(snapshot);
-  if (dirty("comment", "status")) renderComments(snapshot.comments || []);
+  if (dirty("comment", "share", "status")) renderComments(snapshot.comments || [], snapshot.shares || []);
   if (heavyDue && dirty("comment", "gift", "presence", "status", "lists")) {
     renderUsers(snapshot.topUsers || []);
     renderVisitorHistory(snapshot.visitors || []);
@@ -1516,7 +1510,6 @@ function renderSelectedSession(options = {}) {
   if (dirty("gift", "status")) {
     renderGiftHistory(snapshot.gifts || []);
   }
-  if (dirty("share", "status")) renderShareHistory(snapshot.shares || []);
 }
 
 function setupFontSizeTools() {
@@ -1779,17 +1772,20 @@ function renderMetrics(snapshot) {
   if (visitorCount) visitorCount.textContent = formatNumber(snapshot.viewerStats?.knownJoins || 0);
 }
 
-setupCommentHistory([commentList, visitorHistory, giftHistory, shareHistory],()=>({sessionId:selectedSessionId,username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
+setupCommentHistory([commentList, visitorHistory, giftHistory],()=>({sessionId:selectedSessionId,username:sessions.get(selectedSessionId)?.username,preview:visitorDemoActive || sessions.get(selectedSessionId)?.preview}));
 
-function renderComments(comments) {
+function renderComments(comments, shares = sessions.get(selectedSessionId)?.snapshot?.shares || []) {
   const context = `${selectedSessionId}:${visitorDemoActive}`;
   if (commentSelectionContext !== context) {
     commentSelectionContext = context;
     commentSelection.reset();
   }
-  if (visitorDemoActive) comments = visitorDemoComments();
+  if (visitorDemoActive) { comments = visitorDemoComments(); shares = []; }
   commentSelection.update(() => {
-    patchCommentRows(commentList, comments, commentArticleHtml, '接続するとコメントがここに流れます。');
+    const timeline = shares.length
+      ? [...comments, ...shares.map(share => ({ ...share, id: `share:${share.id || `${share.userId}:${share.at}`}`, shareNotice: true }))].sort((a, b) => b.at - a.at)
+      : comments;
+    patchCommentRows(commentList, timeline, item => item.shareNotice ? shareArticleHtml(item) : commentArticleHtml(item), '接続するとコメントとシェアがここに流れます。');
   });
 }
 
@@ -2112,25 +2108,19 @@ function renderGiftHistory(gifts) {
   `).join("");
 }
 
-function renderShareHistory(shares) {
-  if (!shareHistory) return;
-  if (!shares.length) {
-    shareHistory.innerHTML = `<p class="empty">シェアされるとユーザー名と時刻がここに表示されます。</p>`;
-    return;
-  }
-  shareHistory.innerHTML = shares.map((share) => `
+function shareArticleHtml(share) {
+  return `
     <article class="comment share-card ${commentVisitClass(share)}" ${listenerHistoryAttributes(share)}>
       <header>
         ${renderEventAvatar(share)}
-        <span class="name">${renderDecoratedName(share)}</span>
+        <span class="share-notice"><span class="name">${renderDecoratedName(share)}</span>さんがシェアしました</span>
         <span class="comment-side">
           ${commentVisitMeta(share)}
           <span class="time">${formatClock(share.at)}</span>
         </span>
       </header>
-      <p>${eventSourceBadge(share)}シェア</p>
     </article>
-  `).join("");
+  `;
 }
 
 function renderVisitorHistory(visitors) {
@@ -2226,7 +2216,8 @@ function eventSourceBadge(item) {
 
 function setStatus(status, message, mode) {
   statusDot.className = `status-dot ${status === "live" ? "live" : ""}`;
-  statusText.textContent = message || "待機中";
+  statusText.textContent = message === "note PCのTikFinityコレクターから待機信号を受信しました。" ? "コレクター信号受信" : message || "待機中";
+  statusText.title = message || "";
   modeText.textContent = mode;
 }
 
