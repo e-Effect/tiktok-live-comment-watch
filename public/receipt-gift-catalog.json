@@ -5689,5 +5689,13 @@
     "coins": 44999,
     "imageUrl": "https://p16-webcast.tiktokcdn.com/img/alisg/webcast-sg/resource/aab1ffd7541d4be2e09dcc42055beecc.png~tplv-obj.webp",
     "lastSeen": ""
+  },
+  {
+    "id": 14753,
+    "name": "Magic Potion",
+    "coins": 499,
+    "imageUrl": "https://p16-webcast.tiktokcdn.com/img/alisg/webcast-sg/resource/e055625e9239df7e833702c768e033d2.png~tplv-obj.webp",
+    "lastSeen": "",
+    "legacy": true
   }
 ]
