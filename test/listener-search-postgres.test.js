@@ -24,6 +24,19 @@ async function pageCount(store, options) {
 
 const sorts = ['last_seen','first_seen','name','visits','comments','gifts','coins','shares','lurker'];
 
+test('follower ceiling includes zero and the boundary, never unknown counts', async t => {
+  const db = await searchDatabase(t);
+  await db.exec(`INSERT INTO listeners(user_id,first_seen_at,last_seen_at,profile_follower_count)
+    VALUES ('zero',now(),now(),0),('ten',now(),now(),10),('eleven',now(),now(),11),('missing',now(),now(),NULL)`);
+  const store = new EventStore(); store.ready = true; store.pool = db;
+  for (const search of ['フォロワー数が10人以下','フォロワー１０人以下']) {
+    assert.deepEqual((await store.listeners({search})).items.map(x=>x.userId).sort(),['ten','zero']);
+    assert.equal(await pageCount(store,{search}),2);
+    assert.equal((await store.listenerExportRows({search})).length,2);
+  }
+  assert.deepEqual((await store.listeners({search:'フォロワー0人以下'})).items.map(x=>x.userId),['zero']);
+});
+
 test('PostgreSQL list/count agree across scope, filters, orders and page boundaries', async t => {
   const db = await searchDatabase(t);
   await db.exec(`
