@@ -190,3 +190,11 @@ test('supplements display answer, reading, rationale and original comment withou
   assert.match(feed.textContent, /系統的脱感作法って何/);
   assert.equal(feed.querySelectorAll('script, img, details, [hidden], button').length, 0);
 });
+
+test('renders inline readings on answers and quoted options even when fast mode omits terms', () => {
+  const root = new JSDOM('<main></main>').window.document.querySelector('main');
+  renderAssistItems(root, [{ ...item, title: '摂食中枢', answer: '4. 視床下部', comment: '延髄と視床下部', detail: '咽頭', reading: '咽頭（いんとう）' }]);
+  assert.equal(root.querySelector('.ai-answer rt').textContent, 'ししょうかぶ');
+  assert.deepEqual([...root.querySelectorAll('blockquote rt')].map(el => el.textContent), ['えんずい', 'ししょうかぶ']);
+  assert.equal(root.querySelector('.ai-detail rt').textContent, 'いんとう');
+});
