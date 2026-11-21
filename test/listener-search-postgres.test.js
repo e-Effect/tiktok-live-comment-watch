@@ -28,7 +28,12 @@ test('follower ceiling includes zero and the boundary, never unknown counts', as
   const db = await searchDatabase(t);
   await db.exec(`INSERT INTO listeners(user_id,first_seen_at,last_seen_at,profile_follower_count)
     VALUES ('zero',now(),now(),0),('ten',now(),now(),10),('eleven',now(),now(),11),('missing',now(),now(),NULL)`);
+  await db.exec("UPDATE listeners SET profile_following_count = CASE user_id WHEN 'eleven' THEN 0 WHEN 'missing' THEN 10 WHEN 'ten' THEN 11 END");
   const store = new EventStore(); store.ready = true; store.pool = db;
+  const search = 'フォロー数が10人以下';
+  assert.deepEqual((await store.listeners({search})).items.map(x=>x.userId).sort(),['eleven','missing']);
+  assert.equal(await pageCount(store,{search}),2);
+  assert.deepEqual((await store.listenerExportRows({search})).map(x=>x.userId).sort(),['eleven','missing']);
   for (const search of ['フォロワー数が10人以下','フォロワー１０人以下']) {
     assert.deepEqual((await store.listeners({search})).items.map(x=>x.userId).sort(),['ten','zero']);
     assert.equal(await pageCount(store,{search}),2);
