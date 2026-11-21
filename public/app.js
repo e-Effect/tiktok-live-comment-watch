@@ -1910,7 +1910,14 @@ function closeGiftHistoryFilter() {
 function readGiftHistoryFilter() {
   try {
     const filter = cloneGiftHistoryFilter(JSON.parse(localStorage.getItem(GIFT_HISTORY_FILTER_KEY) || "null"));
-    return addMagicPotionToFeaturedGiftFilter(filter);
+    const current = addMagicPotionToFeaturedGiftFilter(filter);
+    const marker = "tiktok-live-gift-history-rock-first-v1";
+    if (!localStorage.getItem(marker)) {
+      current.selected = [...new Set([...current.selected, "name:最初はグー！"])];
+      localStorage.setItem(GIFT_HISTORY_FILTER_KEY, JSON.stringify(current));
+      localStorage.setItem(marker, "1");
+    }
+    return current;
   } catch {
     return cloneGiftHistoryFilter(null);
   }
@@ -1986,6 +1993,7 @@ function rememberSessionGifts(gifts) {
 
 function giftChoiceKey(gift) {
   const normalized = normalizeGiftChoice(gift);
+  if (normalized.id === "1525611" || normalized.name.normalize("NFKC") === "最初はグー!") return "name:最初はグー！";
   if (normalized.name) return `name:${normalized.name.toLocaleLowerCase("ja-JP")}`;
   return normalized.id ? `id:${normalized.id}` : "";
 }
