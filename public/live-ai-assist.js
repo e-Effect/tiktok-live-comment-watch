@@ -4,6 +4,32 @@ const LABELS = { answer: '回答候補', word: 'ことば', reading: '読み方'
 const AI_MODE_PREF = 'tiktok-live-ai-quality-v2';
 const AI_MODE_LABELS = { fast: '1. 即答', light: '2. 軽く考える', thoughtful: '3. しっかり考える', balanced: '4. Terra標準', smart: '5. Terra熟考' };
 
+function readGlossary(value) {
+  return [...String(value || '').matchAll(/([\p{Script=Han}々ぁ-ゖァ-ヺー]{1,40})[（(]([ぁ-ゖー]{1,80})[）)]/gu)]
+    .sort((a, b) => b[1].length - a[1].length);
+}
+
+const commonReadings = readGlossary('嚥下機能（えんげきのう） 嚥下（えんげ） 頸部前屈（けいぶぜんくつ） 頸部（けいぶ） 前屈（ぜんくつ） 仰臥位（ぎょうがい） 誤嚥（ごえん） 食事介助（しょくじかいじょ） 摂食中枢（せっしょくちゅうすう） 延髄（えんずい） 小脳（しょうのう） 下垂体（かすいたい） 視床下部（ししょうかぶ） 酸素投与器具（さんそとうよきぐ） 高濃度（こうのうど） 吸入（きゅうにゅう） 過量服用（かりょうふくよう） 臓器障害（ぞうきしょうがい） 肝障害（かんしょうがい） 肝機能障害（かんきのうしょうがい） 急性肝不全（きゅうせいかんふぜん） 傷害罪（しょうがいざい） 故意（こい） 因果関係（いんがかんけい） 売買契約（ばいばいけいやく） 口頭（こうとう） 瑕疵（かし） 過失（かしつ） 債務不履行（さいむふりこう）');
+
+function writeWithRuby(node, value, terms) {
+  let rest = String(value || '');
+  while (rest) {
+    let start = rest.length, term;
+    for (const entry of terms) {
+      const at = rest.indexOf(entry[1]);
+      if (at >= 0 && at < start) { start = at; term = entry; }
+    }
+    node.append(rest.slice(0, start));
+    if (!term) break;
+    const ruby = node.ownerDocument.createElement('ruby');
+    const rt = node.ownerDocument.createElement('rt');
+    rt.textContent = term[2];
+    ruby.append(term[1], rt);
+    node.append(ruby);
+    rest = rest.slice(start + term[1].length);
+  }
+}
+
 export function renderAssistItems(root, items, document = root.ownerDocument) {
   const fragment = document.createDocumentFragment();
   for (const item of items) {
@@ -17,13 +43,15 @@ export function renderAssistItems(root, items, document = root.ownerDocument) {
     time.textContent = new Date(item.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     header.append(type, time);
     const title = document.createElement('h3');
-    title.textContent = item.title;
+    const supplied = readGlossary(item.reading);
+    const terms = [...commonReadings, ...supplied].sort((a,b) => b[1].length - a[1].length);
+    writeWithRuby(title, item.title, terms);
     article.append(header);
     const answer = document.createElement('p');
     answer.className = 'ai-answer';
-    answer.textContent = item.answer;
+    writeWithRuby(answer, item.answer, terms);
     article.append(answer, title);
-    if (item.reading) {
+    if (item.reading && !supplied.length) {
       const reading = document.createElement('p');
       reading.className = 'ai-reading';
       reading.textContent = item.reading;
@@ -32,11 +60,12 @@ export function renderAssistItems(root, items, document = root.ownerDocument) {
     if (item.detail) {
       const detail = document.createElement('p');
       detail.className = 'ai-detail';
-      detail.textContent = item.detail;
+      writeWithRuby(detail, item.detail, terms);
       article.append(detail);
     }
     const comment = document.createElement('blockquote');
-    comment.textContent = `${item.nickname ? item.nickname + '：' : ''}${item.comment}`;
+    if (item.nickname) comment.append(item.nickname + '：');
+    writeWithRuby(comment, item.comment, terms);
     article.append(comment);
     fragment.append(article);
   }
