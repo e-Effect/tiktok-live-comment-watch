@@ -239,7 +239,8 @@ test('normalized trigram index builds concurrently and serves literal global/sco
     );
     INSERT INTO listeners(user_id,latest_nickname,first_seen_at,last_seen_at)
     SELECT lpad(n::text,6,'0'),CASE WHEN n=6777 THEN '\uFF33\uFF55\uFF50\uFF50\uFF4F\uFF52\uFF54\uFF11\uFF10\uFF10\uFF05'
-      WHEN n=6778 THEN 'Support100point' ELSE 'Person '||n END,'2026-01-01','2026-10-01'
+      WHEN n=6778 THEN 'Support100point' WHEN n%100=0 THEN 'Green'
+      ELSE 'Person '||n END,'2026-01-01','2026-10-01'
     FROM generate_series(1,12000) n;
     INSERT INTO listener_stream_stats(stream_username,user_id,visit_count,first_seen_at,last_seen_at)
     SELECT host,user_id,1,first_seen_at,last_seen_at FROM listeners
@@ -258,6 +259,13 @@ test('normalized trigram index builds concurrently and serves literal global/sco
   assert.equal(store.status().listenerSearchIndexReady,true);
   assert.equal((await db.query("SELECT to_regclass('listeners_search_trgm_idx')::oid AS oid")).rows[0].oid,oldIndex);
   await db.exec('ANALYZE listeners');
+  const page = await store.listeners({search:'ree',limit:100});
+  const rest = await store.listeners({search:'ree',limit:100,offset:100});
+  assert.equal(page.hasMore,true);
+  assert.equal(rest.hasMore,false);
+  assert.deepEqual([...page.items,...rest.items].map(row=>row.userId),
+    Array.from({length:120},(_,i)=>String(100*(i+1)).padStart(6,'0')));
+  assert.match(calls.at(-1).sql,/matches AS MATERIALIZED/);
   for (const username of ['', 'host']) {
     for (const sort of ['last_seen','coins']) {
       const options={username,sort,search:'Support100%'};
