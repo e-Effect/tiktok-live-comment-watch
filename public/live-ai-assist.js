@@ -12,24 +12,23 @@ export function renderAssistItems(root, items, document = root.ownerDocument) {
     const header = document.createElement('header');
     const type = document.createElement('span');
     type.className = 'ai-kind';
-    type.textContent = item.confidence === 'verified' ? '計算確認済み' : LABELS[item.kind] || '補足';
-    if (item.confidence !== 'verified' && Object.hasOwn(AI_MODE_LABELS, item.mode)) type.textContent += ` · ${AI_MODE_LABELS[item.mode]}`;
+    type.textContent = ['verified', 'high'].includes(item.confidence) ? '●●●　自信：高' : item.confidence === 'candidate' ? '●●○　自信：中' : '●○○　自信：低';
     const time = document.createElement('time');
     time.textContent = new Date(item.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     header.append(type, time);
     const title = document.createElement('h3');
     title.textContent = item.title;
-    article.append(header, title);
+    article.append(header);
+    const answer = document.createElement('p');
+    answer.className = 'ai-answer';
+    answer.textContent = item.answer;
+    article.append(answer, title);
     if (item.reading) {
       const reading = document.createElement('p');
       reading.className = 'ai-reading';
       reading.textContent = item.reading;
       article.append(reading);
     }
-    const answer = document.createElement('p');
-    answer.className = 'ai-answer';
-    answer.textContent = item.answer;
-    article.append(answer);
     if (item.detail) {
       const detail = document.createElement('p');
       detail.className = 'ai-detail';
