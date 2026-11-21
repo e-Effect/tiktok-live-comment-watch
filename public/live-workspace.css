@@ -30,7 +30,7 @@
 .ai-note-check .ai-kind { color: #9a4e16; }
 .ai-note h3 { margin: 8px 0 0; font-size: 1.05rem; font-weight: 750; }
 .ai-note .ai-reading { margin: 2px 0 8px; color: #546579; font-size: .8rem; }
-.ai-answer { font-size: 1rem; line-height: 1.65; margin: 8px 0; color: #152331; }
+.ai-answer { font-size: 1rem; font-weight: 700; line-height: 1.4; margin: 6px 0; color: #152331; overflow-wrap: anywhere; }
 .ai-detail { font-size: .84rem; line-height: 1.6; color: #52616d; margin: 5px 0; }
 .ai-note blockquote { margin: 10px 0 0; border-left: 2px solid #b5c4d1; padding: 0 0 0 9px; color: #61717e; font-size: .75rem; line-height: 1.5; }
 .live-workspace { --bg: #fff; }
