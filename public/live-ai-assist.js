@@ -83,6 +83,8 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   const list = root.querySelector('#aiAssistList');
   const status = root.querySelector('#aiAssistStatus');
   const toggle = root.querySelector('#aiAssistEnabled');
+  const quiz = root.querySelector('#aiQuizMode');
+  let requestedQuiz;
   const keyForm = root.querySelector('#aiAssistKeyForm');
   const keyInput = root.querySelector('#aiAssistKey');
   const usage = root.querySelector('#aiAssistUsage');
@@ -141,7 +143,7 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
     try {
       const ended = Boolean(session.stoppedAt) || ['stopped', 'ended'].includes(session.status);
       let data = await request(configuredGeneration === current || ended ? 'GET' : 'POST',
-        configuredGeneration === current || ended ? null : { enabled: toggle.checked, mode: selectedMode }, activeController.signal);
+        configuredGeneration === current || ended ? null : { enabled: toggle.checked, mode: selectedMode, quiz: requestedQuiz }, activeController.signal);
       if (current !== generation) return;
       // Only version zero is an unconfigured server state, not another viewer's OFF command.
       if (!ended && data.version === 0 && !data.enabled && (toggle.checked || data.mode !== selectedMode)) {
@@ -149,6 +151,8 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
         if (current !== generation) return;
       }
       configuredGeneration = current;
+      requestedQuiz = undefined;
+      if (quiz) { quiz.checked = Boolean(data.quiz) && !ended; quiz.disabled = ended || !data.enabled || !data.configured; }
       keyForm.hidden = true;
       if (!ended && Object.hasOwn(AI_MODE_LABELS, data.mode) && selectedMode !== data.mode) {
         selectedMode = data.mode;
@@ -188,6 +192,12 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
     cancel();
     void refresh();
   });
+  quiz?.addEventListener('change', () => {
+    requestedQuiz = quiz.checked;
+    quiz.disabled = true;
+    cancel();
+    void refresh();
+  });
   modeInputs.forEach(input => input.addEventListener('change', () => {
     if (!input.checked || !Object.hasOwn(AI_MODE_LABELS, input.value)) return;
     selectedMode = input.value;
@@ -223,6 +233,7 @@ export function setupLiveAiAssist({ root, fetchImpl = fetch, storage = localStor
   }, setSession(next) {
     if (session?.id === next?.id && session?.status === next?.status && session?.stoppedAt === next?.stoppedAt) return;
     const changedId = session?.id !== next?.id;
+    if (changedId) { requestedQuiz = undefined; if (quiz) { quiz.checked = false; quiz.disabled = true; } }
     cancel();
     session = next;
     if (changedId) { lastVersion = null; renderAssistItems(list, []); usage.textContent = ''; }

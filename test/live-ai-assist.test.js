@@ -8,6 +8,21 @@ const item = { index: 0, kind: 'word', title: '系統的脱感作法', reading: 
 const response = (items = [item]) => ({ ok: true, json: async () => ({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ items }) }] }] }) });
 const comment = (text, extra = {}) => ({ id: 'message', text, nickname: 'DO-NOT-SEND-NAME', userId: 'DO-NOT-SEND-ID', at: Date.now(), ...extra });
 
+test('quiz mode sends two questions immediately and the third on completion, within shared quota', async t => {
+  const finishes = [];
+  const ai = new LiveAiAssist({apiKey:'fixture', maxHourlyCalls:3, fetchImpl:() => new Promise(r=>finishes.push(()=>r(response())))});
+  t.after(()=>ai.dispose());
+  ai.configure('s',true,'fast',true);
+  for (const text of ['こんにちは！','正しい部位はどれか。','注意する臓器障害は。','第三問ですか？','第四問ですか？']) ai.submit('s',comment(text));
+  const tick = () => new Promise(r=>setImmediate(r));
+  await tick(); assert.equal(finishes.length,2);
+  finishes[0](); await tick(); assert.equal(finishes.length,3);
+  finishes[1](); finishes[2](); await tick();
+  assert.equal(ai.snapshot('s').dailyCalls,3);
+  assert.equal(ai.snapshot('s').skipped,1);
+  assert.equal(ai.configure('s',false).quiz,false);
+});
+
 test('routine requests never queue, publish a local answer, or use an external request', async t => {
   const sent = [];
   const ai = new LiveAiAssist({apiKey:'fixture',fetchImpl:async (_,o)=>{
