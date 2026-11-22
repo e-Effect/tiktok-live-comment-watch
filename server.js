@@ -3324,14 +3324,16 @@ const server = createServer(async (request, response) => {
       } else {
         try {
           const body = await readBody(request);
-          if (typeof body.enabled !== 'boolean') {
+          if (body.quiz !== undefined && typeof body.quiz !== 'boolean') {
+            sendJson(response, 400, { error: 'クイズモードの値が不正です。' });
+          } else if (typeof body.enabled !== 'boolean') {
             sendJson(response, 400, { error: 'enabledは真偽値で指定してください。' });
           } else if (body.mode !== undefined && !isAiMode(body.mode)) {
             sendJson(response, 400, { error: 'AIの賢さは速さ優先・標準・賢さ優先から選択してください。' });
           } else if (body.enabled && session.stoppedAt) {
             sendJson(response, 409, { error: '次の配信でAI補足を開始します。' });
           } else {
-            sendJson(response, 200, liveAi.configure(session.id, body.enabled, body.mode));
+            sendJson(response, 200, liveAi.configure(session.id, body.enabled, body.mode, body.quiz));
           }
         } catch {
           sendJson(response, 400, { error: 'AI補足の設定を読み取れませんでした。' });

@@ -10,6 +10,9 @@
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .ai-assist-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ai-assist-heading h2 { margin: 0; }
+.ai-quiz-switch { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: .8rem; cursor: pointer; }
+.ai-quiz-switch input { width: 16px; height: 16px; padding: 0; margin: 0; accent-color: #128367; }
+.ai-quiz-switch:has(input:checked) { color: #09634e; }
 .ai-switch { display: inline-flex; position: relative; align-items: center; cursor: pointer; flex: 0 0 auto; }
 .ai-switch input { position: absolute; opacity: 0; width: 38px; height: 24px; margin: 0; }
 .ai-switch span { display: block; width: 38px; height: 24px; border-radius: 12px; background: #b6bdc2; padding: 3px; }
